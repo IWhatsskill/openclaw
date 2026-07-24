@@ -46,6 +46,7 @@ import {
 } from "../shared/gateway-tailscale-auth-policy.js";
 import { isRecord, resolveUserPath } from "../utils.js";
 import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-dirs.js";
+import { attachAgentListProjection } from "./agent-list-projection.js";
 import { appendAllowedValuesHint, summarizeAllowedValues } from "./allowed-values.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
 import {
@@ -1202,21 +1203,6 @@ export function validateConfigObject(
       }),
     ),
   };
-}
-
-function attachAgentListProjection(config: OpenClawConfig): OpenClawConfig {
-  if (!config.agents) {
-    return config;
-  }
-  Object.defineProperty(config.agents, "list", {
-    configurable: true,
-    enumerable: false,
-    value: Object.entries(config.agents.entries ?? {}).map(([id, entry]) =>
-      Object.assign({ id }, entry),
-    ),
-    writable: false,
-  });
-  return config;
 }
 
 type ValidateConfigWithPluginsResult =
