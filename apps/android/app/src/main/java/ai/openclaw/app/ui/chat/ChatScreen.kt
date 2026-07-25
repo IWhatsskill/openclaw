@@ -107,6 +107,7 @@ import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.HourglassEmpty
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.MoreVert
@@ -243,6 +244,8 @@ internal fun shouldUseUserMessageDisclosure(
 fun ChatScreen(
   viewModel: MainViewModel,
   talkActive: Boolean,
+  showSidebarButton: Boolean,
+  onOpenSidebar: () -> Unit,
   onToggleTalk: () -> Unit,
   onOpenSessions: () -> Unit,
   onOpenDashboard: (String) -> Unit,
@@ -621,6 +624,8 @@ fun ChatScreen(
   ) {
     ChatHeader(
       sessionTitle = currentSessionTitle(sessionKey = sessionKey, sessions = sessions),
+      showSidebarButton = showSidebarButton,
+      onOpenSidebar = onOpenSidebar,
       healthOk = healthOk,
       pendingRunCount = pendingRunCount,
       newChatEnabled = newChatEnabled,
@@ -1051,6 +1056,8 @@ internal fun canStartNewChat(
 @Composable
 private fun ChatHeader(
   sessionTitle: String,
+  showSidebarButton: Boolean,
+  onOpenSidebar: () -> Unit,
   healthOk: Boolean,
   pendingRunCount: Int,
   newChatEnabled: Boolean,
@@ -1073,6 +1080,13 @@ private fun ChatHeader(
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
+      if (showSidebarButton) {
+        HeaderIcon(
+          icon = Icons.Default.Menu,
+          contentDescription = nativeString("Show Sidebar"),
+          onClick = onOpenSidebar,
+        )
+      }
       OpenClawMascot(modifier = Modifier.size(25.dp))
       Text(
         text = nativeString("OpenClaw"),
