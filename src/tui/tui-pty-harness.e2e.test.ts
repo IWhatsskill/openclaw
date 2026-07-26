@@ -37,6 +37,7 @@ async function waitForFixtureLogEntry(
   logPath: string,
   predicate: (entry: FixtureLogEntry) => boolean,
   timeoutMs = OUTPUT_TIMEOUT_MS,
+  readPtyOutput?: () => string,
 ) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
@@ -48,7 +49,12 @@ async function waitForFixtureLogEntry(
     await sleep(25);
   }
   const entries = await readFixtureLog(logPath);
-  throw new Error(`timed out waiting for fixture log entry\n${JSON.stringify(entries, null, 2)}`);
+  // A swallowed command leaves no RPC behind, so the RPC log alone cannot say
+  // whether the TUI rejected the input; the terminal output carries that reason.
+  const ptyOutput = readPtyOutput?.() ?? "";
+  throw new Error(
+    `timed out waiting for fixture log entry\n${JSON.stringify(entries, null, 2)}\n${ptyOutput}`,
+  );
 }
 
 function objectFieldEquals(entry: FixtureLogEntry, field: string, value: unknown) {
@@ -526,7 +532,7 @@ async function startTuiFixture(opts: { env?: NodeJS.ProcessEnv } = {}) {
     run,
     logPath,
     waitForLogEntry: async (predicate: (entry: FixtureLogEntry) => boolean, timeoutMs?: number) =>
-      await waitForFixtureLogEntry(logPath, predicate, timeoutMs),
+      await waitForFixtureLogEntry(logPath, predicate, timeoutMs, run.output),
     cleanup: async () => {
       await run.dispose();
       await rm(tempDir, { recursive: true, force: true });
@@ -702,6 +708,38 @@ describe.sequential("TUI PTY harness", () => {
       );
     },
     TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "deletes forward with Ctrl+D without exiting a nonempty terminal editor",
+    async () => {
+      await fixture.run.write("keepXword", { delay: false });
+      await fixture.run.write("\u001b[D".repeat(5), { delay: false });
+      await fixture.run.write("\u0004", { delay: false });
+      await fixture.run.write("\r", { delay: false });
+
+      const sent = await fixture.waitForLogEntry(
+        (entry) => entry.method === "sendChat" && objectFieldEquals(entry, "message", "keepword"),
+      );
+      expect(sent.payload).toMatchObject({ message: "keepword" });
+      await fixture.run.waitForOutput("PTY_RESPONSE: keepword");
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "exits a fresh terminal when Ctrl+D is pressed with empty input",
+    async () => {
+      const emptyFixture = await startTuiFixture();
+      try {
+        await emptyFixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
+        await emptyFixture.run.write("\u0004", { delay: false });
+        expect((await emptyFixture.run.waitForExit()).exitCode).toBe(0);
+      } finally {
+        await emptyFixture.cleanup();
+      }
+    },
+    STARTUP_TEST_TIMEOUT_MS,
   );
 
   it(
@@ -987,6 +1025,7 @@ describe.sequential("TUI PTY harness", () => {
         (entry) => entry.method === "sendChat" && objectFieldEquals(entry, "message", "after new"),
       );
       expect(sent.payload).toMatchObject({ sessionKey: expect.stringMatching(/^agent:main:tui-/) });
+      await fixture.run.waitForOutput("PTY_RESPONSE: after new");
     },
     TEST_TIMEOUT_MS,
   );
