@@ -98,18 +98,21 @@ import androidx.compose.material.icons.outlined.MicNone
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -123,6 +126,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.launch
 import java.util.Locale
 
 internal enum class Tab(
@@ -161,8 +165,9 @@ fun ShellScreen(
   ClawDesignTheme(dark = shellDark) {
     val nav = rememberSaveable(saver = ShellNavigation.Saver) { ShellNavigation() }
     var commandOpen by rememberSaveable { mutableStateOf(false) }
-    var sidebarOpen by rememberSaveable { mutableStateOf(false) }
     var conversationScreenWasActive by rememberSaveable { mutableStateOf(false) }
+    val sidebarDrawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+    val coroutineScope = rememberCoroutineScope()
     val requestedHomeDestination by viewModel.requestedHomeDestination.collectAsState()
     val pendingTrust by viewModel.pendingGatewayTrust.collectAsState()
     val runtimeInitialized by viewModel.runtimeInitialized.collectAsState()
@@ -198,7 +203,7 @@ fun ShellScreen(
         nav.openSettingsRoute(route)
         viewModel.clearRequestedSettingsRoute()
       }
-      sidebarOpen = false
+      sidebarDrawerState.close()
       viewModel.clearRequestedHomeDestination()
     }
 
@@ -210,7 +215,12 @@ fun ShellScreen(
       conversationScreenWasActive = conversationScreenActive
     }
 
-    BackHandler(enabled = nav.activeTab != Tab.Overview) {
+    BackHandler(
+      enabled =
+        sidebarDrawerState.currentValue == DrawerValue.Closed &&
+          sidebarDrawerState.targetValue == DrawerValue.Closed &&
+          nav.activeTab != Tab.Overview,
+    ) {
       nav.back()
     }
 
@@ -219,7 +229,7 @@ fun ShellScreen(
     }
 
     LaunchedEffect(commandOpen, canvasVisible, pendingTrust) {
-      if (commandOpen || canvasVisible || pendingTrust != null) sidebarOpen = false
+      if (commandOpen || canvasVisible || pendingTrust != null) sidebarDrawerState.close()
     }
 
     val activeSidebarDestination =
@@ -231,12 +241,29 @@ fun ShellScreen(
         nav.activeTab == Tab.Settings && nav.settingsRoute == SettingsRoute.CronJobs -> SidebarDestination.Automations
         else -> null
       }
+    val openSidebar: () -> Unit = {
+      coroutineScope.launch { sidebarDrawerState.open() }
+    }
+    val closeSidebar: () -> Unit = {
+      coroutineScope.launch { sidebarDrawerState.close() }
+    }
+    val selectSidebarDestination: (SidebarDestination) -> Unit = { destination ->
+      when (destination) {
+        SidebarDestination.Home -> nav.selectTab(Tab.Chat)
+        SidebarDestination.Overview -> nav.selectTab(Tab.Overview)
+        SidebarDestination.Usage -> nav.openSettingsRoute(SettingsRoute.Usage)
+        SidebarDestination.Automations -> nav.openSettingsRoute(SettingsRoute.CronJobs)
+        SidebarDestination.Sessions -> nav.selectTab(Tab.Sessions)
+      }
+      closeSidebar()
+    }
 
     Box(modifier = modifier.fillMaxSize().background(ClawTheme.colors.canvas)) {
-      AdaptiveSidebarShell(
-        drawerOpen = sidebarOpen,
-        onDrawerOpenChange = { sidebarOpen = it },
-        sidebar = { showCloseButton ->
+      AdaptiveNavigationShell(
+        drawerState = sidebarDrawerState,
+        activeDestination = activeSidebarDestination,
+        onSelectDestination = selectSidebarDestination,
+        drawerContent = {
           OpenClawSidebar(
             agents = gatewayAgents,
             selectedAgentId = chatSessionOwnerAgentId ?: gatewayDefaultAgentId,
@@ -244,41 +271,32 @@ fun ShellScreen(
             activeSessionKey = chatSessionKey,
             activeDestination = activeSidebarDestination,
             connection = gatewayConnectionDisplay,
-            showCloseButton = showCloseButton,
-            onClose = { sidebarOpen = false },
+            showCloseButton = true,
+            onClose = closeSidebar,
             onOpenSettings = {
               nav.selectTab(Tab.Settings)
-              sidebarOpen = false
+              closeSidebar()
             },
             onSelectAgent = { agentId ->
               viewModel.selectChatAgent(agentId)
               nav.selectTab(Tab.Chat)
-              sidebarOpen = false
+              closeSidebar()
             },
             onSelectSession = { session ->
               viewModel.switchChatSession(session.key, session.ownerAgentId)
               nav.selectTab(Tab.Chat)
-              sidebarOpen = false
+              closeSidebar()
             },
-            onSelectDestination = { destination ->
-              when (destination) {
-                SidebarDestination.Home -> nav.selectTab(Tab.Chat)
-                SidebarDestination.Overview -> nav.selectTab(Tab.Overview)
-                SidebarDestination.Usage -> nav.openSettingsRoute(SettingsRoute.Usage)
-                SidebarDestination.Automations -> nav.openSettingsRoute(SettingsRoute.CronJobs)
-                SidebarDestination.Sessions -> nav.selectTab(Tab.Sessions)
-              }
-              sidebarOpen = false
-            },
+            onSelectDestination = selectSidebarDestination,
           )
         },
-      ) { showSidebarButton ->
+      ) {
         when (nav.activeTab) {
           Tab.Overview ->
             OverviewScreen(
               viewModel = viewModel,
-              showSidebarButton = showSidebarButton,
-              onOpenSidebar = { sidebarOpen = true },
+              showSidebarButton = true,
+              onOpenSidebar = openSidebar,
               onSelectTab = nav::selectTab,
               onOpenSettingsRoute = nav::openSettingsRoute,
               onOpenCommand = { commandOpen = true },
@@ -286,8 +304,8 @@ fun ShellScreen(
           Tab.Chat ->
             UnifiedChatShellScreen(
               viewModel = viewModel,
-              showSidebarButton = showSidebarButton,
-              onOpenSidebar = { sidebarOpen = true },
+              showSidebarButton = true,
+              onOpenSidebar = openSidebar,
               onOpenSessions = { nav.openDetailTab(Tab.Sessions) },
               onOpenDashboard = nav::openSessionDashboard,
               onOpenGatewaySettings = { nav.openSettingsRoute(SettingsRoute.Gateway) },
@@ -307,8 +325,8 @@ fun ShellScreen(
           Tab.Sessions ->
             SessionsScreen(
               viewModel = viewModel,
-              showSidebarButton = showSidebarButton,
-              onOpenSidebar = { sidebarOpen = true },
+              showSidebarButton = true,
+              onOpenSidebar = openSidebar,
               onOpenChat = { nav.selectTab(Tab.Chat) },
             )
           Tab.Files ->
@@ -326,8 +344,8 @@ fun ShellScreen(
             SettingsShellScreen(
               viewModel = viewModel,
               route = nav.settingsRoute,
-              showSidebarButton = showSidebarButton,
-              onOpenSidebar = { sidebarOpen = true },
+              showSidebarButton = true,
+              onOpenSidebar = openSidebar,
               onRouteChange = nav::openSettingsRouteFromHome,
               onBack = nav::back,
               onOpenCommand = { commandOpen = true },

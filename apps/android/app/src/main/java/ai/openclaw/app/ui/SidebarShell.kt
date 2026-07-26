@@ -1,167 +1,124 @@
 package ai.openclaw.app.ui
 
 import ai.openclaw.app.ui.design.ClawTheme
-import androidx.activity.compose.BackHandler
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
-import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Surface
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.material3.DrawerState
+import androidx.compose.material3.Icon
+import androidx.compose.material3.ModalDrawerSheet
+import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.Text
+import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
+import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffold
+import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteType
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.RectangleShape
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.semantics.clearAndSetSemantics
-import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
-import kotlin.math.min
+import androidx.window.core.layout.WindowSizeClass.Companion.HEIGHT_DP_MEDIUM_LOWER_BOUND
+import androidx.window.core.layout.WindowSizeClass.Companion.WIDTH_DP_EXPANDED_LOWER_BOUND
+import androidx.window.core.layout.WindowSizeClass.Companion.WIDTH_DP_MEDIUM_LOWER_BOUND
 
-internal const val sidebarPersistentWidthThresholdDp = 980f
-internal const val sidebarMaximumWidthDp = 340f
-internal const val sidebarPersistentIdealWidthDp = 316f
-internal const val sidebarCompactWidthFraction = 0.86f
+internal const val adaptiveMediumWidthLowerBoundDp = 600f
+internal const val adaptiveExpandedWidthLowerBoundDp = 840f
+internal const val adaptiveMediumHeightLowerBoundDp = 480f
 
-internal enum class SidebarLayoutMode {
+internal enum class AdaptiveNavigationMode {
+  Bar,
+  Rail,
   Drawer,
-  Persistent,
 }
 
-internal fun sidebarLayoutMode(availableWidthDp: Float): SidebarLayoutMode =
-  if (availableWidthDp >= sidebarPersistentWidthThresholdDp) {
-    SidebarLayoutMode.Persistent
-  } else {
-    SidebarLayoutMode.Drawer
+internal fun adaptiveNavigationMode(
+  availableWidthDp: Float,
+  availableHeightDp: Float,
+  tabletop: Boolean = false,
+): AdaptiveNavigationMode =
+  adaptiveNavigationMode(
+    widthAtLeastMedium = availableWidthDp >= adaptiveMediumWidthLowerBoundDp,
+    widthAtLeastExpanded = availableWidthDp >= adaptiveExpandedWidthLowerBoundDp,
+    heightAtLeastMedium = availableHeightDp >= adaptiveMediumHeightLowerBoundDp,
+    tabletop = tabletop,
+  )
+
+private fun adaptiveNavigationMode(
+  widthAtLeastMedium: Boolean,
+  widthAtLeastExpanded: Boolean,
+  heightAtLeastMedium: Boolean,
+  tabletop: Boolean,
+): AdaptiveNavigationMode =
+  when {
+    tabletop || !widthAtLeastMedium || !heightAtLeastMedium ->
+      AdaptiveNavigationMode.Bar
+    !widthAtLeastExpanded -> AdaptiveNavigationMode.Rail
+    else -> AdaptiveNavigationMode.Drawer
   }
 
-internal fun sidebarWidthDp(availableWidthDp: Float): Float =
-  when (sidebarLayoutMode(availableWidthDp)) {
-    SidebarLayoutMode.Drawer -> min(sidebarMaximumWidthDp, availableWidthDp * sidebarCompactWidthFraction)
-    SidebarLayoutMode.Persistent ->
-      (availableWidthDp * 0.25f).coerceIn(sidebarPersistentIdealWidthDp, sidebarMaximumWidthDp)
+private fun AdaptiveNavigationMode.toNavigationSuiteType(): NavigationSuiteType =
+  when (this) {
+    AdaptiveNavigationMode.Bar -> NavigationSuiteType.NavigationBar
+    AdaptiveNavigationMode.Rail -> NavigationSuiteType.NavigationRail
+    AdaptiveNavigationMode.Drawer -> NavigationSuiteType.NavigationDrawer
   }
-
-internal fun sidebarContentWidthDp(availableWidthDp: Float): Float =
-  when (sidebarLayoutMode(availableWidthDp)) {
-    SidebarLayoutMode.Drawer -> availableWidthDp
-    SidebarLayoutMode.Persistent -> (availableWidthDp - sidebarWidthDp(availableWidthDp)).coerceAtLeast(0f)
-  }
-
-internal fun sidebarContentTranslationPx(
-  drawerOpen: Boolean,
-  persistent: Boolean,
-  sidebarWidthPx: Float,
-  rightToLeft: Boolean,
-): Float {
-  if (persistent || !drawerOpen) return 0f
-  return if (rightToLeft) -sidebarWidthPx else sidebarWidthPx
-}
 
 /**
- * Stable adaptive shell shared by every top-level destination.
+ * Material-owned adaptive navigation for every top-level destination.
  *
- * The destination subtree is always composed exactly once. Compact layouts reveal
- * the sidebar by translating that subtree; wide layouts inset the same subtree
- * beside a persistent sidebar.
+ * The primary destinations stay in one [NavigationSuiteScaffold] content slot as
+ * the window changes between bar, rail, and permanent drawer. Rich session and
+ * agent controls live in a native modal drawer so Material owns edge gestures,
+ * scrim dismissal, back handling, focus containment, and RTL behavior.
  */
 @Composable
-internal fun AdaptiveSidebarShell(
-  drawerOpen: Boolean,
-  onDrawerOpenChange: (Boolean) -> Unit,
-  sidebar: @Composable (showCloseButton: Boolean) -> Unit,
-  content: @Composable (showSidebarButton: Boolean) -> Unit,
+internal fun AdaptiveNavigationShell(
+  drawerState: DrawerState,
+  activeDestination: SidebarDestination?,
+  onSelectDestination: (SidebarDestination) -> Unit,
+  drawerContent: @Composable () -> Unit,
+  content: @Composable () -> Unit,
 ) {
-  BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-    val persistent = sidebarLayoutMode(maxWidth.value) == SidebarLayoutMode.Persistent
-    val sidebarWidth = sidebarWidthDp(maxWidth.value).dp
-    val contentWidth = sidebarContentWidthDp(maxWidth.value).dp
-    val density = LocalDensity.current
-    val rightToLeft = LocalLayoutDirection.current == LayoutDirection.Rtl
-    val sidebarWidthPx = with(density) { sidebarWidth.toPx() }
-    val targetTranslation =
-      sidebarContentTranslationPx(
-        drawerOpen = drawerOpen,
-        persistent = persistent,
-        sidebarWidthPx = sidebarWidthPx,
-        rightToLeft = rightToLeft,
-      )
-    val contentTranslation by
-      animateFloatAsState(
-        targetValue = targetTranslation,
-        animationSpec = tween(durationMillis = 260, easing = FastOutSlowInEasing),
-        label = "sidebar-content-translation",
-      )
-    val sidebarVisible = persistent || drawerOpen
-    val compactShape =
-      RoundedCornerShape(
-        topStart = 8.dp,
-        topEnd = 28.dp,
-        bottomStart = 28.dp,
-        bottomEnd = 28.dp,
-      )
+  val adaptiveInfo = currentWindowAdaptiveInfo(supportLargeAndXLargeWidth = true)
+  val navigationMode =
+    adaptiveNavigationMode(
+      widthAtLeastMedium =
+        adaptiveInfo.windowSizeClass.isWidthAtLeastBreakpoint(WIDTH_DP_MEDIUM_LOWER_BOUND),
+      widthAtLeastExpanded =
+        adaptiveInfo.windowSizeClass.isWidthAtLeastBreakpoint(WIDTH_DP_EXPANDED_LOWER_BOUND),
+      heightAtLeastMedium =
+        adaptiveInfo.windowSizeClass.isHeightAtLeastBreakpoint(HEIGHT_DP_MEDIUM_LOWER_BOUND),
+      tabletop = adaptiveInfo.windowPosture.isTabletop,
+    )
 
-    LaunchedEffect(persistent) {
-      if (persistent && drawerOpen) onDrawerOpenChange(false)
-    }
-    BackHandler(enabled = drawerOpen && !persistent) {
-      onDrawerOpenChange(false)
-    }
-
-    Surface(
-      modifier =
-        Modifier
-          .width(sidebarWidth)
-          .fillMaxHeight()
-          .align(Alignment.CenterStart)
-          .testTag("adaptive-sidebar")
-          .then(if (sidebarVisible) Modifier else Modifier.clearAndSetSemantics {}),
-      color = ClawTheme.colors.canvas,
-    ) {
-      sidebar(!persistent)
-    }
-
-    Surface(
-      modifier =
-        Modifier
-          .width(contentWidth)
-          .fillMaxHeight()
-          .align(if (persistent) Alignment.CenterEnd else Alignment.CenterStart)
-          .graphicsLayer {
-            translationX = contentTranslation
-            shape = if (!persistent && drawerOpen) compactShape else RectangleShape
-            clip = !persistent && drawerOpen
-            shadowElevation = if (!persistent && drawerOpen) 18.dp.toPx() else 0f
-          }.clip(if (!persistent && drawerOpen) compactShape else RectangleShape)
-          .testTag("adaptive-sidebar-content")
-          .then(if (drawerOpen && !persistent) Modifier.clearAndSetSemantics {} else Modifier),
-      color = ClawTheme.colors.canvas,
-    ) {
-      content(!persistent)
-    }
-
-    if (drawerOpen && !persistent) {
-      Box(
-        modifier =
-          Modifier
-            .fillMaxSize()
-            .graphicsLayer { translationX = contentTranslation }
-            .pointerInput(onDrawerOpenChange) {
-              detectTapGestures { onDrawerOpenChange(false) }
-            }.clearAndSetSemantics {},
-      )
-    }
+  ModalNavigationDrawer(
+    drawerState = drawerState,
+    gesturesEnabled = true,
+    drawerContent = {
+      ModalDrawerSheet(modifier = Modifier.widthIn(max = 360.dp).testTag("adaptive-secondary-drawer")) {
+        drawerContent()
+      }
+    },
+  ) {
+    NavigationSuiteScaffold(
+      navigationSuiteItems = {
+        SidebarDestination.entries.forEach { destination ->
+          item(
+            selected = destination == activeDestination,
+            onClick = { onSelectDestination(destination) },
+            icon = {
+              Icon(
+                imageVector = destination.icon,
+                contentDescription = null,
+              )
+            },
+            label = { Text(destination.localizedLabel()) },
+          )
+        }
+      },
+      modifier = Modifier.fillMaxSize().testTag("adaptive-navigation-suite"),
+      layoutType = navigationMode.toNavigationSuiteType(),
+      containerColor = ClawTheme.colors.canvas,
+      contentColor = ClawTheme.colors.text,
+      content = content,
+    )
   }
 }

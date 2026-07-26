@@ -8,38 +8,38 @@ import org.junit.Test
 
 class SidebarShellLogicTest {
   @Test
-  fun adaptiveModeUsesDrawerBelowTheIosParityThreshold() {
-    assertEquals(SidebarLayoutMode.Drawer, sidebarLayoutMode(979.99f))
-    assertEquals(SidebarLayoutMode.Persistent, sidebarLayoutMode(980f))
+  fun compactWidthUsesNavigationBarAcrossTheSixHundredDpBoundary() {
+    assertEquals(AdaptiveNavigationMode.Bar, adaptiveNavigationMode(599f, 800f))
+    assertEquals(AdaptiveNavigationMode.Rail, adaptiveNavigationMode(600f, 800f))
   }
 
   @Test
-  fun drawerWidthUsesEightySixPercentUntilCapped() {
-    assertEquals(275.2f, sidebarWidthDp(320f), 0.01f)
-    assertEquals(340f, sidebarWidthDp(800f), 0.01f)
+  fun expandedWidthUsesPermanentDrawerAcrossTheEightHundredFortyDpBoundary() {
+    assertEquals(AdaptiveNavigationMode.Rail, adaptiveNavigationMode(839f, 800f))
+    assertEquals(AdaptiveNavigationMode.Drawer, adaptiveNavigationMode(840f, 800f))
   }
 
   @Test
-  fun persistentWidthStaysInsideTheIosSidebarBounds() {
-    assertEquals(316f, sidebarWidthDp(980f), 0.01f)
-    assertEquals(340f, sidebarWidthDp(1600f), 0.01f)
+  fun compactHeightUsesNavigationBarAcrossTheFourHundredEightyDpBoundary() {
+    assertEquals(AdaptiveNavigationMode.Bar, adaptiveNavigationMode(840f, 479f))
+    assertEquals(AdaptiveNavigationMode.Drawer, adaptiveNavigationMode(840f, 480f))
   }
 
   @Test
-  fun persistentContentOwnsTheSpaceBesideTheSidebar() {
-    assertEquals(320f, sidebarContentWidthDp(320f), 0.01f)
-    assertEquals(664f, sidebarContentWidthDp(980f), 0.01f)
-    assertEquals(1260f, sidebarContentWidthDp(1600f), 0.01f)
-    assertEquals(980f, sidebarWidthDp(980f) + sidebarContentWidthDp(980f), 0.01f)
-    assertEquals(1600f, sidebarWidthDp(1600f) + sidebarContentWidthDp(1600f), 0.01f)
+  fun representativeAndroidWindowSizesMapToMaterialPatterns() {
+    assertEquals(AdaptiveNavigationMode.Bar, adaptiveNavigationMode(360f, 800f))
+    assertEquals(AdaptiveNavigationMode.Bar, adaptiveNavigationMode(800f, 360f))
+    assertEquals(AdaptiveNavigationMode.Rail, adaptiveNavigationMode(600f, 480f))
+    assertEquals(AdaptiveNavigationMode.Rail, adaptiveNavigationMode(839f, 899f))
+    assertEquals(AdaptiveNavigationMode.Drawer, adaptiveNavigationMode(841f, 701f))
+    assertEquals(AdaptiveNavigationMode.Drawer, adaptiveNavigationMode(1024f, 640f))
+    assertEquals(AdaptiveNavigationMode.Drawer, adaptiveNavigationMode(1280f, 800f))
+    assertEquals(AdaptiveNavigationMode.Drawer, adaptiveNavigationMode(1600f, 900f))
   }
 
   @Test
-  fun drawerTranslationIsStartRelativeAndPersistentContentNeverMoves() {
-    assertEquals(300f, sidebarContentTranslationPx(true, false, 300f, rightToLeft = false), 0f)
-    assertEquals(-300f, sidebarContentTranslationPx(true, false, 300f, rightToLeft = true), 0f)
-    assertEquals(0f, sidebarContentTranslationPx(false, false, 300f, rightToLeft = false), 0f)
-    assertEquals(0f, sidebarContentTranslationPx(true, true, 300f, rightToLeft = false), 0f)
+  fun tabletopPostureAlwaysUsesReachableBottomNavigation() {
+    assertEquals(AdaptiveNavigationMode.Bar, adaptiveNavigationMode(1280f, 800f, tabletop = true))
   }
 
   @Test

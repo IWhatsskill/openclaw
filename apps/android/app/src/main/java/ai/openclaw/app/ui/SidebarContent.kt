@@ -5,17 +5,13 @@ import ai.openclaw.app.GatewayConnectionDisplay
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.selectableAgents
-import ai.openclaw.app.ui.design.ClawAgentAvatar
 import ai.openclaw.app.ui.design.ClawTheme
 import ai.openclaw.app.ui.design.OpenClawMascot
-import ai.openclaw.app.ui.design.agentAvatarSource
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -26,14 +22,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.outlined.AccessTime
@@ -44,7 +37,6 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -59,7 +51,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -74,7 +68,7 @@ internal enum class SidebarDestination(
   Sessions(icon = Icons.Outlined.Dashboard),
 }
 
-private fun SidebarDestination.localizedLabel(): String =
+internal fun SidebarDestination.localizedLabel(): String =
   when (this) {
     SidebarDestination.Home -> nativeString("Home")
     SidebarDestination.Overview -> nativeString("Overview")
@@ -123,14 +117,14 @@ internal fun sidebarRecentSessions(
     .toList()
 }
 
-private fun sidebarSessionTitle(session: ChatSessionEntry): String =
+internal fun sidebarSessionTitle(session: ChatSessionEntry): String =
   session.displayName?.trim()?.takeIf(String::isNotEmpty)
     ?: session.label?.trim()?.takeIf(String::isNotEmpty)
     ?: session.key
 
-private fun sidebarAgentName(agent: GatewayAgentSummary): String = agent.name?.trim()?.takeIf(String::isNotEmpty) ?: agent.id
+internal fun sidebarAgentName(agent: GatewayAgentSummary): String = agent.name?.trim()?.takeIf(String::isNotEmpty) ?: agent.id
 
-private data class SidebarPalette(
+internal data class SidebarPalette(
   val background: Color,
   val elevated: Color,
   val selection: Color,
@@ -183,6 +177,7 @@ internal fun OpenClawSidebar(
   var query by rememberSaveable { mutableStateOf("") }
   var agentsExpanded by remember { mutableStateOf(false) }
   val recentSessions = sidebarRecentSessions(sessions, query)
+  val connectionLabel = nativeString(if (connection.isConnected) "Connected" else "Offline")
 
   Column(
     modifier =
@@ -315,7 +310,13 @@ internal fun OpenClawSidebar(
 
     HorizontalDivider(color = palette.hairline)
     Row(
-      modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(horizontal = 12.dp),
+      modifier =
+        Modifier
+          .fillMaxWidth()
+          .heightIn(min = 48.dp)
+          .semantics(mergeDescendants = true) {
+            stateDescription = connectionLabel
+          }.padding(horizontal = 12.dp),
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(9.dp),
     ) {
@@ -324,224 +325,15 @@ internal fun OpenClawSidebar(
           Modifier
             .size(8.dp)
             .clip(CircleShape)
-            .background(if (connection.isConnected) ClawTheme.colors.success else palette.muted),
+            .background(if (connection.isConnected) ClawTheme.colors.success else palette.muted)
+            .clearAndSetSemantics {},
       )
       Text(
-        text = nativeString(if (connection.isConnected) "Connected" else "Offline"),
+        text = connectionLabel,
         style = ClawTheme.type.caption,
         color = palette.muted,
         maxLines = 1,
       )
     }
   }
-}
-
-@Composable
-private fun SidebarSearchField(
-  query: String,
-  onQueryChange: (String) -> Unit,
-  palette: SidebarPalette,
-  modifier: Modifier = Modifier,
-) {
-  Surface(
-    modifier = modifier.fillMaxWidth().heightIn(min = 48.dp),
-    shape = RoundedCornerShape(12.dp),
-    color = palette.elevated,
-  ) {
-    Row(
-      modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(9.dp),
-    ) {
-      Icon(
-        imageVector = Icons.Default.Search,
-        contentDescription = null,
-        tint = palette.muted,
-        modifier = Modifier.size(19.dp),
-      )
-      BasicTextField(
-        value = query,
-        onValueChange = onQueryChange,
-        modifier = Modifier.weight(1f).testTag("sidebar-search"),
-        singleLine = true,
-        textStyle = ClawTheme.type.body.copy(color = palette.text),
-        decorationBox = { innerTextField ->
-          Box(contentAlignment = Alignment.CenterStart) {
-            if (query.isEmpty()) {
-              Text(
-                text = nativeString("Search sessions"),
-                style = ClawTheme.type.body,
-                color = palette.muted,
-              )
-            }
-            innerTextField()
-          }
-        },
-      )
-      if (query.isNotEmpty()) {
-        IconButton(onClick = { onQueryChange("") }, modifier = Modifier.size(40.dp)) {
-          Icon(
-            imageVector = Icons.Default.Close,
-            contentDescription = nativeString("Clear session search"),
-            tint = palette.muted,
-            modifier = Modifier.size(17.dp),
-          )
-        }
-      }
-    }
-  }
-}
-
-@Composable
-private fun SidebarSectionTitle(
-  label: String,
-  palette: SidebarPalette,
-  modifier: Modifier = Modifier,
-) {
-  Text(
-    text = label,
-    style = ClawTheme.type.caption.copy(fontWeight = FontWeight.SemiBold, fontSize = 12.sp),
-    color = palette.muted,
-    modifier = modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-    maxLines = 1,
-  )
-}
-
-@Composable
-private fun SidebarAgentRow(
-  agent: GatewayAgentSummary,
-  selected: Boolean,
-  palette: SidebarPalette,
-  onClick: () -> Unit,
-) {
-  SidebarRowSurface(selected = selected, palette = palette, onClick = onClick) {
-    ClawAgentAvatar(source = agentAvatarSource(agent), size = 28.dp) {
-      Box(
-        modifier = Modifier.size(28.dp).clip(CircleShape).background(palette.elevated),
-        contentAlignment = Alignment.Center,
-      ) {
-        Text(
-          text = agent.emoji?.takeIf(String::isNotBlank) ?: sidebarAgentName(agent).take(1).uppercase(),
-          style = ClawTheme.type.caption,
-          color = palette.text,
-        )
-      }
-    }
-    Text(
-      text = sidebarAgentName(agent),
-      style = ClawTheme.type.body,
-      color = palette.text,
-      modifier = Modifier.weight(1f),
-      maxLines = 1,
-      overflow = TextOverflow.Ellipsis,
-    )
-    if (selected) {
-      Text(
-        text = nativeString("Selected"),
-        style = ClawTheme.type.caption.copy(fontSize = 11.sp),
-        color = palette.muted,
-      )
-    }
-  }
-}
-
-@Composable
-private fun SidebarActionRow(
-  label: String,
-  icon: ImageVector,
-  palette: SidebarPalette,
-  onClick: () -> Unit,
-) {
-  SidebarRowSurface(selected = false, palette = palette, onClick = onClick) {
-    Spacer(modifier = Modifier.size(28.dp))
-    Text(
-      text = label,
-      style = ClawTheme.type.body,
-      color = palette.muted,
-      modifier = Modifier.weight(1f),
-      maxLines = 1,
-    )
-    Icon(imageVector = icon, contentDescription = null, tint = palette.muted, modifier = Modifier.size(18.dp))
-  }
-}
-
-@Composable
-private fun SidebarNavigationRow(
-  destination: SidebarDestination,
-  selected: Boolean,
-  palette: SidebarPalette,
-  onClick: () -> Unit,
-) {
-  SidebarRowSurface(selected = selected, palette = palette, onClick = onClick) {
-    Icon(imageVector = destination.icon, contentDescription = null, tint = palette.text, modifier = Modifier.size(20.dp))
-    Text(
-      text = destination.localizedLabel(),
-      style = ClawTheme.type.body,
-      color = palette.text,
-      modifier = Modifier.weight(1f),
-      maxLines = 1,
-    )
-  }
-}
-
-@Composable
-private fun SidebarSessionRow(
-  session: ChatSessionEntry,
-  selected: Boolean,
-  palette: SidebarPalette,
-  onClick: () -> Unit,
-) {
-  SidebarRowSurface(selected = selected, palette = palette, onClick = onClick) {
-    Box(
-      modifier =
-        Modifier
-          .size(7.dp)
-          .clip(CircleShape)
-          .background(
-            when {
-              session.hasActiveRun == true -> ClawTheme.colors.warning
-              session.unread == true -> ClawTheme.colors.primary
-              else -> palette.muted.copy(alpha = 0.45f)
-            },
-          ),
-    )
-    Column(modifier = Modifier.weight(1f)) {
-      Text(
-        text = sidebarSessionTitle(session),
-        style = ClawTheme.type.body.copy(fontSize = 13.sp),
-        color = palette.text,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-      )
-      Text(
-        text = sessionSourceLabel(session.key),
-        style = ClawTheme.type.caption.copy(fontSize = 11.sp),
-        color = palette.muted,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-      )
-    }
-  }
-}
-
-@Composable
-private fun SidebarRowSurface(
-  selected: Boolean,
-  palette: SidebarPalette,
-  onClick: () -> Unit,
-  content: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit,
-) {
-  Row(
-    modifier =
-      Modifier
-        .fillMaxWidth()
-        .heightIn(min = 48.dp)
-        .clip(RoundedCornerShape(10.dp))
-        .background(if (selected) palette.selection else Color.Transparent)
-        .clickable(onClick = onClick)
-        .padding(horizontal = 12.dp, vertical = 8.dp),
-    verticalAlignment = Alignment.CenterVertically,
-    horizontalArrangement = Arrangement.spacedBy(10.dp),
-    content = content,
-  )
 }
