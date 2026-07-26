@@ -65,15 +65,23 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 internal enum class SidebarDestination(
-  val label: String,
   val icon: ImageVector,
 ) {
-  Home(label = "Home", icon = Icons.Outlined.ChatBubbleOutline),
-  Overview(label = "Overview", icon = Icons.Default.Home),
-  Usage(label = "Usage", icon = Icons.Default.Storage),
-  Automations(label = "Automations", icon = Icons.Outlined.AccessTime),
-  Sessions(label = "Threads", icon = Icons.Outlined.Dashboard),
+  Home(icon = Icons.Outlined.ChatBubbleOutline),
+  Overview(icon = Icons.Default.Home),
+  Usage(icon = Icons.Default.Storage),
+  Automations(icon = Icons.Outlined.AccessTime),
+  Sessions(icon = Icons.Outlined.Dashboard),
 }
+
+private fun SidebarDestination.localizedLabel(): String =
+  when (this) {
+    SidebarDestination.Home -> nativeString("Home")
+    SidebarDestination.Overview -> nativeString("Overview")
+    SidebarDestination.Usage -> nativeString("Usage")
+    SidebarDestination.Automations -> nativeString("Automations")
+    SidebarDestination.Sessions -> nativeString("Threads")
+  }
 
 internal data class SidebarAgentRoster(
   val selected: GatewayAgentSummary?,
@@ -467,7 +475,7 @@ private fun SidebarNavigationRow(
   SidebarRowSurface(selected = selected, palette = palette, onClick = onClick) {
     Icon(imageVector = destination.icon, contentDescription = null, tint = palette.text, modifier = Modifier.size(20.dp))
     Text(
-      text = nativeString(destination.label),
+      text = destination.localizedLabel(),
       style = ClawTheme.type.body,
       color = palette.text,
       modifier = Modifier.weight(1f),
