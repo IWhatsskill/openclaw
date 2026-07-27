@@ -31,6 +31,8 @@ export function getArgumentChurnNoProgressStreak(
   const stableOutcomes = allOutcomes.filter(
     (outcome) => outcome.count >= MIN_STABLE_CALLS_PER_VARIANT,
   );
+  const hasSharedStableOutcome =
+    new Set(stableOutcomes.map((outcome) => outcome.resultHash)).size === 1;
   const currentOutcome = outcomes.get(currentArgsHash);
   const hasOnlyStableVariants =
     stableOutcomes.reduce((sum, outcome) => sum + outcome.count, 0) === count;
@@ -42,6 +44,7 @@ export function getArgumentChurnNoProgressStreak(
   const hasStableChurn =
     stableOutcomes.length > 1 &&
     hasOnlyStableVariants &&
+    hasSharedStableOutcome &&
     (currentOutcome?.count ?? 0) >= MIN_STABLE_CALLS_PER_VARIANT;
   return hasStableChurn
     ? { count, variantCount: stableOutcomes.length }
@@ -57,7 +60,7 @@ export function buildArgumentChurnWarning(
     level: "warning" as const,
     detector: "argument_churn" as const,
     count: churn.count,
-    message: `WARNING: ${toolName} has cycled through ${churn.variantCount} repeated argument patterns with stable per-variant outcomes ${churn.count} times. Continued churn is treated as stalled run activity, but this tool call remains allowed.`,
+    message: `WARNING: ${toolName} has cycled through ${churn.variantCount} repeated argument patterns with the same stable outcome ${churn.count} times. Continued churn is treated as stalled run activity, but this tool call remains allowed.`,
     warningKey: `argument-churn:${toolName}`,
     livenessSignal: "argument_churn" as const,
   };

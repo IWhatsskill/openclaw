@@ -503,8 +503,8 @@ describe("tool-loop-detection", () => {
           "write",
           { path: targetPath, content: "same content" },
           {
-            content: [{ type: "text", text: `wrote ${targetPath}` }],
-            details: { ok: true, path: targetPath },
+            content: [{ type: "text", text: "write made no changes" }],
+            details: { ok: true, changed: false },
           },
           index,
         );
@@ -546,8 +546,8 @@ describe("tool-loop-detection", () => {
           "write",
           { path: targetPath, content: "same content" },
           {
-            content: [{ type: "text", text: `wrote ${targetPath}` }],
-            details: { ok: true, path: targetPath },
+            content: [{ type: "text", text: "write made no changes" }],
+            details: { ok: true, changed: false },
           },
           index,
         );
@@ -571,6 +571,41 @@ describe("tool-loop-detection", () => {
         level: "warning",
         detector: "argument_churn",
       });
+    });
+
+    it("does not treat distinct stable successful outcomes as semantic no-progress", () => {
+      const state = createState();
+      const paths = ["/tmp/a.md", "/tmp/b.md", "/tmp/a.md", "/tmp/a.md", "/tmp/b.md"];
+
+      for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
+        const targetPath = paths[index % paths.length]!;
+        recordSuccessfulCall(
+          state,
+          "write",
+          { path: targetPath, content: "same content" },
+          {
+            content: [{ type: "text", text: `wrote ${targetPath}` }],
+            details: { ok: true, path: targetPath },
+          },
+          index,
+        );
+      }
+
+      const loopResult = detectToolCallLoop(
+        state,
+        "write",
+        { path: "/tmp/a.md", content: "same content" },
+        enabledLoopDetectionConfig,
+      );
+
+      expect(loopResult).toMatchObject({
+        stuck: true,
+        level: "warning",
+        detector: "generic_repeat",
+      });
+      if (loopResult.stuck) {
+        expect(loopResult.livenessSignal).toBeUndefined();
+      }
     });
 
     it("keeps generic critical repeats ahead of warning-only argument churn", () => {
@@ -624,8 +659,8 @@ describe("tool-loop-detection", () => {
           "write",
           { path: targetPath, content: "same content" },
           {
-            content: [{ type: "text", text: `wrote ${targetPath}` }],
-            details: { ok: true, path: targetPath },
+            content: [{ type: "text", text: "write made no changes" }],
+            details: { ok: true, changed: false },
           },
           index,
         );

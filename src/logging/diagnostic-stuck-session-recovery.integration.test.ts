@@ -1,5 +1,5 @@
 // Stuck session recovery integration tests cover end-to-end recovery diagnostics.
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lanes.js";
 import {
   clearActiveEmbeddedRun,
@@ -201,20 +201,32 @@ describe("stuck session recovery integration", () => {
     });
     await activeStarted;
 
+    const proofNow = Date.now();
+    vi.useFakeTimers();
+    vi.setSystemTime(proofNow - 6 * 60_000);
     markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey });
     markDiagnosticArgumentChurnObservation({
       sessionId,
       sessionKey,
       runId: sessionId,
       active: true,
-      now: Date.now() - 6 * 60_000,
     });
-    markDiagnosticRunProgress({
-      sessionId,
-      sessionKey,
-      runId: sessionId,
-      reason: "model_call:stream_progress",
-    });
+    for (let step = 1; step <= 12; step += 1) {
+      vi.setSystemTime(proofNow - 6 * 60_000 + step * 30_000);
+      markDiagnosticRunProgress({
+        sessionId,
+        sessionKey,
+        runId: sessionId,
+        reason: "model_call:stream_progress",
+      });
+      markDiagnosticArgumentChurnObservation({
+        sessionId,
+        sessionKey,
+        runId: sessionId,
+        active: true,
+      });
+    }
+    vi.useRealTimers();
     expect(getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey })).toMatchObject({
       activeWorkKind: "embedded_run",
       lastProgressReason: "tool_loop:argument_churn",

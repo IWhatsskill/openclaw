@@ -1,3 +1,7 @@
+// A semantic-stall clock remains continuous across short model/tool handoffs,
+// but later model progress wins once no churn observation refreshes this lease.
+const ARGUMENT_CHURN_CONTINUITY_WINDOW_MS = 60_000;
+
 export type DiagnosticArgumentChurnActivity = {
   argumentChurnStartedAt?: number;
   argumentChurnObservationAt?: number;
@@ -29,6 +33,20 @@ export function resolveCurrentArgumentChurnOwner<T extends { sequence: number }>
   return currentOwner;
 }
 
+function hasArgumentChurnContinuityExpired(
+  activity: DiagnosticArgumentChurnActivity & { lastProgressAt?: number },
+  now: number,
+): boolean {
+  const observationAt = activity.argumentChurnObservationAt;
+  const lastProgressAt = activity.lastProgressAt;
+  return (
+    observationAt !== undefined &&
+    lastProgressAt !== undefined &&
+    lastProgressAt > observationAt &&
+    now - observationAt >= ARGUMENT_CHURN_CONTINUITY_WINDOW_MS
+  );
+}
+
 export function resolveArgumentChurnProgress<T extends { runId: string; sequence: number }>(
   activity: DiagnosticArgumentChurnActivity & {
     lastProgressAt: number;
@@ -54,6 +72,12 @@ export function resolveArgumentChurnProgress<T extends { runId: string; sequence
       lastProgressReason: activity.lastProgressReason,
     };
   }
+  if (hasArgumentChurnContinuityExpired(activity, now)) {
+    return {
+      lastProgressAt: activity.lastProgressAt,
+      lastProgressReason: activity.lastProgressReason,
+    };
+  }
   return {
     lastProgressAt: startedAt,
     lastProgressReason: "tool_loop:argument_churn",
@@ -61,7 +85,7 @@ export function resolveArgumentChurnProgress<T extends { runId: string; sequence
 }
 
 export function recordArgumentChurnActivityObservation(
-  activity: DiagnosticArgumentChurnActivity,
+  activity: DiagnosticArgumentChurnActivity & { lastProgressAt?: number },
   params: {
     runId?: string;
     active: boolean;
@@ -81,9 +105,11 @@ export function recordArgumentChurnActivityObservation(
     }
     return;
   }
+  const continuityExpired = hasArgumentChurnContinuityExpired(activity, params.now);
   if (
     activity.argumentChurnStartedAt === undefined ||
-    activity.argumentChurnRunId !== params.runId
+    activity.argumentChurnRunId !== params.runId ||
+    continuityExpired
   ) {
     activity.argumentChurnStartedAt = params.now;
     activity.argumentChurnRunId = params.runId;

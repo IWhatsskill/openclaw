@@ -101,6 +101,13 @@ function createTestHookRunner(): TestHookRunner {
   };
 }
 
+function createStableNoProgressWriteResult() {
+  return {
+    content: [{ type: "text" as const, text: "write made no changes" }],
+    details: { ok: true, changed: false },
+  };
+}
+
 function asAgentTool(tool: { name: string; execute: ReturnType<typeof vi.fn> }): AnyAgentTool {
   return tool as unknown as AnyAgentTool;
 }
@@ -485,21 +492,14 @@ describe("before_tool_call loop detection behavior", () => {
   });
 
   it("warns on non-strict same-tool argument churn while preserving tool execution", async () => {
-    const execute = vi.fn().mockImplementation(async (toolCallId: string, params: unknown) => {
-      const targetPath =
-        typeof params === "object" && params !== null && "path" in params
-          ? String(params.path)
-          : "unknown";
+    const execute = vi.fn().mockImplementation(async (toolCallId: string, _params: unknown) => {
       const progressed = toolCallId === "write-churn-progress";
-      return {
-        content: [
-          {
-            type: "text",
-            text: progressed ? `updated ${targetPath}` : `wrote ${targetPath}`,
-          },
-        ],
-        details: { ok: true, path: targetPath, ...(progressed ? { revision: 2 } : {}) },
-      };
+      return progressed
+        ? {
+            content: [{ type: "text", text: "write updated content" }],
+            details: { ok: true, changed: true, revision: 2 },
+          }
+        : createStableNoProgressWriteResult();
     });
     const sessionId = "write-churn-session";
     const runId = "write-churn-run";
@@ -564,16 +564,9 @@ describe("before_tool_call loop detection behavior", () => {
     const sessionKey = "main";
     const runId = "write-churn-policy-wait-run";
     const activityDuringExecution: ReturnType<typeof getDiagnosticSessionActivitySnapshot>[] = [];
-    const execute = vi.fn().mockImplementation(async (_toolCallId: string, params: unknown) => {
-      const targetPath =
-        typeof params === "object" && params !== null && "path" in params
-          ? String(params.path)
-          : "unknown";
+    const execute = vi.fn().mockImplementation(async (_toolCallId: string, _params: unknown) => {
       activityDuringExecution.push(getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey }));
-      return {
-        content: [{ type: "text", text: `wrote ${targetPath}` }],
-        details: { ok: true, path: targetPath },
-      };
+      return createStableNoProgressWriteResult();
     });
     const loopDetectionContext = {
       ...enabledLoopDetectionContext,
@@ -686,18 +679,11 @@ describe("before_tool_call loop detection behavior", () => {
     const sessionKey = "main";
     const runId = "write-churn-rewrite-run";
     const progressReasonsDuringExecution: Array<string | undefined> = [];
-    const execute = vi.fn().mockImplementation(async (_toolCallId: string, params: unknown) => {
-      const targetPath =
-        typeof params === "object" && params !== null && "path" in params
-          ? String(params.path)
-          : "unknown";
+    const execute = vi.fn().mockImplementation(async (_toolCallId: string, _params: unknown) => {
       progressReasonsDuringExecution.push(
         getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey }).lastProgressReason,
       );
-      return {
-        content: [{ type: "text", text: `wrote ${targetPath}` }],
-        details: { ok: true, path: targetPath },
-      };
+      return createStableNoProgressWriteResult();
     });
     const loopDetectionContext = {
       ...enabledLoopDetectionContext,
@@ -743,18 +729,11 @@ describe("before_tool_call loop detection behavior", () => {
     const sessionKey = "main";
     const runId = "write-churn-below-threshold-run";
     const progressReasonsDuringExecution: Array<string | undefined> = [];
-    const execute = vi.fn().mockImplementation(async (_toolCallId: string, params: unknown) => {
-      const targetPath =
-        typeof params === "object" && params !== null && "path" in params
-          ? String(params.path)
-          : "unknown";
+    const execute = vi.fn().mockImplementation(async (_toolCallId: string, _params: unknown) => {
       progressReasonsDuringExecution.push(
         getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey }).lastProgressReason,
       );
-      return {
-        content: [{ type: "text", text: `wrote ${targetPath}` }],
-        details: { ok: true, path: targetPath },
-      };
+      return createStableNoProgressWriteResult();
     });
     const loopDetectionContext = {
       ...enabledLoopDetectionContext,
@@ -786,18 +765,11 @@ describe("before_tool_call loop detection behavior", () => {
     const oldRunId = "write-churn-old-run";
     const newRunId = "write-churn-new-run";
     const progressReasonsDuringExecution: Array<string | undefined> = [];
-    const execute = vi.fn().mockImplementation(async (_toolCallId: string, params: unknown) => {
-      const targetPath =
-        typeof params === "object" && params !== null && "path" in params
-          ? String(params.path)
-          : "unknown";
+    const execute = vi.fn().mockImplementation(async (_toolCallId: string, _params: unknown) => {
       progressReasonsDuringExecution.push(
         getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey }).lastProgressReason,
       );
-      return {
-        content: [{ type: "text", text: `wrote ${targetPath}` }],
-        details: { ok: true, path: targetPath },
-      };
+      return createStableNoProgressWriteResult();
     });
     const oldRunTool = createWrappedTool("write", execute, {
       ...enabledLoopDetectionContext,

@@ -101,7 +101,7 @@ describe("diagnostic run activity listener lifecycle", () => {
 });
 
 describe("argument-churn liveness", () => {
-  it("keeps continuous churn stale across mechanical model progress and clears on escape", () => {
+  it("keeps frequently observed churn stale across mechanical model progress", () => {
     vi.useFakeTimers();
     const startedAt = Date.parse("2026-07-27T00:00:00Z");
     vi.setSystemTime(startedAt);
@@ -114,12 +114,19 @@ describe("argument-churn liveness", () => {
       active: true,
     });
 
-    vi.setSystemTime(startedAt + 6 * 60_000);
-    markDiagnosticRunProgress({
-      ...ref,
-      runId: "churn-run",
-      reason: "model_call:stream",
-    });
+    for (let step = 1; step <= 12; step += 1) {
+      vi.setSystemTime(startedAt + step * 30_000);
+      markDiagnosticRunProgress({
+        ...ref,
+        runId: "churn-run",
+        reason: "model_call:stream",
+      });
+      markDiagnosticArgumentChurnObservation({
+        ...ref,
+        runId: "churn-run",
+        active: true,
+      });
+    }
 
     expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
       activeWorkKind: "embedded_run",
@@ -135,6 +142,42 @@ describe("argument-churn liveness", () => {
     expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
       lastProgressAgeMs: 0,
       lastProgressReason: "model_call:stream",
+    });
+  });
+
+  it("lets later model progress supersede churn after tool activity stops", () => {
+    vi.useFakeTimers();
+    const startedAt = Date.parse("2026-07-27T00:00:00Z");
+    vi.setSystemTime(startedAt);
+    const ref = { sessionId: "churn-stop-session", sessionKey: "agent:main:churn-stop" };
+
+    markDiagnosticEmbeddedRunStarted({ ...ref, runId: "churn-stop-run" });
+    markDiagnosticArgumentChurnObservation({
+      ...ref,
+      runId: "churn-stop-run",
+      active: true,
+    });
+
+    vi.setSystemTime(startedAt + 2 * 60_000);
+    markDiagnosticRunProgress({
+      ...ref,
+      runId: "churn-stop-run",
+      reason: "model_call:stream",
+    });
+    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
+      lastProgressAgeMs: 0,
+      lastProgressReason: "model_call:stream",
+    });
+
+    // If churn later resumes, its clock restarts instead of inheriting the old age.
+    markDiagnosticArgumentChurnObservation({
+      ...ref,
+      runId: "churn-stop-run",
+      active: true,
+    });
+    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
+      lastProgressAgeMs: 0,
+      lastProgressReason: "tool_loop:argument_churn",
     });
   });
 
