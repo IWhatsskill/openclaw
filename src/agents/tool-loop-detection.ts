@@ -20,7 +20,7 @@ import {
 } from "./tool-loop-argument-churn.js";
 import { isKnownPollToolCall } from "./tool-loop-call-kind.js";
 import { TOOL_LOOP_WARNING_THRESHOLD } from "./tool-loop-thresholds.js";
-import { normalizeWriteToolOutcomeForLoopDetection } from "./tool-loop-write-outcome.js";
+import { isWriteNoProgressOutcome } from "./tool-loop-write-outcome.js";
 
 const log = createSubsystemLogger("agents/loop-detection");
 
@@ -286,11 +286,12 @@ function hashToolOutcome(
   params: unknown,
   result: unknown,
   error: unknown,
-): { resultHash?: string; unknownToolName?: string } {
+): { resultHash?: string; noProgress?: true; unknownToolName?: string } {
   if (error !== undefined) {
     const unknownToolName = extractUnknownToolName(error);
     return {
       resultHash: `error:${digestStable(formatErrorForHash(error))}`,
+      noProgress: true,
       unknownToolName,
     };
   }
@@ -311,11 +312,8 @@ function hashToolOutcome(
       return { resultHash: execHash };
     }
   }
-  if (toolName === "write") {
-    const writeOutcome = normalizeWriteToolOutcomeForLoopDetection(params, details, text);
-    if (writeOutcome) {
-      return { resultHash: digestStable(writeOutcome) };
-    }
+  if (toolName === "write" && isWriteNoProgressOutcome(details)) {
+    return { resultHash: digestStable({ status: "unchanged" }), noProgress: true };
   }
   if (isKnownPollToolCall(toolName, params) && toolName === "process" && isPlainObject(params)) {
     const action = params.action;
@@ -770,6 +768,11 @@ export function recordToolCallOutcome(
       continue;
     }
     call.resultHash = resultHash;
+    if (outcome.noProgress) {
+      call.noProgress = true;
+    } else {
+      delete call.noProgress;
+    }
     call.unknownToolName = outcome.unknownToolName;
     matched = true;
     recordedOutcome = call;
@@ -783,6 +786,7 @@ export function recordToolCallOutcome(
       toolCallId: params.toolCallId,
       ...(runId && { runId }),
       resultHash,
+      ...(outcome.noProgress ? { noProgress: true as const } : {}),
       unknownToolName: outcome.unknownToolName,
       timestamp: Date.now(),
     };

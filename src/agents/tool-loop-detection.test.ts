@@ -536,7 +536,36 @@ describe("tool-loop-detection", () => {
       expect(escapeResult.stuck).toBe(false);
     });
 
-    it("normalizes built-in write results that only differ by echoed path", () => {
+    it("normalizes built-in write no-ops that only differ by echoed path", () => {
+      const state = createState();
+      const content = "same content";
+      const paths = ["/tmp/a.md", "/tmp/b.md"];
+
+      for (const [index, targetPath] of paths.entries()) {
+        recordSuccessfulCall(
+          state,
+          "write",
+          { path: targetPath, content },
+          {
+            content: [
+              {
+                type: "text",
+                text: `No changes made to ${targetPath}. The file already has identical content.`,
+              },
+            ],
+            details: { changed: false },
+          },
+          index,
+        );
+      }
+
+      const hashes = state.toolCallHistory?.map((record) => record.resultHash);
+      expect(hashes?.[0]).toBeTypeOf("string");
+      expect(hashes?.[0]).toBe(hashes?.[1]);
+      expect(state.toolCallHistory?.every((record) => record.noProgress === true)).toBe(true);
+    });
+
+    it("preserves target identity for successful write outcomes", () => {
       const state = createState();
       const content = "same content";
       const paths = ["/tmp/a.md", "/tmp/b.md"];
@@ -564,9 +593,9 @@ describe("tool-loop-detection", () => {
         );
       }
 
-      const hashes = state.toolCallHistory?.map((record) => record.resultHash);
-      expect(hashes?.[0]).toBeTypeOf("string");
-      expect(hashes?.[0]).toBe(hashes?.[1]);
+      const history = state.toolCallHistory ?? [];
+      expect(history[0]?.resultHash).not.toBe(history[1]?.resultHash);
+      expect(history.every((record) => record.noProgress === undefined)).toBe(true);
     });
 
     it("uses the supplied warning threshold when reconciling rewritten calls", () => {
@@ -640,19 +669,19 @@ describe("tool-loop-detection", () => {
       });
     });
 
-    it("does not treat distinct stable successful outcomes as semantic no-progress", () => {
+    it("does not treat generic stable successes as semantic no-progress", () => {
       const state = createState();
       const paths = ["/tmp/a.md", "/tmp/b.md", "/tmp/a.md", "/tmp/a.md", "/tmp/b.md"];
 
-      for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
+      for (let index = 0; index < CRITICAL_THRESHOLD; index += 1) {
         const targetPath = paths[index % paths.length]!;
         recordSuccessfulCall(
           state,
-          "write",
-          { path: targetPath, content: "same content" },
+          "side_effect",
+          { path: targetPath },
           {
-            content: [{ type: "text", text: `wrote ${targetPath}` }],
-            details: { ok: true, path: targetPath },
+            content: [{ type: "text", text: "done" }],
+            details: { ok: true },
           },
           index,
         );
@@ -660,8 +689,8 @@ describe("tool-loop-detection", () => {
 
       const loopResult = detectToolCallLoop(
         state,
-        "write",
-        { path: "/tmp/a.md", content: "same content" },
+        "side_effect",
+        { path: "/tmp/a.md" },
         enabledLoopDetectionConfig,
       );
 
@@ -673,6 +702,39 @@ describe("tool-loop-detection", () => {
       if (loopResult.stuck) {
         expect(loopResult.livenessSignal).toBeUndefined();
       }
+    });
+
+    it("keeps repeated stable errors eligible for argument-churn liveness", () => {
+      const state = createState();
+      const paths = ["/tmp/a.md", "/tmp/b.md", "/tmp/a.md", "/tmp/a.md", "/tmp/b.md"];
+
+      for (let index = 0; index < CRITICAL_THRESHOLD; index += 1) {
+        const targetPath = paths[index % paths.length]!;
+        const toolCallId = `failed-${index}`;
+        const params = { path: targetPath };
+        recordToolCall(state, "side_effect", params, toolCallId, enabledLoopDetectionConfig);
+        recordToolCallOutcome(state, {
+          toolName: "side_effect",
+          toolParams: params,
+          toolCallId,
+          error: new Error("permission denied"),
+          config: enabledLoopDetectionConfig,
+        });
+      }
+
+      const loopResult = detectToolCallLoop(
+        state,
+        "side_effect",
+        { path: "/tmp/a.md" },
+        enabledLoopDetectionConfig,
+      );
+
+      expect(loopResult).toMatchObject({
+        stuck: true,
+        level: "warning",
+        detector: "argument_churn",
+        livenessSignal: "argument_churn",
+      });
     });
 
     it("keeps generic critical repeats ahead of warning-only argument churn", () => {

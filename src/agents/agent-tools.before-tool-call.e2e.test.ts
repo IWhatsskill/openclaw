@@ -590,7 +590,12 @@ describe("before_tool_call loop detection behavior", () => {
       });
       const history = getDiagnosticSessionState({ sessionId, sessionKey }).toolCallHistory;
       expect(history?.[0]?.resultHash).toBeTypeOf("string");
-      expect(history?.[0]?.resultHash).toBe(history?.[1]?.resultHash);
+      expect(history?.[0]?.resultHash).not.toBe(history?.[1]?.resultHash);
+      const noProgressHashes = (history ?? [])
+        .filter((record) => record.noProgress)
+        .map((record) => record.resultHash);
+      expect(noProgressHashes.length).toBeGreaterThanOrEqual(6);
+      expect(new Set(noProgressHashes).size).toBe(1);
       expect(getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey })).toMatchObject({
         lastProgressReason: "tool_loop:argument_churn",
       });

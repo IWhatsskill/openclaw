@@ -16,6 +16,9 @@ export function getArgumentChurnNoProgressStreak(
     if (!record.resultHash) {
       continue;
     }
+    if (record.noProgress !== true) {
+      break;
+    }
     const previous = outcomes.get(record.argsHash);
     if (previous && previous.resultHash !== record.resultHash) {
       break;
