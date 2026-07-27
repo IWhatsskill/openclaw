@@ -584,6 +584,45 @@ export function shouldEmitLoopWarning(
   return true;
 }
 
+/** Reconcile loop liveness with the final post-policy arguments before execution. */
+export async function reconcileLoopCallExecutionParams(args: {
+  ctx?: HookContext;
+  toolName: string;
+  toolParams: unknown;
+  toolCallId?: string;
+}): Promise<void> {
+  if ((!args.ctx?.sessionKey && !args.ctx?.sessionId) || args.ctx.loopDetection?.enabled !== true) {
+    return;
+  }
+  try {
+    const {
+      getDiagnosticSessionState,
+      markDiagnosticArgumentChurnObservation,
+      reconcileToolCallExecutionParams,
+    } = await loadBeforeToolCallRuntime();
+    const sessionState = getDiagnosticSessionState({
+      sessionKey: args.ctx.sessionKey,
+      sessionId: args.ctx.sessionId,
+    });
+    const churn = reconcileToolCallExecutionParams(sessionState, {
+      toolName: args.toolName,
+      toolParams: args.toolParams,
+      toolCallId: args.toolCallId,
+      runId: args.ctx.runId,
+    });
+    markDiagnosticArgumentChurnObservation({
+      sessionKey: args.ctx.sessionKey,
+      sessionId: args.ctx.sessionId,
+      runId: args.ctx.runId,
+      active: churn.active,
+    });
+  } catch (err) {
+    log.warn(
+      `tool loop execution-param reconciliation failed: tool=${args.toolName} error=${String(err)}`,
+    );
+  }
+}
+
 export async function recordLoopOutcome(args: {
   ctx?: HookContext;
   toolName: string;

@@ -7,6 +7,7 @@ import { markDiagnosticArgumentChurnObservation } from "../logging/diagnostic-ru
 import { getDiagnosticSessionState } from "../logging/diagnostic-session-state.js";
 import { logToolLoopAction } from "../logging/diagnostic.js";
 import { getArgumentChurnNoProgressStreak } from "./tool-loop-argument-churn.js";
+import { reconcileToolCallExecutionParams } from "./tool-loop-call-reconciliation.js";
 import {
   detectToolCallLoop,
   recordToolCall,
@@ -20,6 +21,7 @@ export const beforeToolCallRuntime = {
   getDiagnosticSessionState,
   logToolLoopAction,
   detectToolCallLoop,
+  reconcileToolCallExecutionParams,
   recordToolCall,
   recordToolCallOutcome,
 };

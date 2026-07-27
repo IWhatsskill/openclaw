@@ -43,14 +43,14 @@ type LoopDetectionResult =
     };
 
 const TOOL_CALL_HISTORY_SIZE = 30;
-const WARNING_THRESHOLD = 10;
+export const TOOL_LOOP_WARNING_THRESHOLD = 10;
 export const UNKNOWN_TOOL_THRESHOLD = 10;
 const CRITICAL_THRESHOLD = 20;
 const GLOBAL_CIRCUIT_BREAKER_THRESHOLD = 30;
 const DEFAULT_LOOP_DETECTION_CONFIG = {
   enabled: false,
   historySize: TOOL_CALL_HISTORY_SIZE,
-  warningThreshold: WARNING_THRESHOLD,
+  warningThreshold: TOOL_LOOP_WARNING_THRESHOLD,
   unknownToolThreshold: UNKNOWN_TOOL_THRESHOLD,
   criticalThreshold: CRITICAL_THRESHOLD,
   globalCircuitBreakerThreshold: GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
@@ -103,7 +103,7 @@ function resolveLoopDetectionConfig(config?: ToolLoopDetectionConfig): ResolvedL
  * Hash a tool call for pattern matching.
  * Uses tool name + deterministic JSON serialization digest of params.
  */
-function hashToolCall(toolName: string, params: unknown): string {
+export function hashToolCall(toolName: string, params: unknown): string {
   return `${toolName}:${digestStable(params)}`;
 }
 
