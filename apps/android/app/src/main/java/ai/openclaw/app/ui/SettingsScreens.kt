@@ -2103,29 +2103,6 @@ private val LocationMode.displayLabel: String
       LocationMode.Always -> nativeString("Always")
     }
 
-/** Converts raw gateway connection text into stable settings metric labels. */
-internal fun gatewayStatusLabel(
-  statusText: String,
-  isConnected: Boolean,
-  gatewayConnectionProblem: GatewayConnectionProblem? = null,
-): String {
-  if (isConnected) return nativeString("Ready")
-  val status = statusText.trim().lowercase()
-  return when {
-    status.contains("connecting") || status.contains("reconnecting") -> nativeString("Connecting...")
-    status.contains("pair") -> nativeString("Pairing needed")
-    status.contains("auth") || status.contains("device identity") -> gatewayAuthRecoveryLabel(gatewayConnectionProblem) ?: nativeString("Authentication needed")
-    status.contains("fingerprint verification timed out") -> nativeString("TLS timed out")
-    status.contains("no tls endpoint") -> nativeString("No TLS endpoint")
-    status.contains("certificate") || status.contains("tls") -> nativeString("Certificate review needed")
-    status.contains("failed") || status.contains("error") || status.contains("offline") || status.contains("not connected") -> nativeString("Cannot reach gateway")
-    status.isBlank() -> nativeString("Not connected")
-    else -> nativeString("Not connected")
-  }
-}
-
-internal fun gatewayStatusLabel(display: GatewayConnectionDisplay): String = gatewayStatusLabel(display.statusText, display.isConnected, display.problem)
-
 @Composable
 private fun AboutSettingsScreen(
   viewModel: MainViewModel,

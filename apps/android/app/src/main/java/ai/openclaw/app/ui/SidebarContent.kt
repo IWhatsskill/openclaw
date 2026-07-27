@@ -189,7 +189,7 @@ internal fun OpenClawSidebar(
   var query by rememberSaveable { mutableStateOf("") }
   var agentsExpanded by remember { mutableStateOf(false) }
   val recentSessions = sidebarRecentSessions(sessions, query)
-  val connectionLabel = nativeString(if (connection.isConnected) "Connected" else "Offline")
+  val connectionLabel = gatewayStatusLabel(connection)
 
   Column(
     modifier =
