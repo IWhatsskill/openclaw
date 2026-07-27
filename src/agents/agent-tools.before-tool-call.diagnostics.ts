@@ -599,7 +599,12 @@ export async function recordLoopOutcome(args: {
   }
   let recordedOutcome: ToolOutcomeObservation | undefined;
   try {
-    const { getDiagnosticSessionState, recordToolCallOutcome } = await loadBeforeToolCallRuntime();
+    const {
+      getArgumentChurnNoProgressStreak,
+      getDiagnosticSessionState,
+      markDiagnosticArgumentChurnObservation,
+      recordToolCallOutcome,
+    } = await loadBeforeToolCallRuntime();
     const sessionState = getDiagnosticSessionState({
       sessionKey: args.ctx.sessionKey,
       sessionId: args.ctx.sessionId,
@@ -612,6 +617,20 @@ export async function recordLoopOutcome(args: {
       error: args.error,
       config: args.ctx.loopDetection,
       ...(args.ctx.runId && { runId: args.ctx.runId }),
+    });
+    const churnContinues =
+      record !== undefined &&
+      getArgumentChurnNoProgressStreak(
+        (sessionState.toolCallHistory ?? []).filter((call) => call.runId === record.runId),
+        record.toolName,
+        record.argsHash,
+      ).count > 0;
+    markDiagnosticArgumentChurnObservation({
+      sessionKey: args.ctx.sessionKey,
+      sessionId: args.ctx.sessionId,
+      runId: args.ctx.runId,
+      active: churnContinues,
+      existingOnly: true,
     });
     if (record?.resultHash && args.ctx.onToolOutcome) {
       recordedOutcome = {

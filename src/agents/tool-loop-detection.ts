@@ -14,12 +14,16 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isPlainObject } from "../utils.js";
 import { isMessagingToolSendAction } from "./embedded-agent-messaging.js";
 import { stableStringify } from "./stable-stringify.js";
-import { getArgumentChurnNoProgressStreak } from "./tool-loop-argument-churn.js";
+import {
+  buildArgumentChurnWarning,
+  getArgumentChurnNoProgressStreak,
+} from "./tool-loop-argument-churn.js";
 
 const log = createSubsystemLogger("agents/loop-detection");
 
 type LoopDetectorKind =
   | "generic_repeat"
+  | "argument_churn"
   | "unknown_tool_repeat"
   | "known_poll_no_progress"
   | "global_circuit_breaker"
@@ -35,6 +39,7 @@ type LoopDetectionResult =
       message: string;
       pairedToolName?: string;
       warningKey?: string;
+      livenessSignal?: "argument_churn";
     };
 
 const TOOL_CALL_HISTORY_SIZE = 30;
@@ -539,10 +544,13 @@ export function detectToolCallLoop(
   const unknownToolStreak = getUnknownToolRepeatStreak(history, toolName);
   const noProgress = getNoProgressStreak(history, toolName, currentHash);
   const noProgressStreak = noProgress.count;
-  const argumentChurn = getArgumentChurnNoProgressStreak(history, toolName);
-  const globalNoProgressStreak = Math.max(noProgressStreak, argumentChurn.count);
+  const argumentChurn = getArgumentChurnNoProgressStreak(history, toolName, currentHash);
   const knownPollTool = isKnownPollToolCall(toolName, params);
   const pingPong = getPingPongStreak(history, currentHash);
+  const argumentChurnLivenessSignal =
+    argumentChurn.count >= resolvedConfig.warningThreshold
+      ? ("argument_churn" as const)
+      : undefined;
 
   if (unknownToolStreak.count >= resolvedConfig.unknownToolThreshold) {
     return {
@@ -555,24 +563,17 @@ export function detectToolCallLoop(
     };
   }
 
-  if (globalNoProgressStreak >= resolvedConfig.globalCircuitBreakerThreshold) {
+  if (noProgressStreak >= resolvedConfig.globalCircuitBreakerThreshold) {
     log.error(
-      `Global circuit breaker triggered: ${toolName} repeated ${globalNoProgressStreak} times with no progress`,
+      `Global circuit breaker triggered: ${toolName} repeated ${noProgressStreak} times with no progress`,
     );
-    const churnMessage =
-      argumentChurn.count >= resolvedConfig.globalCircuitBreakerThreshold
-        ? ` cycled through ${argumentChurn.variantCount} repeated argument patterns with stable outcomes`
-        : ` repeated identical no-progress outcomes`;
     return {
       stuck: true,
       level: "critical",
       detector: "global_circuit_breaker",
-      count: globalNoProgressStreak,
-      message: `CRITICAL: ${toolName}${churnMessage} ${globalNoProgressStreak} times. Session execution blocked by global circuit breaker to prevent runaway loops.`,
-      warningKey:
-        argumentChurn.count >= resolvedConfig.globalCircuitBreakerThreshold
-          ? `global:${toolName}:argument-churn`
-          : `global:${toolName}:${currentHash}:${noProgress.latestResultHash ?? "none"}`,
+      count: noProgressStreak,
+      message: `CRITICAL: ${toolName} repeated identical no-progress outcomes ${noProgressStreak} times. Session execution blocked by global circuit breaker to prevent runaway loops.`,
+      warningKey: `global:${toolName}:${currentHash}:${noProgress.latestResultHash ?? "none"}`,
     };
   }
 
@@ -605,6 +606,7 @@ export function detectToolCallLoop(
       count: noProgressStreak,
       message: `WARNING: You have called ${toolName} ${noProgressStreak} times with identical arguments and no progress. Stop polling and either (1) increase wait time between checks, or (2) report the task as failed if the process is stuck.`,
       warningKey: `poll:${toolName}:${currentHash}:${noProgress.latestResultHash ?? "none"}`,
+      ...(argumentChurnLivenessSignal ? { livenessSignal: argumentChurnLivenessSignal } : {}),
     };
   }
 
@@ -643,6 +645,7 @@ export function detectToolCallLoop(
       message: `WARNING: You are alternating between repeated tool-call patterns (${pingPong.count} consecutive calls). This looks like a ping-pong loop; stop retrying and report the task as failed.`,
       pairedToolName: pingPong.pairedToolName,
       warningKey: pingPongWarningKey,
+      ...(argumentChurnLivenessSignal ? { livenessSignal: argumentChurnLivenessSignal } : {}),
     };
   }
 
@@ -651,7 +654,6 @@ export function detectToolCallLoop(
   const recentCount = history.filter(
     (h) => h.toolName === toolName && h.argsHash === currentHash,
   ).length;
-
   if (
     !knownPollTool &&
     resolvedConfig.detectors.genericRepeat &&
@@ -666,6 +668,11 @@ export function detectToolCallLoop(
       message: `CRITICAL: Called ${toolName} with identical arguments and identical outcomes ${noProgressStreak} times. Session execution blocked to prevent runaway loops.`,
       warningKey: `generic:${toolName}:${currentHash}:${noProgress.latestResultHash ?? "none"}`,
     };
+  }
+
+  if (argumentChurn.count >= resolvedConfig.warningThreshold) {
+    log.warn(`Argument churn warning: ${toolName} cycled through stable argument patterns`);
+    return buildArgumentChurnWarning(toolName, argumentChurn);
   }
 
   if (

@@ -19,6 +19,11 @@ import {
   type DiagnosticToolLoopEvent,
 } from "../infra/diagnostic-events.js";
 import { MAX_PLUGIN_APPROVAL_TIMEOUT_MS } from "../infra/plugin-approvals.js";
+import {
+  getDiagnosticSessionActivitySnapshot,
+  markDiagnosticEmbeddedRunStarted,
+  resetDiagnosticRunActivityForTest,
+} from "../logging/diagnostic-run-activity.js";
 import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
 import {
   PluginApprovalResolutions,
@@ -100,6 +105,7 @@ function asAgentTool(tool: { name: string; execute: ReturnType<typeof vi.fn> }):
 }
 
 afterEach(() => {
+  resetDiagnosticRunActivityForTest();
   setGlobalHookRunnerForTest(null);
   mockGetGlobalHookRunner.mockReset();
   mockGetGlobalHookRunner.mockImplementation(() => getGlobalHookRunnerForTest());
@@ -434,28 +440,36 @@ describe("before_tool_call loop detection behavior", () => {
     expectToolLoopBlockedResult(result, "identical outcomes");
   });
 
-  it("blocks non-strict same-tool argument churn through the wrapped tool runtime", async () => {
-    const execute = vi.fn().mockImplementation(async (_toolCallId: string, params: unknown) => {
+  it("warns on non-strict same-tool argument churn while preserving tool execution", async () => {
+    const execute = vi.fn().mockImplementation(async (toolCallId: string, params: unknown) => {
       const targetPath =
         typeof params === "object" && params !== null && "path" in params
           ? String(params.path)
           : "unknown";
+      const progressed = toolCallId === "write-churn-progress";
       return {
-        content: [{ type: "text", text: `wrote ${targetPath}` }],
-        details: { ok: true, path: targetPath },
+        content: [
+          {
+            type: "text",
+            text: progressed ? `updated ${targetPath}` : `wrote ${targetPath}`,
+          },
+        ],
+        details: { ok: true, path: targetPath, ...(progressed ? { revision: 2 } : {}) },
       };
     });
-    const tool = createWrappedTool("write", execute);
-    const paths = Array.from({ length: GLOBAL_CIRCUIT_BREAKER_THRESHOLD }, (_, index) =>
-      index === 8 || index === 19
-        ? `/tmp/probe-${index}.md`
-        : index % 2 === 0
-          ? "/tmp/a.md"
-          : "/tmp/b.md",
-    );
+    const sessionId = "write-churn-session";
+    const runId = "write-churn-run";
+    const loopDetectionContext = {
+      ...enabledLoopDetectionContext,
+      sessionId,
+      runId,
+    };
+    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey: "main", runId });
+    const tool = createWrappedTool("write", execute, loopDetectionContext);
+    const paths = ["/tmp/a.md", "/tmp/b.md", "/tmp/a.md", "/tmp/a.md", "/tmp/b.md"];
 
     for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
-      const targetPath = paths[index % paths.length]!;
+      const targetPath = paths[index % paths.length] ?? "/tmp/a.md";
       await expectUnblockedToolExecution(tool, `write-churn-${index}`, {
         path: targetPath,
         content: "same content",
@@ -463,21 +477,39 @@ describe("before_tool_call loop detection behavior", () => {
     }
 
     await withToolLoopEvents(async (emitted) => {
-      const result = await tool.execute(
-        "write-churn-blocked",
-        { path: "/tmp/c.md", content: "same content" },
-        undefined,
-        undefined,
-      );
-      expectToolLoopBlockedResult(result, "global circuit breaker");
-      expectCriticalLoopEvent(emitted.at(-1), {
-        detector: "global_circuit_breaker",
+      await expectUnblockedToolExecution(tool, "write-churn-warning", {
+        path: "/tmp/a.md",
+        content: "same content",
+      });
+      expect(emitted.at(-1)).toMatchObject({
+        type: "tool.loop",
+        level: "warning",
+        action: "warn",
+        detector: "argument_churn",
         toolName: "write",
         count: GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
       });
     });
+    expect(getDiagnosticSessionActivitySnapshot({ sessionKey: "main" }).lastProgressReason).toBe(
+      "tool_loop:argument_churn",
+    );
 
-    expect(execute).toHaveBeenCalledTimes(GLOBAL_CIRCUIT_BREAKER_THRESHOLD);
+    await expectUnblockedToolExecution(tool, "write-churn-progress", {
+      path: "/tmp/a.md",
+      content: "same content",
+    });
+    expect(
+      getDiagnosticSessionActivitySnapshot({ sessionKey: "main" }).lastProgressReason,
+    ).not.toBe("tool_loop:argument_churn");
+
+    await expectUnblockedToolExecution(tool, "write-churn-escape", {
+      path: "/tmp/c.md",
+      content: "same content",
+    });
+    expect(
+      getDiagnosticSessionActivitySnapshot({ sessionKey: "main" }).lastProgressReason,
+    ).not.toBe("tool_loop:argument_churn");
+    expect(execute).toHaveBeenCalledTimes(GLOBAL_CIRCUIT_BREAKER_THRESHOLD + 3);
   });
 
   it("allows a two-pass same-tool batch through the wrapped tool runtime", async () => {

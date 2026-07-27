@@ -5,8 +5,15 @@ import {
   type DiagnosticEventPayload,
   type DiagnosticSessionActiveWorkKind,
 } from "../infra/diagnostic-events.js";
+import {
+  clearArgumentChurnActivity,
+  type DiagnosticArgumentChurnActivity,
+  mergeArgumentChurnActivity,
+  recordArgumentChurnActivityObservation,
+  resolveCurrentArgumentChurnOwner,
+} from "./diagnostic-argument-churn-activity.js";
 
-type SessionActivity = {
+type SessionActivity = DiagnosticArgumentChurnActivity & {
   sessionId?: string;
   sessionKey?: string;
   activeEmbeddedRuns: Map<string, ActiveEmbeddedRun>;
@@ -18,6 +25,7 @@ type SessionActivity = {
 };
 
 type ActiveEmbeddedRun = {
+  runId: string;
   sessionId?: string;
   sessionKey?: string;
   sequence: number;
@@ -151,6 +159,7 @@ function mergeSessionActivity(target: SessionActivity, source: SessionActivity):
     target.lastProgressAt = source.lastProgressAt;
     target.lastProgressReason = source.lastProgressReason;
   }
+  mergeArgumentChurnActivity(target, source);
   replaceSessionActivityReferences(source, target);
 }
 
@@ -291,6 +300,34 @@ function recordRunProgress(event: DiagnosticRunProgressActivityEvent): void {
   markDiagnosticRunProgress(event);
 }
 
+export function markDiagnosticArgumentChurnObservation(params: {
+  sessionId?: string;
+  sessionKey?: string;
+  runId?: string;
+  active: boolean;
+  existingOnly?: boolean;
+  now?: number;
+}): void {
+  const activity = resolveSessionActivity({ ...params, create: params.active });
+  if (!activity) {
+    return;
+  }
+  const now = params.now ?? Date.now();
+  const runId = params.runId?.trim() || undefined;
+  const currentOwnerRunId = resolveCurrentArgumentChurnOwner(
+    activity.activeEmbeddedRuns.values(),
+  )?.runId;
+  if (currentOwnerRunId !== undefined && currentOwnerRunId !== runId) {
+    return;
+  }
+  recordArgumentChurnActivityObservation(activity, {
+    runId,
+    active: params.active,
+    existingOnly: params.existingOnly,
+    now,
+  });
+}
+
 export function markDiagnosticRunProgress(params: DiagnosticRunProgressActivityEvent): void {
   const activity = resolveSessionActivity({ ...params, create: true });
   if (!activity) {
@@ -310,21 +347,30 @@ function recordRunCompleted(
   activity.activeTools.clear();
   activity.activeModelCalls.clear();
   activity.activeEmbeddedRuns.clear();
+  clearArgumentChurnActivity(activity, { runId: event.runId });
   touchSessionActivity(activity, "run:completed");
 }
 
 export function markDiagnosticEmbeddedRunStarted(params: {
   sessionId: string;
   sessionKey?: string;
+  runId?: string;
   workKey?: string;
 }): void {
-  const activity = resolveSessionActivity({ ...params, create: true });
+  const ownerRunId = params.runId?.trim() || params.sessionId.trim();
+  const activity = resolveSessionActivity({ ...params, runId: ownerRunId, create: true });
   if (!activity) {
     return;
+  }
+  // Registration is the ownership boundary. A replacement or re-armed run
+  // must never inherit the prior owner's semantic-stall clock.
+  if (activity.argumentChurnStartedAt !== undefined) {
+    clearArgumentChurnActivity(activity, { runId: ownerRunId });
   }
   activity.activeEmbeddedRuns.set(resolveEmbeddedRunWorkKey(params), {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
+    runId: ownerRunId,
     sequence: ++embeddedRunSequence,
   });
   touchSessionActivity(activity, "embedded_run:started");
@@ -344,6 +390,9 @@ export function markDiagnosticEmbeddedRunEnded(params: {
   if (params.clearRunActivity !== false) {
     activity.activeTools.clear();
     activity.activeModelCalls.clear();
+  }
+  if (activity.activeEmbeddedRuns.size === 0) {
+    clearArgumentChurnActivity(activity);
   }
   touchSessionActivity(activity, "embedded_run:ended");
 }
@@ -559,7 +608,10 @@ export function clearDiagnosticEmbeddedRunActivityForSession(params: {
     activity.activeTools.size === 0 &&
     activity.activeModelCalls.size === 0
   ) {
-    return { cleared: false, blockedByActiveEmbeddedRun: false };
+    return {
+      cleared: clearArgumentChurnActivity(activity, { runId: params.activeSessionId }),
+      blockedByActiveEmbeddedRun: false,
+    };
   }
   clearRecoveredOwnerEmbeddedRuns(
     activity,
@@ -585,8 +637,17 @@ export function clearDiagnosticEmbeddedRunActivityForSession(params: {
   }
   activity.activeTools.clear();
   activity.activeModelCalls.clear();
+  clearArgumentChurnActivity(activity, { runId: params.activeSessionId });
   touchSessionActivity(activity, "embedded_run:ended");
   return { cleared: true, blockedByActiveEmbeddedRun: false };
+}
+
+function argumentChurnBelongsToCurrentOwner(activity: SessionActivity): boolean {
+  return (
+    activity.argumentChurnStartedAt !== undefined &&
+    resolveCurrentArgumentChurnOwner(activity.activeEmbeddedRuns.values())?.runId ===
+      activity.argumentChurnRunId
+  );
 }
 
 export function getDiagnosticSessionActivitySnapshot(
@@ -613,14 +674,22 @@ export function getDiagnosticSessionActivitySnapshot(
       activeTool = tool;
     }
   }
+  const argumentChurnStartedAt = activity.argumentChurnStartedAt;
+  const argumentChurnOwnsProgress = argumentChurnBelongsToCurrentOwner(activity);
+  const effectiveLastProgressAt =
+    argumentChurnOwnsProgress && argumentChurnStartedAt !== undefined
+      ? argumentChurnStartedAt
+      : activity.lastProgressAt;
   return {
     activeWorkKind,
     ...(activity.activeEmbeddedRuns.size > 0 ? { hasActiveEmbeddedRun: true } : {}),
     activeToolName: activeTool?.toolName,
     activeToolCallId: activeTool?.toolCallId,
     activeToolAgeMs: activeTool ? Math.max(0, now - activeTool.startedAt) : undefined,
-    lastProgressAgeMs: Math.max(0, now - activity.lastProgressAt),
-    lastProgressReason: activity.lastProgressReason,
+    lastProgressAgeMs: Math.max(0, now - effectiveLastProgressAt),
+    lastProgressReason: argumentChurnOwnsProgress
+      ? "tool_loop:argument_churn"
+      : activity.lastProgressReason,
   };
 }
 

@@ -11,6 +11,13 @@ import { testing as replyRunTesting } from "../auto-reply/reply/reply-run-regist
 import { enqueueCommandInLane, getQueueSize, resetCommandLane } from "../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../process/command-queue.test-support.js";
 import {
+  getDiagnosticSessionActivitySnapshot,
+  markDiagnosticArgumentChurnObservation,
+  markDiagnosticEmbeddedRunStarted,
+  markDiagnosticRunProgress,
+  resetDiagnosticRunActivityForTest,
+} from "./diagnostic-run-activity.js";
+import {
   testing as recoveryTesting,
   recoverStuckDiagnosticSession,
 } from "./diagnostic-stuck-session-recovery.runtime.js";
@@ -37,6 +44,7 @@ describe("stuck session recovery integration", () => {
     embeddedRunTesting.resetActiveEmbeddedRuns();
     replyRunTesting.resetReplyRunRegistry();
     resetCommandQueueStateForTest();
+    resetDiagnosticRunActivityForTest();
   });
 
   it("does not reset a blocked lane while a reply operation is still active", async () => {
@@ -162,6 +170,67 @@ describe("stuck session recovery integration", () => {
     await expect(active).resolves.toBe("aborted");
     await expect(queued).resolves.toBe("drained");
     expect(outcome.status).toBe("aborted");
+    expect(getQueueSize(lane)).toBe(0);
+  });
+
+  it("reclaims continuous argument churn after its semantic progress clock becomes stale", async () => {
+    const sessionKey = "agent:main:argument-churn";
+    const sessionId = "argument-churn-session";
+    const lane = resolveEmbeddedSessionLane(sessionKey);
+    const operation = createReplyOperation({
+      sessionKey,
+      sessionId,
+      resetTriggered: false,
+    });
+    let markActiveStarted!: () => void;
+    const activeStarted = new Promise<void>((resolve) => {
+      markActiveStarted = resolve;
+    });
+
+    const active = enqueueCommandInLane(
+      lane,
+      () =>
+        new Promise<"aborted">((resolve) => {
+          markActiveStarted();
+          operation.abortSignal.addEventListener("abort", () => resolve("aborted"), { once: true });
+        }),
+      { warnAfterMs: Number.MAX_SAFE_INTEGER },
+    );
+    const queued = enqueueCommandInLane(lane, async () => "drained", {
+      warnAfterMs: Number.MAX_SAFE_INTEGER,
+    });
+    await activeStarted;
+
+    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey });
+    markDiagnosticArgumentChurnObservation({
+      sessionId,
+      sessionKey,
+      runId: sessionId,
+      active: true,
+      now: Date.now() - 6 * 60_000,
+    });
+    markDiagnosticRunProgress({
+      sessionId,
+      sessionKey,
+      runId: sessionId,
+      reason: "model_call:stream_progress",
+    });
+    expect(getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey })).toMatchObject({
+      activeWorkKind: "embedded_run",
+      lastProgressReason: "tool_loop:argument_churn",
+    });
+
+    const outcome = await recoverStuckDiagnosticSession({
+      sessionId,
+      sessionKey,
+      ageMs: 6 * 60_000,
+      queueDepth: 1,
+      staleActiveProgressAbortMs: 5 * 60_000,
+    });
+
+    await expect(active).resolves.toBe("aborted");
+    await expect(queued).resolves.toBe("drained");
+    expect(outcome).toMatchObject({ status: "aborted", action: "abort_embedded_run" });
     expect(getQueueSize(lane)).toBe(0);
   });
 

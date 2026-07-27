@@ -81,8 +81,13 @@ export async function runBeforeToolCallHook(args: {
 
   try {
     if (args.ctx?.sessionKey) {
-      const { getDiagnosticSessionState, logToolLoopAction, detectToolCallLoop, recordToolCall } =
-        await loadBeforeToolCallRuntime();
+      const {
+        markDiagnosticArgumentChurnObservation,
+        getDiagnosticSessionState,
+        logToolLoopAction,
+        detectToolCallLoop,
+        recordToolCall,
+      } = await loadBeforeToolCallRuntime();
       const sessionState = getDiagnosticSessionState({
         sessionKey: args.ctx.sessionKey,
         sessionId: args.ctx.sessionId,
@@ -96,6 +101,16 @@ export async function runBeforeToolCallHook(args: {
         args.ctx.loopDetection,
         loopScope,
       );
+
+      markDiagnosticArgumentChurnObservation({
+        sessionKey: args.ctx.sessionKey,
+        sessionId: args.ctx.sessionId,
+        runId: args.ctx.runId,
+        active:
+          loopResult.stuck &&
+          loopResult.level === "warning" &&
+          loopResult.livenessSignal === "argument_churn",
+      });
 
       if (loopResult.stuck) {
         if (loopResult.level === "critical") {

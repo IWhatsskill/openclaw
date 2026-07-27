@@ -1,6 +1,6 @@
 // Unit tests for shared run-staleness threshold policy.
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { hasInternalDiagnosticEventListeners } from "../infra/diagnostic-event-listener-presence.js";
 import {
   emitTrustedDiagnosticEvent,
@@ -9,8 +9,11 @@ import {
 } from "../infra/diagnostic-events.js";
 import {
   BLOCKED_TOOL_CALL_ABORT_FLOOR_MS,
+  clearDiagnosticEmbeddedRunActivityForSession,
   getDiagnosticSessionActivitySnapshot,
+  markDiagnosticArgumentChurnObservation,
   markDiagnosticEmbeddedRunStarted,
+  markDiagnosticRunProgress,
   resolveRunStaleThresholdMs,
   RUN_STALE_TAKEOVER_MS,
   startDiagnosticRunActivityTracking,
@@ -18,6 +21,7 @@ import {
 } from "./diagnostic-run-activity.js";
 
 afterEach(() => {
+  vi.useRealTimers();
   stopDiagnosticRunActivityTracking();
   resetDiagnosticEventsForTest();
 });
@@ -72,6 +76,129 @@ describe("diagnostic run activity listener lifecycle", () => {
     expect(getDiagnosticSessionActivitySnapshot({ sessionId: "current-run" })).toMatchObject({
       activeWorkKind: "tool_call",
       activeToolName: "current-tool",
+    });
+  });
+});
+
+describe("argument-churn liveness", () => {
+  it("keeps continuous churn stale across mechanical model progress and clears on escape", () => {
+    vi.useFakeTimers();
+    const startedAt = Date.parse("2026-07-27T00:00:00Z");
+    vi.setSystemTime(startedAt);
+    const ref = { sessionId: "churn-session", sessionKey: "agent:main:churn" };
+
+    markDiagnosticEmbeddedRunStarted({ ...ref, runId: "churn-run" });
+    markDiagnosticArgumentChurnObservation({
+      ...ref,
+      runId: "churn-run",
+      active: true,
+    });
+
+    vi.setSystemTime(startedAt + 6 * 60_000);
+    markDiagnosticRunProgress({
+      ...ref,
+      runId: "churn-run",
+      reason: "model_call:stream",
+    });
+
+    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
+      activeWorkKind: "embedded_run",
+      lastProgressAgeMs: 6 * 60_000,
+      lastProgressReason: "tool_loop:argument_churn",
+    });
+
+    markDiagnosticArgumentChurnObservation({
+      ...ref,
+      runId: "churn-run",
+      active: false,
+    });
+    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
+      lastProgressAgeMs: 0,
+      lastProgressReason: "model_call:stream",
+    });
+  });
+
+  it("clears churn evidence when recovery terminates the owning run", () => {
+    const ref = {
+      sessionId: "recovered-churn-session",
+      sessionKey: "agent:main:recovered-churn",
+    };
+    markDiagnosticEmbeddedRunStarted({ ...ref, runId: "recovered-churn-run" });
+    markDiagnosticArgumentChurnObservation({
+      ...ref,
+      runId: "recovered-churn-run",
+      active: true,
+      now: Date.now() - 6 * 60_000,
+    });
+
+    expect(
+      clearDiagnosticEmbeddedRunActivityForSession({
+        ...ref,
+        activeSessionId: ref.sessionId,
+      }),
+    ).toEqual({
+      cleared: true,
+      blockedByActiveEmbeddedRun: false,
+    });
+    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
+      activeWorkKind: undefined,
+      lastProgressReason: "embedded_run:ended",
+    });
+  });
+
+  it("does not carry an old churn clock into a replacement run", () => {
+    vi.useFakeTimers();
+    const startedAt = Date.parse("2026-07-27T00:00:00Z");
+    vi.setSystemTime(startedAt);
+    const ref = { sessionId: "shared-session", sessionKey: "agent:main:replacement" };
+
+    markDiagnosticEmbeddedRunStarted({ ...ref, runId: "old-run" });
+    markDiagnosticArgumentChurnObservation({
+      ...ref,
+      runId: "old-run",
+      active: true,
+    });
+
+    vi.setSystemTime(startedAt + 6 * 60_000);
+    markDiagnosticEmbeddedRunStarted({ ...ref, runId: "replacement-run" });
+    markDiagnosticRunProgress({
+      ...ref,
+      runId: "replacement-run",
+      reason: "model_call:stream",
+    });
+
+    // A delayed observation from the replaced owner must not make the new owner stale.
+    markDiagnosticArgumentChurnObservation({
+      ...ref,
+      runId: "old-run",
+      active: true,
+      now: startedAt,
+    });
+
+    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
+      activeWorkKind: "embedded_run",
+      lastProgressAgeMs: 0,
+      lastProgressReason: "model_call:stream",
+    });
+
+    markDiagnosticArgumentChurnObservation({
+      ...ref,
+      runId: "replacement-run",
+      active: true,
+    });
+    vi.setSystemTime(startedAt + 12 * 60_000);
+
+    // A delayed escape from the replaced owner must not clear the new clock.
+    markDiagnosticArgumentChurnObservation({
+      ...ref,
+      runId: "old-run",
+      active: false,
+    });
+
+    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
+      activeWorkKind: "embedded_run",
+      lastProgressAgeMs: 6 * 60_000,
+      lastProgressReason: "tool_loop:argument_churn",
     });
   });
 });

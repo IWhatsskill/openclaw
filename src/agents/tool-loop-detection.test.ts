@@ -492,7 +492,7 @@ describe("tool-loop-detection", () => {
       }
     });
 
-    it("blocks repeated stable argument churn with the global circuit breaker", () => {
+    it("warns on repeated stable argument churn without vetoing the next call", () => {
       const state = createState();
       const paths = ["/tmp/a.md", "/tmp/b.md", "/tmp/a.md", "/tmp/a.md", "/tmp/b.md"];
 
@@ -513,20 +513,102 @@ describe("tool-loop-detection", () => {
       const loopResult = detectToolCallLoop(
         state,
         "write",
-        { path: "/tmp/c.md", content: "same content" },
+        { path: "/tmp/a.md", content: "same content" },
         enabledLoopDetectionConfig,
       );
 
       expect(loopResult.stuck).toBe(true);
       if (loopResult.stuck) {
-        expect(loopResult.level).toBe("critical");
-        expect(loopResult.detector).toBe("global_circuit_breaker");
+        expect(loopResult.level).toBe("warning");
+        expect(loopResult.detector).toBe("argument_churn");
+        expect(loopResult.livenessSignal).toBe("argument_churn");
         expect(loopResult.count).toBe(GLOBAL_CIRCUIT_BREAKER_THRESHOLD);
-        expect(loopResult.message).toContain("2 repeated argument patterns");
+        expect(loopResult.message).toContain("tool call remains allowed");
+      }
+
+      const escapeResult = detectToolCallLoop(
+        state,
+        "write",
+        { path: "/tmp/c.md", content: "same content" },
+        enabledLoopDetectionConfig,
+      );
+      expect(escapeResult.stuck).toBe(false);
+    });
+
+    it("keeps generic critical repeats ahead of warning-only argument churn", () => {
+      const state = createState();
+
+      for (let index = 0; index < CRITICAL_THRESHOLD; index += 1) {
+        recordSuccessfulCall(
+          state,
+          "write",
+          { path: "/tmp/a.md", content: "same content" },
+          {
+            content: [{ type: "text", text: "wrote /tmp/a.md" }],
+            details: { ok: true, path: "/tmp/a.md" },
+          },
+          index,
+        );
+      }
+      for (let index = 0; index < WARNING_THRESHOLD; index += 1) {
+        recordSuccessfulCall(
+          state,
+          "write",
+          { path: "/tmp/b.md", content: "same content" },
+          {
+            content: [{ type: "text", text: "wrote /tmp/b.md" }],
+            details: { ok: true, path: "/tmp/b.md" },
+          },
+          CRITICAL_THRESHOLD + index,
+        );
+      }
+
+      const loopResult = detectToolCallLoop(
+        state,
+        "write",
+        { path: "/tmp/a.md", content: "same content" },
+        enabledLoopDetectionConfig,
+      );
+      expect(loopResult).toMatchObject({
+        stuck: true,
+        level: "critical",
+        detector: "generic_repeat",
+      });
+    });
+
+    it("preserves churn liveness when strict alternation owns the primary warning", () => {
+      const state = createState();
+
+      for (let index = 0; index < WARNING_THRESHOLD; index += 1) {
+        const targetPath = index % 2 === 0 ? "/tmp/a.md" : "/tmp/b.md";
+        recordSuccessfulCall(
+          state,
+          "write",
+          { path: targetPath, content: "same content" },
+          {
+            content: [{ type: "text", text: `wrote ${targetPath}` }],
+            details: { ok: true, path: targetPath },
+          },
+          index,
+        );
+      }
+
+      const loopResult = detectToolCallLoop(
+        state,
+        "write",
+        { path: "/tmp/a.md", content: "same content" },
+        enabledLoopDetectionConfig,
+      );
+
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("warning");
+        expect(loopResult.detector).toBe("ping_pong");
+        expect(loopResult.livenessSignal).toBe("argument_churn");
       }
     });
 
-    it("blocks stable argument churn despite bounded singleton probes", () => {
+    it("does not carry argument-churn liveness across singleton probes", () => {
       const state = createState();
 
       for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
@@ -547,17 +629,11 @@ describe("tool-loop-detection", () => {
       const loopResult = detectToolCallLoop(
         state,
         "write",
-        { path: "/tmp/next-probe.md", content: "same content" },
+        { path: "/tmp/a.md", content: "same content" },
         enabledLoopDetectionConfig,
       );
 
-      expect(loopResult.stuck).toBe(true);
-      if (loopResult.stuck) {
-        expect(loopResult.level).toBe("critical");
-        expect(loopResult.detector).toBe("global_circuit_breaker");
-        expect(loopResult.count).toBe(GLOBAL_CIRCUIT_BREAKER_THRESHOLD);
-        expect(loopResult.message).toContain("2 repeated argument patterns");
-      }
+      expect(loopResult.stuck).toBe(false);
     });
 
     it("does not block a one-shot batch of distinct arguments", () => {

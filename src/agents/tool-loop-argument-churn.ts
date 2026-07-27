@@ -1,11 +1,11 @@
 import type { ToolCallRecord } from "../logging/diagnostic-session-state.js";
 
 const MIN_STABLE_CALLS_PER_VARIANT = 3;
-const MAX_PROBE_CALL_SHARE = 0.2;
 
 export function getArgumentChurnNoProgressStreak(
   history: readonly ToolCallRecord[],
   toolName: string,
+  currentArgsHash: string,
 ): { count: number; variantCount: number } {
   const outcomes = new Map<string, { resultHash: string; count: number }>();
   for (let i = history.length - 1; i >= 0; i -= 1) {
@@ -28,14 +28,34 @@ export function getArgumentChurnNoProgressStreak(
   const stableOutcomes = allOutcomes.filter(
     (outcome) => outcome.count >= MIN_STABLE_CALLS_PER_VARIANT,
   );
-  const stableCallCount = stableOutcomes.reduce((sum, outcome) => sum + outcome.count, 0);
-  const probeCallCount = count - stableCallCount;
-  const maxProbeCallCount = Math.max(1, Math.floor(count * MAX_PROBE_CALL_SHARE));
+  const currentOutcome = outcomes.get(currentArgsHash);
+  const hasOnlyStableVariants =
+    stableOutcomes.reduce((sum, outcome) => sum + outcome.count, 0) === count;
 
-  // Three observations distinguish sustained churn from an ordinary two-pass batch.
-  // A small share of novel probes may interrupt the loop without erasing its evidence.
-  const hasStableChurn = stableOutcomes.length > 1 && probeCallCount <= maxProbeCallCount;
+  // This classifier is warning-only. Keep it narrow: every call in the tail must
+  // belong to a repeated stable variant, and the proposed call must continue one
+  // of those variants. A novel argument is a possible escape from the loop and
+  // must reset liveness evidence rather than inherit it.
+  const hasStableChurn =
+    stableOutcomes.length > 1 &&
+    hasOnlyStableVariants &&
+    (currentOutcome?.count ?? 0) >= MIN_STABLE_CALLS_PER_VARIANT;
   return hasStableChurn
     ? { count, variantCount: stableOutcomes.length }
     : { count: 0, variantCount: 0 };
+}
+
+export function buildArgumentChurnWarning(
+  toolName: string,
+  churn: { count: number; variantCount: number },
+) {
+  return {
+    stuck: true as const,
+    level: "warning" as const,
+    detector: "argument_churn" as const,
+    count: churn.count,
+    message: `WARNING: ${toolName} has cycled through ${churn.variantCount} repeated argument patterns with stable per-variant outcomes ${churn.count} times. Continued churn is treated as stalled run activity, but this tool call remains allowed.`,
+    warningKey: `argument-churn:${toolName}`,
+    livenessSignal: "argument_churn" as const,
+  };
 }
