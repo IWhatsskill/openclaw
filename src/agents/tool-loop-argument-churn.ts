@@ -10,8 +10,11 @@ export function getArgumentChurnNoProgressStreak(
   const outcomes = new Map<string, { resultHash: string; count: number }>();
   for (let i = history.length - 1; i >= 0; i -= 1) {
     const record = history[i];
-    if (!record || record.toolName !== toolName || !record.resultHash) {
+    if (!record || record.toolName !== toolName) {
       break;
+    }
+    if (!record.resultHash) {
+      continue;
     }
     const previous = outcomes.get(record.argsHash);
     if (previous && previous.resultHash !== record.resultHash) {

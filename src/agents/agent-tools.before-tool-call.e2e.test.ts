@@ -21,6 +21,7 @@ import {
 import { MAX_PLUGIN_APPROVAL_TIMEOUT_MS } from "../infra/plugin-approvals.js";
 import {
   getDiagnosticSessionActivitySnapshot,
+  markDiagnosticArgumentChurnObservation,
   markDiagnosticEmbeddedRunStarted,
   resetDiagnosticRunActivityForTest,
 } from "../logging/diagnostic-run-activity.js";
@@ -136,7 +137,9 @@ describe("before_tool_call loop detection behavior", () => {
   function createWrappedTool(
     name: string,
     execute: ReturnType<typeof vi.fn>,
-    loopDetectionContext = enabledLoopDetectionContext,
+    loopDetectionContext: Parameters<
+      typeof wrapToolWithBeforeToolCallHook
+    >[1] = enabledLoopDetectionContext,
   ) {
     return wrapToolWithBeforeToolCallHook(
       { name, execute } as unknown as AnyAgentTool,
@@ -631,6 +634,48 @@ describe("before_tool_call loop detection behavior", () => {
     resolvePolicy?.({});
     await pendingExecution;
     expect(activityDuringExecution.at(-1)).toMatchObject({
+      lastProgressAgeMs: 6 * 60_000,
+      lastProgressReason: "tool_loop:argument_churn",
+    });
+  });
+
+  it("releases churn suspension when a before-tool policy fails", async () => {
+    vi.useFakeTimers();
+    const startedAt = Date.parse("2026-07-27T00:00:00Z");
+    vi.setSystemTime(startedAt);
+    const sessionId = "write-churn-policy-failure-session";
+    const sessionKey = "main";
+    const runId = "write-churn-policy-failure-run";
+
+    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey, runId });
+    markDiagnosticArgumentChurnObservation({
+      sessionId,
+      sessionKey,
+      runId,
+      active: true,
+    });
+    hookRunner.hasHooks.mockReturnValue(true);
+    hookRunner.runBeforeToolCall.mockRejectedValue(new Error("policy failed"));
+
+    vi.setSystemTime(startedAt + 6 * 60_000);
+    await expect(
+      runBeforeToolCallHook({
+        toolName: "write",
+        params: { path: "/tmp/a.md", content: "same content" },
+        toolCallId: "write-churn-policy-failure",
+        ctx: {
+          ...enabledLoopDetectionContext,
+          sessionId,
+          sessionKey,
+          runId,
+        },
+      }),
+    ).resolves.toMatchObject({
+      blocked: true,
+      kind: "failure",
+    });
+
+    expect(getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey })).toMatchObject({
       lastProgressAgeMs: 6 * 60_000,
       lastProgressReason: "tool_loop:argument_churn",
     });

@@ -2,7 +2,8 @@ export type DiagnosticArgumentChurnActivity = {
   argumentChurnStartedAt?: number;
   argumentChurnObservationAt?: number;
   argumentChurnRunId?: string;
-  argumentChurnSuspended?: boolean;
+  argumentChurnPolicyWaitRunId?: string;
+  argumentChurnPolicyWaitTokens?: Set<symbol>;
 };
 
 export type DiagnosticArgumentChurnObservationParams = {
@@ -11,7 +12,8 @@ export type DiagnosticArgumentChurnObservationParams = {
   runId?: string;
   active?: boolean;
   existingOnly?: boolean;
-  policyWait?: boolean;
+  policyWait?: "enter" | "exit";
+  policyWaitToken?: symbol;
   now?: number;
 };
 
@@ -35,18 +37,22 @@ export function resolveArgumentChurnProgress<T extends { runId: string; sequence
   owners: Iterable<T>,
   now: number,
 ): { lastProgressAt: number; lastProgressReason?: string } {
+  const currentOwnerRunId = resolveCurrentArgumentChurnOwner(owners)?.runId;
+  if (
+    currentOwnerRunId !== undefined &&
+    activity.argumentChurnPolicyWaitRunId === currentOwnerRunId &&
+    (activity.argumentChurnPolicyWaitTokens?.size ?? 0) > 0
+  ) {
+    return { lastProgressAt: now, lastProgressReason: "tool_policy:pending" };
+  }
   const startedAt = activity.argumentChurnStartedAt;
   const belongsToOwner =
-    startedAt !== undefined &&
-    resolveCurrentArgumentChurnOwner(owners)?.runId === activity.argumentChurnRunId;
+    startedAt !== undefined && currentOwnerRunId === activity.argumentChurnRunId;
   if (!belongsToOwner) {
     return {
       lastProgressAt: activity.lastProgressAt,
       lastProgressReason: activity.lastProgressReason,
     };
-  }
-  if (activity.argumentChurnSuspended === true) {
-    return { lastProgressAt: now, lastProgressReason: "tool_policy:pending" };
   }
   return {
     lastProgressAt: startedAt,
@@ -83,22 +89,45 @@ export function recordArgumentChurnActivityObservation(
     activity.argumentChurnRunId = params.runId;
   }
   activity.argumentChurnObservationAt = params.now;
-  activity.argumentChurnSuspended = false;
 }
 
-export function suspendArgumentChurnActivity(
+function updateArgumentChurnPolicyWait(
   activity: DiagnosticArgumentChurnActivity,
-  params: { now: number; runId?: string },
+  params: {
+    action: "enter" | "exit";
+    runId?: string;
+    token: symbol;
+  },
+): void {
+  if (params.action === "enter") {
+    if (activity.argumentChurnPolicyWaitRunId !== params.runId) {
+      activity.argumentChurnPolicyWaitRunId = params.runId;
+      activity.argumentChurnPolicyWaitTokens = new Set();
+    }
+    activity.argumentChurnPolicyWaitTokens?.add(params.token);
+    return;
+  }
+  if (activity.argumentChurnPolicyWaitRunId !== params.runId) {
+    return;
+  }
+  activity.argumentChurnPolicyWaitTokens?.delete(params.token);
+  if (activity.argumentChurnPolicyWaitTokens?.size === 0) {
+    activity.argumentChurnPolicyWaitRunId = undefined;
+    activity.argumentChurnPolicyWaitTokens = undefined;
+  }
+}
+
+export function clearArgumentChurnPolicyWaits(
+  activity: DiagnosticArgumentChurnActivity,
+  params: { runId?: string } = {},
 ): boolean {
-  if (
-    activity.argumentChurnStartedAt === undefined ||
-    activity.argumentChurnRunId !== params.runId
-  ) {
+  if (params.runId !== undefined && activity.argumentChurnPolicyWaitRunId !== params.runId) {
     return false;
   }
-  activity.argumentChurnObservationAt = params.now;
-  activity.argumentChurnSuspended = true;
-  return true;
+  const cleared = (activity.argumentChurnPolicyWaitTokens?.size ?? 0) > 0;
+  activity.argumentChurnPolicyWaitRunId = undefined;
+  activity.argumentChurnPolicyWaitTokens = undefined;
+  return cleared;
 }
 
 export function applyArgumentChurnObservation<T extends { runId: string; sequence: number }>(
@@ -112,8 +141,14 @@ export function applyArgumentChurnObservation<T extends { runId: string; sequenc
   if (currentOwnerRunId !== undefined && currentOwnerRunId !== runId) {
     return;
   }
-  if (params.policyWait === true) {
-    suspendArgumentChurnActivity(activity, { runId, now });
+  if (params.policyWait) {
+    if (params.policyWaitToken) {
+      updateArgumentChurnPolicyWait(activity, {
+        action: params.policyWait,
+        runId,
+        token: params.policyWaitToken,
+      });
+    }
     return;
   }
   recordArgumentChurnActivityObservation(activity, {
@@ -153,17 +188,27 @@ export function mergeArgumentChurnActivity(
       source.argumentChurnObservationAt >= (target.argumentChurnObservationAt ?? 0)
     ) {
       target.argumentChurnObservationAt = source.argumentChurnObservationAt;
-      target.argumentChurnSuspended = source.argumentChurnSuspended;
+    }
+  } else if (sourceIsNewer) {
+    target.argumentChurnStartedAt = source.argumentChurnStartedAt;
+    target.argumentChurnObservationAt = source.argumentChurnObservationAt;
+    target.argumentChurnRunId = source.argumentChurnRunId;
+  }
+
+  if ((source.argumentChurnPolicyWaitTokens?.size ?? 0) === 0) {
+    return;
+  }
+  if (target.argumentChurnPolicyWaitRunId !== source.argumentChurnPolicyWaitRunId) {
+    if ((target.argumentChurnPolicyWaitTokens?.size ?? 0) === 0) {
+      target.argumentChurnPolicyWaitRunId = source.argumentChurnPolicyWaitRunId;
+      target.argumentChurnPolicyWaitTokens = new Set(source.argumentChurnPolicyWaitTokens);
     }
     return;
   }
-  if (!sourceIsNewer) {
-    return;
+  target.argumentChurnPolicyWaitTokens ??= new Set();
+  for (const token of source.argumentChurnPolicyWaitTokens ?? []) {
+    target.argumentChurnPolicyWaitTokens.add(token);
   }
-  target.argumentChurnStartedAt = source.argumentChurnStartedAt;
-  target.argumentChurnObservationAt = source.argumentChurnObservationAt;
-  target.argumentChurnRunId = source.argumentChurnRunId;
-  target.argumentChurnSuspended = source.argumentChurnSuspended;
 }
 
 export function clearArgumentChurnActivity(
@@ -174,6 +219,5 @@ export function clearArgumentChurnActivity(
   activity.argumentChurnStartedAt = undefined;
   activity.argumentChurnObservationAt = params.now ?? Date.now();
   activity.argumentChurnRunId = params.runId;
-  activity.argumentChurnSuspended = undefined;
   return cleared;
 }

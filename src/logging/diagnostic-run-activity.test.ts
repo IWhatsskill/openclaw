@@ -138,6 +138,64 @@ describe("argument-churn liveness", () => {
     });
   });
 
+  it("keeps overlapping policy waits suspended until every call releases its token", () => {
+    vi.useFakeTimers();
+    const startedAt = Date.parse("2026-07-27T00:00:00Z");
+    vi.setSystemTime(startedAt);
+    const ref = { sessionId: "policy-overlap-session", sessionKey: "agent:main:policy-overlap" };
+    const runId = "policy-overlap-run";
+    const firstWait = Symbol("first-policy-wait");
+    const secondWait = Symbol("second-policy-wait");
+
+    markDiagnosticEmbeddedRunStarted({ ...ref, runId });
+    markDiagnosticArgumentChurnObservation({
+      ...ref,
+      runId,
+      active: true,
+    });
+    markDiagnosticArgumentChurnObservation({
+      ...ref,
+      runId,
+      policyWait: "enter",
+      policyWaitToken: firstWait,
+    });
+    markDiagnosticArgumentChurnObservation({
+      ...ref,
+      runId,
+      policyWait: "enter",
+      policyWaitToken: secondWait,
+    });
+
+    vi.setSystemTime(startedAt + 6 * 60_000);
+    markDiagnosticArgumentChurnObservation({
+      ...ref,
+      runId,
+      policyWait: "exit",
+      policyWaitToken: firstWait,
+    });
+    markDiagnosticArgumentChurnObservation({
+      ...ref,
+      runId,
+      active: true,
+    });
+
+    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
+      lastProgressAgeMs: 0,
+      lastProgressReason: "tool_policy:pending",
+    });
+
+    markDiagnosticArgumentChurnObservation({
+      ...ref,
+      runId,
+      policyWait: "exit",
+      policyWaitToken: secondWait,
+    });
+    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
+      lastProgressAgeMs: 6 * 60_000,
+      lastProgressReason: "tool_loop:argument_churn",
+    });
+  });
+
   it("clears churn evidence when recovery terminates the owning run", () => {
     const ref = {
       sessionId: "recovered-churn-session",

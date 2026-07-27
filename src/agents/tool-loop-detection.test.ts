@@ -535,6 +535,44 @@ describe("tool-loop-detection", () => {
       expect(escapeResult.stuck).toBe(false);
     });
 
+    it("keeps completed churn evidence across a pending same-tool sibling", () => {
+      const state = createState();
+      const paths = ["/tmp/a.md", "/tmp/b.md", "/tmp/a.md", "/tmp/a.md", "/tmp/b.md"];
+
+      for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
+        const targetPath = paths[index % paths.length]!;
+        recordSuccessfulCall(
+          state,
+          "write",
+          { path: targetPath, content: "same content" },
+          {
+            content: [{ type: "text", text: `wrote ${targetPath}` }],
+            details: { ok: true, path: targetPath },
+          },
+          index,
+        );
+      }
+      recordToolCall(
+        state,
+        "write",
+        { path: "/tmp/a.md", content: "same content" },
+        "pending-sibling",
+      );
+
+      const loopResult = detectToolCallLoop(
+        state,
+        "write",
+        { path: "/tmp/b.md", content: "same content" },
+        enabledLoopDetectionConfig,
+      );
+
+      expect(loopResult).toMatchObject({
+        stuck: true,
+        level: "warning",
+        detector: "argument_churn",
+      });
+    });
+
     it("keeps generic critical repeats ahead of warning-only argument churn", () => {
       const state = createState();
 

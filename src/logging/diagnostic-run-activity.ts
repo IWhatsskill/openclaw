@@ -8,6 +8,7 @@ import {
 import {
   applyArgumentChurnObservation,
   clearArgumentChurnActivity,
+  clearArgumentChurnPolicyWaits,
   type DiagnosticArgumentChurnActivity,
   type DiagnosticArgumentChurnObservationParams,
   mergeArgumentChurnActivity,
@@ -336,6 +337,7 @@ function recordRunCompleted(
   activity.activeModelCalls.clear();
   embeddedRunIndex.clear(activity);
   clearArgumentChurnActivity(activity, { runId: event.runId });
+  clearArgumentChurnPolicyWaits(activity, { runId: event.runId });
   touchSessionActivity(activity, "run:completed");
 }
 
@@ -355,6 +357,7 @@ export function markDiagnosticEmbeddedRunStarted(params: {
   if (activity.argumentChurnStartedAt !== undefined) {
     clearArgumentChurnActivity(activity, { runId: ownerRunId });
   }
+  clearArgumentChurnPolicyWaits(activity);
   const workKey = resolveEmbeddedRunWorkKey(params);
   const existing = activity.activeEmbeddedRuns.get(workKey);
   if (existing && existing.runId !== ownerRunId) {
@@ -386,6 +389,7 @@ export function markDiagnosticEmbeddedRunEnded(params: {
   }
   if (activity.activeEmbeddedRuns.size === 0) {
     clearArgumentChurnActivity(activity);
+    clearArgumentChurnPolicyWaits(activity);
   }
   touchSessionActivity(activity, "embedded_run:ended");
 }
@@ -601,8 +605,14 @@ export function clearDiagnosticEmbeddedRunActivityForSession(params: {
     activity.activeTools.size === 0 &&
     activity.activeModelCalls.size === 0
   ) {
+    const clearedChurn = clearArgumentChurnActivity(activity, {
+      runId: params.activeSessionId,
+    });
+    const clearedPolicyWait = clearArgumentChurnPolicyWaits(activity, {
+      runId: params.activeSessionId,
+    });
     return {
-      cleared: clearArgumentChurnActivity(activity, { runId: params.activeSessionId }),
+      cleared: clearedChurn || clearedPolicyWait,
       blockedByActiveEmbeddedRun: false,
     };
   }
@@ -631,6 +641,7 @@ export function clearDiagnosticEmbeddedRunActivityForSession(params: {
   activity.activeTools.clear();
   activity.activeModelCalls.clear();
   clearArgumentChurnActivity(activity, { runId: params.activeSessionId });
+  clearArgumentChurnPolicyWaits(activity, { runId: params.activeSessionId });
   touchSessionActivity(activity, "embedded_run:ended");
   return { cleared: true, blockedByActiveEmbeddedRun: false };
 }
