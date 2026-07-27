@@ -61,6 +61,16 @@ private fun AdaptiveNavigationMode.toNavigationSuiteType(): NavigationSuiteType 
     AdaptiveNavigationMode.Drawer -> NavigationSuiteType.NavigationDrawer
   }
 
+internal fun adaptiveNavigationSuiteType(
+  navigationMode: AdaptiveNavigationMode,
+  compactNavigationVisible: Boolean,
+): NavigationSuiteType =
+  if (navigationMode == AdaptiveNavigationMode.Bar && !compactNavigationVisible) {
+    NavigationSuiteType.None
+  } else {
+    navigationMode.toNavigationSuiteType()
+  }
+
 /**
  * Material-owned adaptive navigation for every top-level destination.
  *
@@ -72,6 +82,7 @@ private fun AdaptiveNavigationMode.toNavigationSuiteType(): NavigationSuiteType 
 @Composable
 internal fun AdaptiveNavigationShell(
   drawerState: DrawerState,
+  compactNavigationVisible: Boolean,
   activeDestination: SidebarDestination?,
   onSelectDestination: (SidebarDestination) -> Unit,
   drawerContent: @Composable () -> Unit,
@@ -93,7 +104,10 @@ internal fun AdaptiveNavigationShell(
     drawerState = drawerState,
     gesturesEnabled = true,
     drawerContent = {
-      ModalDrawerSheet(modifier = Modifier.widthIn(max = 360.dp).testTag("adaptive-secondary-drawer")) {
+      ModalDrawerSheet(
+        drawerState = drawerState,
+        modifier = Modifier.widthIn(max = 360.dp).testTag("adaptive-secondary-drawer"),
+      ) {
         drawerContent()
       }
     },
@@ -115,7 +129,11 @@ internal fun AdaptiveNavigationShell(
         }
       },
       modifier = Modifier.fillMaxSize().testTag("adaptive-navigation-suite"),
-      layoutType = navigationMode.toNavigationSuiteType(),
+      layoutType =
+        adaptiveNavigationSuiteType(
+          navigationMode = navigationMode,
+          compactNavigationVisible = compactNavigationVisible,
+        ),
       containerColor = ClawTheme.colors.canvas,
       contentColor = ClawTheme.colors.text,
       content = content,

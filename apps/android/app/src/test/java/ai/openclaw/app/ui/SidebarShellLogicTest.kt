@@ -2,6 +2,7 @@ package ai.openclaw.app.ui
 
 import ai.openclaw.app.GatewayAgentSummary
 import ai.openclaw.app.chat.ChatSessionEntry
+import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteType
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -40,6 +41,26 @@ class SidebarShellLogicTest {
   @Test
   fun tabletopPostureAlwaysUsesReachableBottomNavigation() {
     assertEquals(AdaptiveNavigationMode.Bar, adaptiveNavigationMode(1280f, 800f, tabletop = true))
+  }
+
+  @Test
+  fun hiddenCompactNavigationDoesNotHideRailOrPermanentDrawer() {
+    assertEquals(
+      NavigationSuiteType.None,
+      adaptiveNavigationSuiteType(AdaptiveNavigationMode.Bar, compactNavigationVisible = false),
+    )
+    assertEquals(
+      NavigationSuiteType.NavigationBar,
+      adaptiveNavigationSuiteType(AdaptiveNavigationMode.Bar, compactNavigationVisible = true),
+    )
+    assertEquals(
+      NavigationSuiteType.NavigationRail,
+      adaptiveNavigationSuiteType(AdaptiveNavigationMode.Rail, compactNavigationVisible = false),
+    )
+    assertEquals(
+      NavigationSuiteType.NavigationDrawer,
+      adaptiveNavigationSuiteType(AdaptiveNavigationMode.Drawer, compactNavigationVisible = false),
+    )
   }
 
   @Test

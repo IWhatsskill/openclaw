@@ -57,6 +57,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
@@ -120,6 +121,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
@@ -152,6 +154,11 @@ private val overviewTalkPanelMinHeight = 72.dp
 private val overviewListRowMinHeight = 54.dp
 private const val overviewRecentSessionLimit = 50
 private const val overviewRecentSessionVisibleLimit = 3
+
+internal fun shellBottomNavVisible(
+  keyboardVisible: Boolean,
+  commandOpen: Boolean,
+): Boolean = !keyboardVisible && !commandOpen
 
 /** Main post-onboarding shell that owns top-level Android navigation state. */
 @Composable
@@ -232,6 +239,11 @@ fun ShellScreen(
       if (commandOpen || canvasVisible || pendingTrust != null) sidebarDrawerState.close()
     }
 
+    val density = LocalDensity.current
+    val keyboardVisible = WindowInsets.ime.getBottom(density) > 0
+    val compactNavigationVisible =
+      shellBottomNavVisible(keyboardVisible = keyboardVisible, commandOpen = commandOpen) && !canvasVisible
+
     val activeSidebarDestination =
       when {
         nav.activeTab == Tab.Chat -> SidebarDestination.Home
@@ -261,6 +273,7 @@ fun ShellScreen(
     Box(modifier = modifier.fillMaxSize().background(ClawTheme.colors.canvas)) {
       AdaptiveNavigationShell(
         drawerState = sidebarDrawerState,
+        compactNavigationVisible = compactNavigationVisible,
         activeDestination = activeSidebarDestination,
         onSelectDestination = selectSidebarDestination,
         drawerContent = {
