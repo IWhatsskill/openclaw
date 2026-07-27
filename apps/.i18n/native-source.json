@@ -10331,7 +10331,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 180,
+      "line": 192,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SidebarContent.kt",
       "source": "Connected",
       "surface": "android",
@@ -10339,7 +10339,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 180,
+      "line": 192,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SidebarContent.kt",
       "source": "Offline",
       "surface": "android",
@@ -10347,7 +10347,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 204,
+      "line": 216,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SidebarContent.kt",
       "source": "OpenClaw",
       "surface": "android",
@@ -10355,7 +10355,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 213,
+      "line": 225,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SidebarContent.kt",
       "source": "Open Settings",
       "surface": "android",
@@ -10363,7 +10363,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 222,
+      "line": 234,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SidebarContent.kt",
       "source": "Hide Sidebar",
       "surface": "android",
@@ -10371,7 +10371,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 237,
+      "line": 249,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SidebarContent.kt",
       "source": "Agents",
       "surface": "android",
@@ -10379,7 +10379,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 249,
+      "line": 261,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SidebarContent.kt",
       "source": "More Agents",
       "surface": "android",
@@ -10387,7 +10387,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 279,
+      "line": 291,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SidebarContent.kt",
       "source": "Pages",
       "surface": "android",
@@ -10395,7 +10395,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 289,
+      "line": 301,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SidebarContent.kt",
       "source": "Recent sessions",
       "surface": "android",
@@ -10403,7 +10403,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 292,
+      "line": 304,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SidebarContent.kt",
       "source": "No recent sessions",
       "surface": "android",
