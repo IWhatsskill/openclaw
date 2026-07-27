@@ -18,6 +18,9 @@ import {
   buildArgumentChurnWarning,
   getArgumentChurnNoProgressStreak,
 } from "./tool-loop-argument-churn.js";
+import { isKnownPollToolCall } from "./tool-loop-call-kind.js";
+import { TOOL_LOOP_WARNING_THRESHOLD } from "./tool-loop-thresholds.js";
+import { normalizeWriteToolOutcomeForLoopDetection } from "./tool-loop-write-outcome.js";
 
 const log = createSubsystemLogger("agents/loop-detection");
 
@@ -43,7 +46,6 @@ type LoopDetectionResult =
     };
 
 const TOOL_CALL_HISTORY_SIZE = 30;
-export const TOOL_LOOP_WARNING_THRESHOLD = 10;
 export const UNKNOWN_TOOL_THRESHOLD = 10;
 const CRITICAL_THRESHOLD = 20;
 const GLOBAL_CIRCUIT_BREAKER_THRESHOLD = 30;
@@ -110,17 +112,6 @@ export function hashToolCall(toolName: string, params: unknown): string {
 function digestStable(value: unknown): string {
   const serialized = stableStringify(value);
   return createHash("sha256").update(serialized).digest("hex");
-}
-
-function isKnownPollToolCall(toolName: string, params: unknown): boolean {
-  if (toolName === "command_status") {
-    return true;
-  }
-  if (toolName !== "process" || !isPlainObject(params)) {
-    return false;
-  }
-  const action = params.action;
-  return action === "poll" || action === "log";
 }
 
 function extractTextContent(result: unknown): string {
@@ -318,6 +309,12 @@ function hashToolOutcome(
     const execHash = hashExecToolOutcome(details, text);
     if (execHash) {
       return { resultHash: execHash };
+    }
+  }
+  if (toolName === "write") {
+    const writeOutcome = normalizeWriteToolOutcomeForLoopDetection(params, details, text);
+    if (writeOutcome) {
+      return { resultHash: digestStable(writeOutcome) };
     }
   }
   if (isKnownPollToolCall(toolName, params) && toolName === "process" && isPlainObject(params)) {

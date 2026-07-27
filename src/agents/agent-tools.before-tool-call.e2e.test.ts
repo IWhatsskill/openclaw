@@ -25,7 +25,10 @@ import {
   markDiagnosticEmbeddedRunStarted,
   resetDiagnosticRunActivityForTest,
 } from "../logging/diagnostic-run-activity.js";
-import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
+import {
+  getDiagnosticSessionState,
+  resetDiagnosticSessionStateForTest,
+} from "../logging/diagnostic-session-state.js";
 import {
   PluginApprovalResolutions,
   type PluginApprovalResolution,
@@ -44,6 +47,7 @@ import {
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
+import { createWriteTool } from "./sessions/index.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
@@ -554,6 +558,45 @@ describe("before_tool_call loop detection behavior", () => {
       getDiagnosticSessionActivitySnapshot({ sessionKey: "main" }).lastProgressReason,
     ).not.toBe("tool_loop:argument_churn");
     expect(execute).toHaveBeenCalledTimes(GLOBAL_CIRCUIT_BREAKER_THRESHOLD + 3);
+  });
+
+  it("detects alternating-path churn from the production write result contract", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-write-churn-"));
+    const sessionId = "production-write-churn-session";
+    const sessionKey = "main";
+    const runId = "production-write-churn-run";
+    const content = "same content";
+    const paths = ["a.md", "b.md", "a.md", "a.md", "b.md"];
+    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey, runId });
+    const tool = wrapToolWithBeforeToolCallHook(
+      createWriteTool(tmpDir) as unknown as AnyAgentTool,
+      {
+        ...enabledLoopDetectionContext,
+        sessionId,
+        sessionKey,
+        runId,
+      },
+    );
+
+    try {
+      await withToolLoopEvents(async (emitted) => {
+        for (let index = 0; index < 16; index += 1) {
+          await expectUnblockedToolExecution(tool, `production-write-churn-${index}`, {
+            path: paths[index % paths.length]!,
+            content,
+          });
+        }
+        expect(emitted.some((event) => event.detector === "argument_churn")).toBe(true);
+      });
+      const history = getDiagnosticSessionState({ sessionId, sessionKey }).toolCallHistory;
+      expect(history?.[0]?.resultHash).toBeTypeOf("string");
+      expect(history?.[0]?.resultHash).toBe(history?.[1]?.resultHash);
+      expect(getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey })).toMatchObject({
+        lastProgressReason: "tool_loop:argument_churn",
+      });
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
   });
 
   it("suspends churn liveness while a before-tool policy is pending", async () => {

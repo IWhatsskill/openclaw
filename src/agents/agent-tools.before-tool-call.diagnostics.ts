@@ -599,6 +599,7 @@ export async function reconcileLoopCallExecutionParams(args: {
       getDiagnosticSessionState,
       markDiagnosticArgumentChurnObservation,
       reconcileToolCallExecutionParams,
+      resolveToolLoopWarningThreshold,
     } = await loadBeforeToolCallRuntime();
     const sessionState = getDiagnosticSessionState({
       sessionKey: args.ctx.sessionKey,
@@ -609,6 +610,7 @@ export async function reconcileLoopCallExecutionParams(args: {
       toolParams: args.toolParams,
       toolCallId: args.toolCallId,
       runId: args.ctx.runId,
+      warningThreshold: resolveToolLoopWarningThreshold(),
     });
     markDiagnosticArgumentChurnObservation({
       sessionKey: args.ctx.sessionKey,

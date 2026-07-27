@@ -13,6 +13,7 @@ const isMessagingToolSendActionMock = vi.hoisted(() =>
 vi.mock("./embedded-agent-messaging.js", () => ({
   isMessagingToolSendAction: isMessagingToolSendActionMock,
 }));
+import { reconcileToolCallExecutionParams } from "./tool-loop-call-reconciliation.js";
 import {
   UNKNOWN_TOOL_THRESHOLD,
   detectToolCallLoop,
@@ -535,6 +536,72 @@ describe("tool-loop-detection", () => {
       expect(escapeResult.stuck).toBe(false);
     });
 
+    it("normalizes built-in write results that only differ by echoed path", () => {
+      const state = createState();
+      const content = "same content";
+      const paths = ["/tmp/a.md", "/tmp/b.md"];
+
+      for (const [index, targetPath] of paths.entries()) {
+        recordSuccessfulCall(
+          state,
+          "write",
+          { path: targetPath, content },
+          {
+            content: [
+              {
+                type: "text",
+                text: `Successfully wrote ${Buffer.byteLength(content, "utf8")} bytes to ${targetPath}`,
+              },
+            ],
+            details: {
+              changed: true,
+              created: true,
+              diff: "+same content",
+              patch: `--- ${targetPath}\n+++ ${targetPath}\n+same content`,
+            },
+          },
+          index,
+        );
+      }
+
+      const hashes = state.toolCallHistory?.map((record) => record.resultHash);
+      expect(hashes?.[0]).toBeTypeOf("string");
+      expect(hashes?.[0]).toBe(hashes?.[1]);
+    });
+
+    it("uses the supplied warning threshold when reconciling rewritten calls", () => {
+      const state = createState();
+      const paths = ["/tmp/a.md", "/tmp/b.md"];
+      for (let index = 0; index < 6; index += 1) {
+        const targetPath = paths[index % paths.length]!;
+        recordSuccessfulCall(
+          state,
+          "write",
+          { path: targetPath, content: "same content" },
+          {
+            content: [{ type: "text", text: "write made no changes" }],
+            details: { changed: false },
+          },
+          index,
+        );
+      }
+      recordToolCall(
+        state,
+        "write",
+        { path: "/tmp/original.md", content: "same content" },
+        "rewritten-call",
+      );
+
+      const reconciled = reconcileToolCallExecutionParams(state, {
+        toolName: "write",
+        toolParams: { path: "/tmp/a.md", content: "same content" },
+        toolCallId: "rewritten-call",
+        warningThreshold: 6,
+      });
+
+      expect(reconciled).toEqual({ active: true, count: 6, variantCount: 2 });
+    });
+
     it("keeps completed churn evidence across a pending same-tool sibling", () => {
       const state = createState();
       const paths = ["/tmp/a.md", "/tmp/b.md", "/tmp/a.md", "/tmp/a.md", "/tmp/b.md"];
@@ -738,16 +805,27 @@ describe("tool-loop-detection", () => {
     it("does not block a legitimate two-pass batch", () => {
       const state = createState();
       const paths = Array.from({ length: 15 }, (_, index) => `/tmp/batch-${index}.md`);
+      const content = "same content";
 
       for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
         const targetPath = paths[index % paths.length]!;
         recordSuccessfulCall(
           state,
           "write",
-          { path: targetPath, content: "same content" },
+          { path: targetPath, content },
           {
-            content: [{ type: "text", text: `wrote ${targetPath}` }],
-            details: { ok: true, path: targetPath },
+            content: [
+              {
+                type: "text",
+                text: `Successfully wrote ${Buffer.byteLength(content, "utf8")} bytes to ${targetPath}`,
+              },
+            ],
+            details: {
+              changed: true,
+              created: true,
+              diff: "+same content",
+              patch: `--- ${targetPath}\n+++ ${targetPath}\n+same content`,
+            },
           },
           index,
         );
@@ -756,7 +834,7 @@ describe("tool-loop-detection", () => {
       const loopResult = detectToolCallLoop(
         state,
         "write",
-        { path: "/tmp/next.md", content: "same content" },
+        { path: "/tmp/next.md", content },
         enabledLoopDetectionConfig,
       );
 

@@ -1,7 +1,7 @@
 import { normalizeOptionalString as normalizeRunId } from "@openclaw/normalization-core/string-coerce";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { getArgumentChurnNoProgressStreak } from "./tool-loop-argument-churn.js";
-import { hashToolCall, TOOL_LOOP_WARNING_THRESHOLD } from "./tool-loop-detection.js";
+import { hashToolCall } from "./tool-loop-detection.js";
 
 /**
  * Rebind the pending admission record to the arguments that will actually
@@ -15,6 +15,7 @@ export function reconcileToolCallExecutionParams(
     toolParams: unknown;
     toolCallId?: string;
     runId?: string;
+    warningThreshold: number;
   },
 ): { active: boolean; count: number; variantCount: number } {
   const history = state.toolCallHistory;
@@ -42,7 +43,7 @@ export function reconcileToolCallExecutionParams(
       .filter((record) => normalizeRunId(record.runId) === runId);
     const churn = getArgumentChurnNoProgressStreak(scopedHistory, params.toolName, argsHash);
     return {
-      active: churn.count >= TOOL_LOOP_WARNING_THRESHOLD,
+      active: churn.count >= params.warningThreshold,
       ...churn,
     };
   }
