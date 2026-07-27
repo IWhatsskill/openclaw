@@ -226,6 +226,8 @@ export type ChannelGroupContext = {
   groupChannel?: string | null;
   groupSpace?: string | null;
   accountId?: string | null;
+  /** Trusted host instruction to ignore toolsBySender for non-ingress work. */
+  senderPolicyMode?: "always" | "never";
   senderId?: string | null;
   senderName?: string | null;
   senderUsername?: string | null;
@@ -357,6 +359,15 @@ export type ChannelOutboundSessionRoute = {
 };
 
 export type ChannelThreadingAdapter = {
+  /**
+   * Where the transport keeps thread identity.
+   * "address" (default): the thread is part of the routing address (own channel id, topic id
+   * in the target tuple), fully known before send.
+   * "message": thread identity lives on a message (e.g. Slack thread_ts) — replying to a
+   * message enters its thread, and routes can discover a session-scoping thread only after
+   * target lookup.
+   */
+  threadAddressing?: "address" | "message";
   matchesToolContextTarget?: (params: {
     target: string;
     toolContext: ChannelThreadingToolContext;

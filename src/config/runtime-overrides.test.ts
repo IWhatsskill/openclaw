@@ -9,6 +9,7 @@ import {
   setConfigOverride,
   unsetConfigOverride,
 } from "./runtime-overrides.js";
+import { resolveMainSessionKey } from "./sessions/main-session.js";
 import type { OpenClawConfig } from "./types.js";
 import { validateConfigObject } from "./validation.js";
 
@@ -69,6 +70,7 @@ describe("runtime overrides", () => {
         "/tmp/jarvis-workspace",
         "/tmp/worker-workspace",
       ]);
+      expect(resolveMainSessionKey(runtimeConfig)).toBe("agent:jarvis:main");
     }
   });
 

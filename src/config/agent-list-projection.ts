@@ -1,3 +1,4 @@
+import { listAgentEntries } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "./types.js";
 
 /** Attach the non-serialized list projection used by legacy runtime consumers. */
@@ -9,7 +10,7 @@ export function attachAgentListProjection(config: OpenClawConfig): OpenClawConfi
   Object.defineProperty(agents, "list", {
     configurable: true,
     enumerable: false,
-    value: Object.entries(agents.entries ?? {}).map(([id, entry]) => Object.assign({ id }, entry)),
+    value: listAgentEntries(config),
     writable: false,
   });
   return config;

@@ -23,7 +23,6 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 const FRESH_CRON_CARRIED_PREFERENCE_FIELDS = [
-  "heartbeatTaskState",
   "chatType",
   "thinkingLevel",
   "fastMode",
@@ -46,12 +45,10 @@ const AMBIENT_SESSION_CONTEXT_FIELDS = [
   "queueDebounceMs",
   "queueCap",
   "queueDrop",
-  "channel",
   "groupId",
   "subject",
   "groupChannel",
   "space",
-  "origin",
   "acp",
 ] as const satisfies readonly (keyof SessionEntry)[];
 
@@ -85,6 +82,9 @@ function preserveNonAutoModelOverride(target: SessionEntry, entry: SessionEntry)
     }
     if (entry.modelOverrideSource !== undefined) {
       target.modelOverrideSource = entry.modelOverrideSource;
+    }
+    if (entry.modelOverrideRouteResolution !== undefined) {
+      target.modelOverrideRouteResolution = entry.modelOverrideRouteResolution;
     }
     // Runtime overrides qualify an explicit model selection; carrying one alone
     // would pin a fresh cron session to a stale engine after its model resets.
@@ -154,7 +154,10 @@ export function resolveCronSession(params: {
   const store =
     params.store ??
     Object.fromEntries(
-      listSessionEntries({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+      listSessionEntries({ agentId: params.agentId, storePath }).map(({ sessionKey, entry }) => [
+        sessionKey,
+        entry,
+      ]),
     );
   const sourceSessionKey = params.sourceSessionKey?.trim();
   const sourceSessionDiffers = Boolean(sourceSessionKey && sourceSessionKey !== params.sessionKey);

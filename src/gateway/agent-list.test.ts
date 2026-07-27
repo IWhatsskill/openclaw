@@ -9,7 +9,7 @@ import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { listGatewayAgentsBasic } from "./agent-list.js";
 
 describe("listGatewayAgentsBasic", () => {
-  it("retains disk agents and applies owner-contributed kinds", async () => {
+  it("retains disk system agents without treating regular disk dirs as roster members", async () => {
     await withStateDirEnv("openclaw-agent-list-", async ({ stateDir }) => {
       await Promise.all(
         ["openclaw", "crestodian", "research"].map((id) =>
@@ -17,22 +17,25 @@ describe("listGatewayAgentsBasic", () => {
         ),
       );
 
-      const result = listGatewayAgentsBasic({});
+      const result = listGatewayAgentsBasic({
+        agents: { entries: { main: { default: true } } },
+      });
 
       expect(result.agents).toEqual([
         { id: "main", kind: "agent", name: undefined },
         { id: "crestodian", kind: "system", name: undefined },
         { id: "openclaw", kind: "system", name: undefined },
-        { id: "research", kind: "agent", name: undefined },
       ]);
     });
   });
 
   it("does not add owner entries without a roster membership source", async () => {
     await withStateDirEnv("openclaw-agent-list-", async () => {
-      expect(listGatewayAgentsBasic({}).agents).toEqual([
-        { id: "main", kind: "agent", name: undefined },
-      ]);
+      expect(
+        listGatewayAgentsBasic({
+          agents: { entries: { main: { default: true } } },
+        }).agents,
+      ).toEqual([{ id: "main", kind: "agent", name: undefined }]);
     });
   });
 
@@ -55,28 +58,21 @@ describe("listGatewayAgentsBasic", () => {
     });
   });
 
-  it("uses keyed entries as the explicit roster and filters disk-only agents", async () => {
+  it("retains disk-backed system agents beside an explicit roster", async () => {
     await withStateDirEnv("openclaw-agent-list-", async ({ stateDir }) => {
       await Promise.all(
-        ["main", "archive"].map((id) =>
+        ["openclaw", "research"].map((id) =>
           fs.mkdir(path.join(stateDir, "agents", id), { recursive: true }),
         ),
       );
-      const cfg: OpenClawConfig = {
-        agents: {
-          entries: {
-            jarvis: { default: true, identity: { name: "Jarvis" } },
-            writer: { name: "Writer" },
-          },
-        },
-      };
 
-      const result = listGatewayAgentsBasic(cfg);
-
-      expect(result.defaultId).toBe("jarvis");
-      expect(result.agents).toEqual([
-        { id: "jarvis", kind: "agent", name: "Jarvis" },
-        { id: "writer", kind: "agent", name: "Writer" },
+      expect(
+        listGatewayAgentsBasic({
+          agents: { entries: { main: { default: true } } },
+        }).agents,
+      ).toEqual([
+        { id: "main", kind: "agent", name: undefined },
+        { id: "openclaw", kind: "system", name: undefined },
       ]);
     });
   });

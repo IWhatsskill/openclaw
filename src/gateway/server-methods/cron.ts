@@ -3,7 +3,6 @@ import { parseBoolean } from "@openclaw/normalization-core/boolean-coercion";
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   validateCronAddParams,
   validateCronGetParams,
   validateCronListParams,
@@ -60,12 +59,14 @@ import {
   cronJobMatchesCallerScope,
   cronPatchSessionRefsMatchCaller,
   readCronCallerScope,
+  resolveCronScheduledToolPolicyForCaller,
   type CronCallerScope,
 } from "./cron-caller-scope.js";
 import { isCronInvalidRequestError } from "./cron-error-classification.js";
 import { listCronPageForCallerScope } from "./cron-list-caller-scope.js";
 import { cronRunLogPageFilters, filterCronRunLogJobsByAgent } from "./cron-run-log-filters.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 type CronJobIdParams = { id?: string; jobId?: string };
 
@@ -335,15 +336,7 @@ function respondMissingCronJobId(respond: RespondFn, method: string): void {
 /** Gateway request handlers for cron jobs and cron run-log access. */
 export const cronHandlers: GatewayRequestHandlers = {
   wake: ({ params, respond, context, client }) => {
-    if (!validateWakeParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid wake params: ${formatValidationErrors(validateWakeParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateWakeParams, "wake", respond)) {
       return;
     }
     // Caller-supplied sessionKey / agentId thread through to `cron.wake` so
@@ -428,15 +421,7 @@ export const cronHandlers: GatewayRequestHandlers = {
     respond(true, result, undefined);
   },
   "cron.list": async ({ params, respond, context, client }) => {
-    if (!validateCronListParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid cron.list params: ${formatValidationErrors(validateCronListParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateCronListParams, "cron.list", respond)) {
       return;
     }
     const p = params as {
@@ -489,27 +474,14 @@ export const cronHandlers: GatewayRequestHandlers = {
     respond(true, { ...page, jobs: page.jobs.map(cronJobReadView), deliveryPreviews }, undefined);
   },
   "cron.status": async ({ params, respond, context }) => {
-    if (!validateCronStatusParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid cron.status params: ${formatValidationErrors(validateCronStatusParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateCronStatusParams, "cron.status", respond)) {
       return;
     }
     const status = await context.cron.status();
     respond(true, status, undefined);
   },
   "cron.get": async ({ params, respond, context, client }) => {
-    if (!validateCronGetParams(params)) {
-      respondInvalidCronParams(
-        respond,
-        "cron.get",
-        formatValidationErrors(validateCronGetParams.errors),
-      );
+    if (!assertValidParams(params, validateCronGetParams, "cron.get", respond)) {
       return;
     }
     const jobId = resolveCronJobId(params as CronJobIdParams);
@@ -525,6 +497,7 @@ export const cronHandlers: GatewayRequestHandlers = {
         job,
         callerScope,
         defaultAgentId: context.cron.getDefaultAgentId(),
+        allowCurrentJob: true,
       })
     ) {
       respond(
@@ -537,12 +510,7 @@ export const cronHandlers: GatewayRequestHandlers = {
     respond(true, cronJobReadView(job), undefined);
   },
   "cron.scratch.get": async ({ params, respond, context, client }) => {
-    if (!validateCronScratchGetParams(params)) {
-      respondInvalidCronParams(
-        respond,
-        "cron.scratch.get",
-        formatValidationErrors(validateCronScratchGetParams.errors),
-      );
+    if (!assertValidParams(params, validateCronScratchGetParams, "cron.scratch.get", respond)) {
       return;
     }
     const jobId = resolveCronJobId(params as CronJobIdParams);
@@ -575,12 +543,7 @@ export const cronHandlers: GatewayRequestHandlers = {
     );
   },
   "cron.scratch.set": async ({ params, respond, context, client }) => {
-    if (!validateCronScratchSetParams(params)) {
-      respondInvalidCronParams(
-        respond,
-        "cron.scratch.set",
-        formatValidationErrors(validateCronScratchSetParams.errors),
-      );
+    if (!assertValidParams(params, validateCronScratchSetParams, "cron.scratch.set", respond)) {
       return;
     }
     const p = params as CronJobIdParams & {
@@ -675,15 +638,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     const candidate = normalized;
-    if (!validateCronAddParams(candidate)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid cron.add params: ${formatValidationErrors(validateCronAddParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(candidate, validateCronAddParams, "cron.add", respond)) {
       return;
     }
     const callerScope = readCronCallerScope(client);
@@ -746,6 +701,9 @@ export const cronHandlers: GatewayRequestHandlers = {
             callerScope,
             defaultAgentId: context.cron.getDefaultAgentId(),
           }),
+        ...(cronJobUsesToolRuntime(jobCreate)
+          ? { scheduledToolPolicy: resolveCronScheduledToolPolicyForCaller(callerScope) }
+          : {}),
       });
     } catch (err) {
       if (
@@ -815,15 +773,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       normalizedPatch && typeof params === "object" && params !== null
         ? { ...params, patch: normalizedPatch }
         : params;
-    if (!validateCronUpdateParams(candidate)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid cron.update params: ${formatValidationErrors(validateCronUpdateParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(candidate, validateCronUpdateParams, "cron.update", respond)) {
       return;
     }
     const p = candidate as {
@@ -901,38 +851,47 @@ export const cronHandlers: GatewayRequestHandlers = {
     }
     let job: Awaited<ReturnType<typeof context.cron.update>>;
     try {
-      job = await context.cron.updateWithPrecondition(jobId, patch, async (lockedJob) => {
-        if (
-          !cronJobMatchesCallerScope({
-            job: lockedJob,
-            callerScope,
+      job = await context.cron.updateWithPrecondition(
+        jobId,
+        patch,
+        async (lockedJob) => {
+          if (
+            !cronJobMatchesCallerScope({
+              job: lockedJob,
+              callerScope,
+              defaultAgentId: context.cron.getDefaultAgentId(),
+            })
+          ) {
+            throw new Error(`unknown cron job id: ${jobId}`);
+          }
+          if (p.expectedConfigRevision !== undefined) {
+            const actualConfigRevision = resolveCronJobConfigRevision(lockedJob);
+            if (actualConfigRevision !== p.expectedConfigRevision) {
+              throw new CronJobConfigRevisionConflictError(
+                p.expectedConfigRevision,
+                actualConfigRevision,
+              );
+            }
+          }
+          const nextJob = await assertValidCronUpdatePatch({
+            cfg,
             defaultAgentId: context.cron.getDefaultAgentId(),
-          })
-        ) {
-          throw new Error(`unknown cron job id: ${jobId}`);
-        }
-        if (p.expectedConfigRevision !== undefined) {
-          const actualConfigRevision = resolveCronJobConfigRevision(lockedJob);
-          if (actualConfigRevision !== p.expectedConfigRevision) {
-            throw new CronJobConfigRevisionConflictError(
-              p.expectedConfigRevision,
-              actualConfigRevision,
+            currentJob: lockedJob,
+            patch,
+          });
+          if (
+            cronPatchTouchesToolRuntime(patch) &&
+            requiresExplicitAgentRuntimeToolsAllow({ job: nextJob, callerScope })
+          ) {
+            throw new TypeError(
+              "agent-runtime tool jobs require an explicit payload.toolsAllow cap",
             );
           }
-        }
-        const nextJob = await assertValidCronUpdatePatch({
-          cfg,
-          defaultAgentId: context.cron.getDefaultAgentId(),
-          currentJob: lockedJob,
-          patch,
-        });
-        if (
-          cronPatchTouchesToolRuntime(patch) &&
-          requiresExplicitAgentRuntimeToolsAllow({ job: nextJob, callerScope })
-        ) {
-          throw new TypeError("agent-runtime tool jobs require an explicit payload.toolsAllow cap");
-        }
-      });
+        },
+        cronPatchTouchesToolRuntime(patch)
+          ? { scheduledToolPolicy: resolveCronScheduledToolPolicyForCaller(callerScope) }
+          : undefined,
+      );
     } catch (err) {
       if (err instanceof CronJobConfigRevisionConflictError) {
         respond(
@@ -973,12 +932,7 @@ export const cronHandlers: GatewayRequestHandlers = {
     respond(true, cronJobReadView(job), undefined);
   },
   "cron.remove": async ({ params, respond, context, client }) => {
-    if (!validateCronRemoveParams(params)) {
-      respondInvalidCronParams(
-        respond,
-        "cron.remove",
-        formatValidationErrors(validateCronRemoveParams.errors),
-      );
+    if (!assertValidParams(params, validateCronRemoveParams, "cron.remove", respond)) {
       return;
     }
     const jobId = resolveCronJobId(params as CronJobIdParams);
@@ -994,6 +948,7 @@ export const cronHandlers: GatewayRequestHandlers = {
         job,
         callerScope,
         defaultAgentId: context.cron.getDefaultAgentId(),
+        allowCurrentJob: true,
       })
     ) {
       respond(
@@ -1016,12 +971,7 @@ export const cronHandlers: GatewayRequestHandlers = {
     respond(true, result, undefined);
   },
   "cron.run": async ({ params, respond, context, client }) => {
-    if (!validateCronRunParams(params)) {
-      respondInvalidCronParams(
-        respond,
-        "cron.run",
-        formatValidationErrors(validateCronRunParams.errors),
-      );
+    if (!assertValidParams(params, validateCronRunParams, "cron.run", respond)) {
       return;
     }
     const p = params as CronJobIdParams & {
@@ -1070,12 +1020,7 @@ export const cronHandlers: GatewayRequestHandlers = {
     respond(true, { ...result, processInstanceId: getGatewayProcessInstanceId() }, undefined);
   },
   "cron.runs": async ({ params, respond, context, client }) => {
-    if (!validateCronRunsParams(params)) {
-      respondInvalidCronParams(
-        respond,
-        "cron.runs",
-        formatValidationErrors(validateCronRunsParams.errors),
-      );
+    if (!assertValidParams(params, validateCronRunsParams, "cron.runs", respond)) {
       return;
     }
     const p = params as CronRunsRequestParams;
@@ -1124,6 +1069,7 @@ export const cronHandlers: GatewayRequestHandlers = {
             job,
             callerScope,
             defaultAgentId: context.cron.getDefaultAgentId(),
+            allowCurrentJob: true,
           }),
       );
       if ((callerScope || p.agentId) && !matchedJob) {

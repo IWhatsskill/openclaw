@@ -3,6 +3,7 @@ import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import { SESSION_ROUTING_CHANGED_ERROR_REASON } from "../../config/sessions/main-session.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import { chatAbortMarkerTimestampMs } from "../server-chat-state.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX } from "../server-shared.js";
 import { loadSessionEntry } from "../session-utils.js";
@@ -72,7 +73,7 @@ export async function runChatSendPreAdmission(params: {
     cfg,
     entry,
     sessionKey,
-    channel: entry?.channel,
+    channel: sessionDeliveryChannel(entry),
     chatType: entry?.chatType,
   });
   if (sendPolicy === "deny") {
@@ -119,7 +120,7 @@ export async function runChatSendPreAdmission(params: {
     return false;
   }
 
-  const abortMarker = context.chatAbortedRuns.get(clientRunId);
+  const abortMarker = context.chatRunState.runs.get(clientRunId)?.abortMarker;
   if (abortMarker !== undefined) {
     const abortedAt = chatAbortMarkerTimestampMs(abortMarker);
     const payload = buildAbortedChatSendPayload({ runId: clientRunId, endedAt: abortedAt });

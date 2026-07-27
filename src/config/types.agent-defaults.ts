@@ -100,10 +100,6 @@ export type AgentStartupContextConfig = {
 export type AgentContextLimitsConfig = {
   /** Default max chars returned by memory_get before truncation metadata/notice (default: 12000). */
   memoryGetMaxChars?: number;
-  /** Default line window for memory_get when lines is omitted (default: 120). */
-  memoryGetDefaultLines?: number;
-  /** Advanced max chars for a single live tool result; unset uses model-context auto cap. */
-  toolResultMaxChars?: number;
   /** Max chars retained from post-compaction AGENTS.md context injection (default: 1800). */
   postCompactionMaxChars?: number;
 };
@@ -158,7 +154,7 @@ export type AgentDefaultsConfig = {
   modelPolicy?: AgentModelPolicyConfig;
   /** Agent working directory (preferred). Used as the default cwd for agent runs. */
   workspace?: string;
-  /** Optional default allowlist of skills for agents that do not set agents.list[].skills. */
+  /** Optional default allowlist of skills for agents that do not set agents.entries.*.skills. */
   skills?: string[];
   /** Silent-reply policy by conversation type. */
   silentReply?: SilentReplyPolicyShape;
@@ -170,7 +166,7 @@ export type AgentDefaultsConfig = {
   /**
    * List of optional bootstrap filenames to skip writing to the workspace root.
    * Applies to: SOUL.md, USER.md, IDENTITY.md ("HEARTBEAT.md" is accepted but a no-op).
-   * Required workspace setup such as AGENTS.md and TOOLS.md still runs.
+   * Required workspace setup such as AGENTS.md still runs.
    * Example: ["SOUL.md", "USER.md", "IDENTITY.md"]
    */
   skipOptionalBootstrapFiles?: OptionalBootstrapFileName[];
@@ -290,6 +286,8 @@ export type AgentDefaultsConfig = {
   typingMode?: TypingMode;
   /** Periodic background heartbeat runs. */
   heartbeat?: {
+    /** Agent that owns ambient heartbeat runs when no per-agent heartbeat is configured. */
+    agentId?: string;
     /** Heartbeat interval (duration string, default unit: minutes; default: 30m). */
     every?: string;
     /** Optional active-hours window (local time); heartbeats run only inside this window. */
@@ -313,7 +311,7 @@ export type AgentDefaultsConfig = {
     to?: string;
     /** Optional account id for multi-account channels. */
     accountId?: string;
-    /** Override the heartbeat prompt body (default: "Follow the heartbeat monitor scratch context when provided. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK."). */
+    /** Override the heartbeat prompt body. The default treats scratch as monitor prose and directs recurring work to cron jobs. */
     prompt?: string;
     /** Run timeout in seconds for heartbeat agent turns. Unset uses global timeout or heartbeat cadence capped at 600 seconds. */
     timeoutSeconds?: number;
@@ -330,7 +328,11 @@ export type AgentDefaultsConfig = {
      */
     isolatedSession?: boolean;
   };
-  /** Max concurrent agent runs across all conversations. Default: 4. */
+  /** Owner for ambient OpenClaw system-agent/Custodian inference. */
+  systemAgent?: {
+    agentId?: string;
+  };
+  /** Max concurrent agent runs across all conversations. Default: min(16, max(8, available CPU parallelism)). */
   maxConcurrent?: number;
   /** Sub-agent defaults (spawned via sessions_spawn). */
   subagents?: {

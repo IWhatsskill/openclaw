@@ -200,6 +200,7 @@ export async function runClawsInspectCommand(
     valid: true,
     source: result.source,
     manifest: result.manifest,
+    ...(result.openClawProfile ? { openClawProfile: result.openClawProfile } : {}),
     diagnostics: result.diagnostics,
   };
   if (opts.json) {
@@ -262,6 +263,8 @@ export async function runClawsAddCommand(
   };
   let plan = await buildClawAddPlan({
     manifest: result.manifest,
+    clawMarkdownBody: result.clawMarkdownBody,
+    openClawProfile: result.openClawProfile,
     source: result.source,
     diagnostics: result.diagnostics,
     context: basePlanContext,
@@ -278,6 +281,8 @@ export async function runClawsAddCommand(
       (resumeRecord.status === "workspace_ready" && committedAgent !== undefined);
     plan = await buildClawAddPlan({
       manifest: result.manifest,
+      clawMarkdownBody: result.clawMarkdownBody,
+      openClawProfile: result.openClawProfile,
       source: result.source,
       diagnostics: result.diagnostics,
       context: {
