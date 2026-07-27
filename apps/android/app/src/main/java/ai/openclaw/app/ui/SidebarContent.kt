@@ -77,6 +77,18 @@ internal fun SidebarDestination.localizedLabel(): String =
     SidebarDestination.Sessions -> nativeString("Threads")
   }
 
+internal val SidebarDestination.compactLabelSource: String
+  get() =
+    when (this) {
+      SidebarDestination.Home -> "Chat"
+      SidebarDestination.Overview -> "Status"
+      SidebarDestination.Usage -> "Usage"
+      SidebarDestination.Automations -> "Cron"
+      SidebarDestination.Sessions -> "Threads"
+    }
+
+internal fun SidebarDestination.compactLocalizedLabel(): String = nativeString(compactLabelSource)
+
 internal data class SidebarAgentRoster(
   val selected: GatewayAgentSummary?,
   val others: List<GatewayAgentSummary>,

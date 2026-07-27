@@ -14,6 +14,9 @@ import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteType
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.window.core.layout.WindowSizeClass.Companion.HEIGHT_DP_MEDIUM_LOWER_BOUND
 import androidx.window.core.layout.WindowSizeClass.Companion.WIDTH_DP_EXPANDED_LOWER_BOUND
@@ -71,6 +74,8 @@ internal fun adaptiveNavigationSuiteType(
     navigationMode.toNavigationSuiteType()
   }
 
+internal fun alwaysShowAdaptiveNavigationLabel(navigationMode: AdaptiveNavigationMode): Boolean = navigationMode != AdaptiveNavigationMode.Bar
+
 /**
  * Material-owned adaptive navigation for every top-level destination.
  *
@@ -115,16 +120,39 @@ internal fun AdaptiveNavigationShell(
     NavigationSuiteScaffold(
       navigationSuiteItems = {
         SidebarDestination.entries.forEach { destination ->
+          val fullLabel = destination.localizedLabel()
+          val displayLabel =
+            if (navigationMode == AdaptiveNavigationMode.Bar) {
+              destination.compactLocalizedLabel()
+            } else {
+              fullLabel
+            }
           item(
             selected = destination == activeDestination,
             onClick = { onSelectDestination(destination) },
             icon = {
+              // Compact bars omit inactive labels, so their icons retain the full accessible name.
+              // Material clears this duplicate icon semantic when the selected label is composed.
               Icon(
                 imageVector = destination.icon,
-                contentDescription = null,
+                contentDescription =
+                  fullLabel.takeIf {
+                    navigationMode == AdaptiveNavigationMode.Bar
+                  },
               )
             },
-            label = { Text(destination.localizedLabel()) },
+            label = {
+              Text(
+                text = displayLabel,
+                modifier =
+                  Modifier.clearAndSetSemantics {
+                    contentDescription = fullLabel
+                  },
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+              )
+            },
+            alwaysShowLabel = alwaysShowAdaptiveNavigationLabel(navigationMode),
           )
         }
       },

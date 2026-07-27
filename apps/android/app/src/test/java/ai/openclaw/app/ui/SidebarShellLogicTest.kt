@@ -4,7 +4,9 @@ import ai.openclaw.app.GatewayAgentSummary
 import ai.openclaw.app.chat.ChatSessionEntry
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteType
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SidebarShellLogicTest {
@@ -61,6 +63,22 @@ class SidebarShellLogicTest {
       NavigationSuiteType.NavigationDrawer,
       adaptiveNavigationSuiteType(AdaptiveNavigationMode.Drawer, compactNavigationVisible = false),
     )
+  }
+
+  @Test
+  fun compactNavigationUsesShortDistinctLabels() {
+    val labels = SidebarDestination.entries.map(SidebarDestination::compactLabelSource)
+
+    assertEquals(listOf("Chat", "Status", "Usage", "Cron", "Threads"), labels)
+    assertEquals(labels.size, labels.distinct().size)
+    assertTrue(labels.all { it.length <= 7 })
+  }
+
+  @Test
+  fun compactNavigationOnlyShowsTheSelectedLabel() {
+    assertFalse(alwaysShowAdaptiveNavigationLabel(AdaptiveNavigationMode.Bar))
+    assertTrue(alwaysShowAdaptiveNavigationLabel(AdaptiveNavigationMode.Rail))
+    assertTrue(alwaysShowAdaptiveNavigationLabel(AdaptiveNavigationMode.Drawer))
   }
 
   @Test
