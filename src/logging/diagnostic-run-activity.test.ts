@@ -189,6 +189,43 @@ describe("argument-churn liveness", () => {
     });
   });
 
+  it("orders later progress after churn when both share a timestamp", () => {
+    vi.useFakeTimers();
+    const startedAt = Date.parse("2026-07-27T00:00:00Z");
+    vi.setSystemTime(startedAt);
+    const ref = { sessionId: "same-time-session", sessionKey: "agent:main:same-time" };
+    const runId = "same-time-run";
+
+    markDiagnosticEmbeddedRunStarted({ ...ref, runId });
+    markDiagnosticArgumentChurnObservation({ ...ref, runId, active: true });
+    markDiagnosticRunProgress({ ...ref, runId, reason: "model_call:stream" });
+
+    vi.setSystemTime(startedAt + 60_000);
+    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
+      lastProgressAgeMs: 60_000,
+      lastProgressReason: "model_call:stream",
+    });
+  });
+
+  it("preserves same-timestamp progress ordering when session refs merge", () => {
+    vi.useFakeTimers();
+    const startedAt = Date.parse("2026-07-27T00:00:00Z");
+    vi.setSystemTime(startedAt);
+    const sessionId = "same-time-merge-session";
+    const sessionKey = "agent:main:same-time-merge";
+    const runId = "same-time-merge-run";
+
+    markDiagnosticEmbeddedRunStarted({ sessionId, runId });
+    markDiagnosticArgumentChurnObservation({ sessionId, runId, active: true });
+    markDiagnosticRunProgress({ sessionKey, reason: "model_call:stream" });
+
+    vi.setSystemTime(startedAt + 60_000);
+    expect(getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey })).toMatchObject({
+      lastProgressAgeMs: 60_000,
+      lastProgressReason: "model_call:stream",
+    });
+  });
+
   it("keeps overlapping policy waits suspended until every call releases its token", () => {
     vi.useFakeTimers();
     const startedAt = Date.parse("2026-07-27T00:00:00Z");

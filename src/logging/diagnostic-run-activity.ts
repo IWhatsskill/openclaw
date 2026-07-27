@@ -12,6 +12,7 @@ import {
   type DiagnosticArgumentChurnActivity,
   type DiagnosticArgumentChurnObservationParams,
   mergeArgumentChurnActivity,
+  recordDiagnosticActivityProgress,
   resolveArgumentChurnProgress,
 } from "./diagnostic-argument-churn-activity.js";
 import { createDiagnosticEmbeddedRunIndex } from "./diagnostic-embedded-run-index.js";
@@ -163,9 +164,15 @@ function mergeSessionActivity(target: SessionActivity, source: SessionActivity):
       Math.max(cutoff, target.recoveredOwnerStartEventCutoffs.get(ownerRef) ?? 0),
     );
   }
-  if (source.lastProgressAt > target.lastProgressAt) {
+  const sourceProgressIsNewer =
+    source.lastProgressSequence !== undefined
+      ? target.lastProgressSequence === undefined ||
+        source.lastProgressSequence > target.lastProgressSequence
+      : target.lastProgressSequence === undefined && source.lastProgressAt > target.lastProgressAt;
+  if (sourceProgressIsNewer) {
     target.lastProgressAt = source.lastProgressAt;
     target.lastProgressReason = source.lastProgressReason;
+    target.lastProgressSequence = source.lastProgressSequence;
   }
   mergeArgumentChurnActivity(target, source);
   replaceSessionActivityReferences(source, target);
@@ -222,6 +229,7 @@ function resolveSessionActivity(params: {
 function touchSessionActivity(activity: SessionActivity, reason: string, now = Date.now()): void {
   activity.lastProgressAt = now;
   activity.lastProgressReason = reason;
+  recordDiagnosticActivityProgress(activity);
 }
 
 function toolKey(event: {
