@@ -10,8 +10,10 @@ import {
 import {
   BLOCKED_TOOL_CALL_ABORT_FLOOR_MS,
   clearDiagnosticEmbeddedRunActivityForSession,
+  getDiagnosticRunIdIndexSizeForTest,
   getDiagnosticSessionActivitySnapshot,
   markDiagnosticArgumentChurnObservation,
+  markDiagnosticEmbeddedRunEnded,
   markDiagnosticEmbeddedRunStarted,
   markDiagnosticRunProgress,
   resolveRunStaleThresholdMs,
@@ -77,6 +79,24 @@ describe("diagnostic run activity listener lifecycle", () => {
       activeWorkKind: "tool_call",
       activeToolName: "current-tool",
     });
+  });
+
+  it("releases embedded run-id indexes without diagnostic event tracking", () => {
+    const ref = { sessionId: "reused-session", sessionKey: "agent:main:reused" };
+
+    expect(getDiagnosticRunIdIndexSizeForTest()).toBe(0);
+    markDiagnosticEmbeddedRunStarted({ ...ref, runId: "first-run" });
+    expect(getDiagnosticRunIdIndexSizeForTest()).toBe(1);
+
+    markDiagnosticEmbeddedRunEnded(ref);
+    expect(getDiagnosticRunIdIndexSizeForTest()).toBe(0);
+
+    markDiagnosticEmbeddedRunStarted({ ...ref, runId: "replacement-old-run" });
+    markDiagnosticEmbeddedRunStarted({ ...ref, runId: "replacement-new-run" });
+    expect(getDiagnosticRunIdIndexSizeForTest()).toBe(1);
+
+    markDiagnosticEmbeddedRunEnded(ref);
+    expect(getDiagnosticRunIdIndexSizeForTest()).toBe(0);
   });
 });
 

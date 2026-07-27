@@ -102,13 +102,13 @@ export async function runBeforeToolCallHook(args: {
         loopScope,
       );
 
-      // Approval and policy hooks may wait longer than the stuck-run recovery
-      // window. Suspend any prior churn clock until final params are ready.
+      // Policy and approval waits hide an existing churn clock from recovery
+      // without discarding its original start time.
       markDiagnosticArgumentChurnObservation({
         sessionKey: args.ctx.sessionKey,
         sessionId: args.ctx.sessionId,
         runId: args.ctx.runId,
-        active: false,
+        policyWait: true,
       });
 
       if (loopResult.stuck) {

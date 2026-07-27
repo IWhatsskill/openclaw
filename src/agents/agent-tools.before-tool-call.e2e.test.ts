@@ -554,18 +554,19 @@ describe("before_tool_call loop detection behavior", () => {
   });
 
   it("suspends churn liveness while a before-tool policy is pending", async () => {
+    vi.useFakeTimers();
+    const startedAt = Date.parse("2026-07-27T00:00:00Z");
+    vi.setSystemTime(startedAt);
     const sessionId = "write-churn-policy-wait-session";
     const sessionKey = "main";
     const runId = "write-churn-policy-wait-run";
-    const progressReasonsDuringExecution: Array<string | undefined> = [];
+    const activityDuringExecution: ReturnType<typeof getDiagnosticSessionActivitySnapshot>[] = [];
     const execute = vi.fn().mockImplementation(async (_toolCallId: string, params: unknown) => {
       const targetPath =
         typeof params === "object" && params !== null && "path" in params
           ? String(params.path)
           : "unknown";
-      progressReasonsDuringExecution.push(
-        getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey }).lastProgressReason,
-      );
+      activityDuringExecution.push(getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey }));
       return {
         content: [{ type: "text", text: `wrote ${targetPath}` }],
         details: { ok: true, path: targetPath },
@@ -603,23 +604,36 @@ describe("before_tool_call loop detection behavior", () => {
         resolvePolicy = resolve;
       },
     );
+    let markPolicyEntered!: () => void;
+    const policyEntered = new Promise<void>((resolve) => {
+      markPolicyEntered = resolve;
+    });
     hookRunner.hasHooks.mockReturnValue(true);
-    hookRunner.runBeforeToolCall.mockReturnValue(policyPending);
+    hookRunner.runBeforeToolCall.mockImplementation(() => {
+      markPolicyEntered();
+      return policyPending;
+    });
 
+    vi.setSystemTime(startedAt + 4 * 60_000);
     const pendingExecution = tool.execute(
       "write-churn-policy-wait-next",
       { path: "/tmp/b.md", content: "same content" },
       undefined,
       undefined,
     );
-    await vi.waitFor(() => expect(hookRunner.runBeforeToolCall).toHaveBeenCalledTimes(1));
-    expect(
-      getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey }).lastProgressReason,
-    ).not.toBe("tool_loop:argument_churn");
+    await policyEntered;
+    vi.setSystemTime(startedAt + 6 * 60_000);
+    expect(getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey })).toMatchObject({
+      lastProgressAgeMs: 0,
+      lastProgressReason: "tool_policy:pending",
+    });
 
     resolvePolicy?.({});
     await pendingExecution;
-    expect(progressReasonsDuringExecution.at(-1)).toBe("tool_loop:argument_churn");
+    expect(activityDuringExecution.at(-1)).toMatchObject({
+      lastProgressAgeMs: 6 * 60_000,
+      lastProgressReason: "tool_loop:argument_churn",
+    });
   });
 
   it("clears churn liveness before executing params rewritten to a novel variant", async () => {
