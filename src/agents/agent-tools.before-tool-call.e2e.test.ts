@@ -553,6 +553,75 @@ describe("before_tool_call loop detection behavior", () => {
     expect(execute).toHaveBeenCalledTimes(GLOBAL_CIRCUIT_BREAKER_THRESHOLD + 3);
   });
 
+  it("suspends churn liveness while a before-tool policy is pending", async () => {
+    const sessionId = "write-churn-policy-wait-session";
+    const sessionKey = "main";
+    const runId = "write-churn-policy-wait-run";
+    const progressReasonsDuringExecution: Array<string | undefined> = [];
+    const execute = vi.fn().mockImplementation(async (_toolCallId: string, params: unknown) => {
+      const targetPath =
+        typeof params === "object" && params !== null && "path" in params
+          ? String(params.path)
+          : "unknown";
+      progressReasonsDuringExecution.push(
+        getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey }).lastProgressReason,
+      );
+      return {
+        content: [{ type: "text", text: `wrote ${targetPath}` }],
+        details: { ok: true, path: targetPath },
+      };
+    });
+    const loopDetectionContext = {
+      ...enabledLoopDetectionContext,
+      sessionId,
+      sessionKey,
+      runId,
+    };
+    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey, runId });
+    const tool = createWrappedTool("write", execute, loopDetectionContext);
+    const paths = ["/tmp/a.md", "/tmp/b.md", "/tmp/a.md", "/tmp/a.md", "/tmp/b.md"];
+
+    for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
+      await expectUnblockedToolExecution(tool, `write-churn-policy-wait-${index}`, {
+        path: paths[index % paths.length] ?? "/tmp/a.md",
+        content: "same content",
+      });
+    }
+    await expectUnblockedToolExecution(tool, "write-churn-policy-wait-warning", {
+      path: "/tmp/a.md",
+      content: "same content",
+    });
+    expect(getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey }).lastProgressReason).toBe(
+      "tool_loop:argument_churn",
+    );
+
+    let resolvePolicy:
+      | ((value: Awaited<ReturnType<HookRunner["runBeforeToolCall"]>>) => void)
+      | undefined;
+    const policyPending = new Promise<Awaited<ReturnType<HookRunner["runBeforeToolCall"]>>>(
+      (resolve) => {
+        resolvePolicy = resolve;
+      },
+    );
+    hookRunner.hasHooks.mockReturnValue(true);
+    hookRunner.runBeforeToolCall.mockReturnValue(policyPending);
+
+    const pendingExecution = tool.execute(
+      "write-churn-policy-wait-next",
+      { path: "/tmp/b.md", content: "same content" },
+      undefined,
+      undefined,
+    );
+    await vi.waitFor(() => expect(hookRunner.runBeforeToolCall).toHaveBeenCalledTimes(1));
+    expect(
+      getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey }).lastProgressReason,
+    ).not.toBe("tool_loop:argument_churn");
+
+    resolvePolicy?.({});
+    await pendingExecution;
+    expect(progressReasonsDuringExecution.at(-1)).toBe("tool_loop:argument_churn");
+  });
+
   it("clears churn liveness before executing params rewritten to a novel variant", async () => {
     const sessionId = "write-churn-rewrite-session";
     const sessionKey = "main";
