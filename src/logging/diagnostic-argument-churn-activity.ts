@@ -21,7 +21,7 @@ export type DiagnosticArgumentChurnObservationParams = {
   now?: number;
 };
 
-export function resolveCurrentArgumentChurnOwner<T extends { sequence: number }>(
+function resolveCurrentArgumentChurnOwner<T extends { sequence: number }>(
   owners: Iterable<T>,
 ): T | undefined {
   let currentOwner: T | undefined;
@@ -84,7 +84,7 @@ export function resolveArgumentChurnProgress<T extends { runId: string; sequence
   };
 }
 
-export function recordArgumentChurnActivityObservation(
+function recordArgumentChurnActivityObservation(
   activity: DiagnosticArgumentChurnActivity & { lastProgressAt?: number },
   params: {
     runId?: string;

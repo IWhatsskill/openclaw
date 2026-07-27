@@ -10,7 +10,6 @@ import {
 import {
   BLOCKED_TOOL_CALL_ABORT_FLOOR_MS,
   clearDiagnosticEmbeddedRunActivityForSession,
-  getDiagnosticRunIdIndexSizeForTest,
   getDiagnosticSessionActivitySnapshot,
   markDiagnosticArgumentChurnObservation,
   markDiagnosticEmbeddedRunEnded,
@@ -84,19 +83,28 @@ describe("diagnostic run activity listener lifecycle", () => {
   it("releases embedded run-id indexes without diagnostic event tracking", () => {
     const ref = { sessionId: "reused-session", sessionKey: "agent:main:reused" };
 
-    expect(getDiagnosticRunIdIndexSizeForTest()).toBe(0);
     markDiagnosticEmbeddedRunStarted({ ...ref, runId: "first-run" });
-    expect(getDiagnosticRunIdIndexSizeForTest()).toBe(1);
-
     markDiagnosticEmbeddedRunEnded(ref);
-    expect(getDiagnosticRunIdIndexSizeForTest()).toBe(0);
+    markDiagnosticRunProgress({ runId: "first-run", reason: "stale-first-run" });
+    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
+      activeWorkKind: undefined,
+      lastProgressReason: "embedded_run:ended",
+    });
 
     markDiagnosticEmbeddedRunStarted({ ...ref, runId: "replacement-old-run" });
     markDiagnosticEmbeddedRunStarted({ ...ref, runId: "replacement-new-run" });
-    expect(getDiagnosticRunIdIndexSizeForTest()).toBe(1);
+    markDiagnosticRunProgress({ runId: "replacement-old-run", reason: "stale-replaced-run" });
+    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
+      activeWorkKind: "embedded_run",
+      lastProgressReason: "embedded_run:started",
+    });
 
     markDiagnosticEmbeddedRunEnded(ref);
-    expect(getDiagnosticRunIdIndexSizeForTest()).toBe(0);
+    markDiagnosticRunProgress({ runId: "replacement-new-run", reason: "stale-final-run" });
+    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
+      activeWorkKind: undefined,
+      lastProgressReason: "embedded_run:ended",
+    });
   });
 });
 

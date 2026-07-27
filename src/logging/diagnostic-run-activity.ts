@@ -708,10 +708,6 @@ function markDiagnosticModelStartedForTest(params: DiagnosticModelStartedActivit
   recordModelStarted(params);
 }
 
-export function getDiagnosticRunIdIndexSizeForTest(): number {
-  return activityByRunId.size;
-}
-
 export function resetDiagnosticRunActivityForTest(): void {
   stopDiagnosticRunActivityTracking();
 }
