@@ -27,7 +27,6 @@ const {
   fetchWithSsrFGuardMock,
   sendCronAnnouncePayloadStrictMock,
   runCronIsolatedAgentTurnMock,
-  cleanupBrowserSessionsForLifecycleEndMock,
   getGlobalHookRunnerMock,
   runCronChangedMock,
   abortAndDrainEmbeddedAgentRunMock,
@@ -52,7 +51,6 @@ const {
     status: "ok",
     summary: "ok",
   })),
-  cleanupBrowserSessionsForLifecycleEndMock: vi.fn(async () => {}),
   runCronChangedMock: vi.fn(async (_event: unknown, _context?: unknown) => {}),
   getGlobalHookRunnerMock: vi.fn(() => ({
     hasHooks: (hookName: string) => hookName === "cron_changed",
@@ -193,10 +191,6 @@ vi.mock("../cron/isolated-agent.js", () => ({
   runCronIsolatedAgentTurn: runCronIsolatedAgentTurnMock,
 }));
 
-vi.mock("../browser-lifecycle-cleanup.js", () => ({
-  cleanupBrowserSessionsForLifecycleEnd: cleanupBrowserSessionsForLifecycleEndMock,
-}));
-
 vi.mock("../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: getGlobalHookRunnerMock,
 }));
@@ -223,6 +217,11 @@ vi.mock("../cron/trigger-script.js", () => ({
   createCronScriptRuntime: createCronScriptRuntimeMock,
 }));
 
+import {
+  registerActiveCronTaskRun,
+  trackActiveCronTaskRunSettlement,
+} from "../cron/service/active-run-cancellation.js";
+import { resetActiveCronTaskRunsForTests } from "../cron/service/active-run-cancellation.test-support.js";
 import type { CronJob } from "../cron/types.js";
 import {
   buildGatewayCronService as buildGatewayCronServiceRuntime,
@@ -316,18 +315,9 @@ function expectIsolatedRunFields(fields: Record<string, unknown>) {
   return options;
 }
 
-function expectCleanupForSessionKeys(sessionKeys: string[]) {
-  expect(cleanupBrowserSessionsForLifecycleEndMock).toHaveBeenCalledTimes(1);
-  const options = requireRecord(
-    callArg(cleanupBrowserSessionsForLifecycleEndMock, 0, 0, "cleanup options"),
-    "cleanup options",
-  );
-  expect(options.sessionKeys).toEqual(sessionKeys);
-  expect(options.onWarn).toBeTypeOf("function");
-}
-
 describe("buildGatewayCronService", () => {
   beforeEach(() => {
+    resetActiveCronTaskRunsForTests();
     enqueueSystemEventMock.mockClear();
     consumeSelectedSystemEventEntriesMock.mockClear();
     requestHeartbeatMock.mockClear();
@@ -336,7 +326,6 @@ describe("buildGatewayCronService", () => {
     fetchWithSsrFGuardMock.mockClear();
     sendCronAnnouncePayloadStrictMock.mockClear();
     runCronIsolatedAgentTurnMock.mockClear();
-    cleanupBrowserSessionsForLifecycleEndMock.mockClear();
     runCronChangedMock.mockClear();
     getGlobalHookRunnerMock.mockClear();
     abortAndDrainEmbeddedAgentRunMock.mockClear();
@@ -444,6 +433,90 @@ describe("buildGatewayCronService", () => {
     } finally {
       state.cron.stop();
       vi.unstubAllEnvs();
+    }
+  });
+
+  it("fires an on-exit payload after persisting its terminal disable", async () => {
+    let resolveWait!: (result: {
+      reason: "exit";
+      exitCode: number;
+      exitSignal: null;
+      durationMs: number;
+      stdout: string;
+      stderr: string;
+      timedOut: false;
+      noOutputTimedOut: false;
+    }) => void;
+    const wait = new Promise<Parameters<typeof resolveWait>[0]>((resolve) => {
+      resolveWait = resolve;
+    });
+    const spawn = vi.fn(async () => ({
+      runId: "run-on-exit-fire",
+      startedAtMs: Date.now(),
+      cancel: vi.fn(),
+      wait: () => wait,
+    }));
+    getProcessSupervisorMock.mockReturnValue({ spawn, cancelScope: vi.fn() });
+    const cfg = createCronConfig("server-cron-on-exit-fire");
+    loadConfigMock.mockReturnValue(cfg);
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+
+    try {
+      const job = await state.cron.add({
+        name: "watch and fire",
+        enabled: true,
+        schedule: { kind: "on-exit", command: "true" },
+        payload: { kind: "systemEvent", text: "done" },
+        sessionTarget: "main",
+        wakeMode: "now",
+      });
+      await state.reconcileExitWatchers?.();
+      resolveWait({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 1,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+
+      await vi.waitFor(() => expect(runHeartbeatOnceMock).toHaveBeenCalledOnce());
+      expect(state.cron.getJob(job.id)?.enabled).toBe(false);
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  it("aborts and drains active cron runs during shutdown", async () => {
+    const controller = new AbortController();
+    const coreRun = new Promise<void>((resolve) => {
+      controller.signal.addEventListener("abort", () => resolve(), { once: true });
+    });
+    const release = registerActiveCronTaskRun({ runId: "run-shutdown", controller });
+    const trackedRun = coreRun.finally(() => release?.());
+    trackActiveCronTaskRunSettlement(trackedRun);
+
+    const cfg = createCronConfig("server-cron-active-run-shutdown");
+    loadConfigMock.mockReturnValue(cfg);
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+
+    try {
+      await state.cron.stopAndDrain?.();
+      expect(controller.signal.aborted).toBe(true);
+      await expect(trackedRun).resolves.toBeUndefined();
+    } finally {
+      state.cron.stop();
+      resetActiveCronTaskRunsForTests();
     }
   });
 
@@ -1897,6 +1970,8 @@ describe("buildGatewayCronService", () => {
                 source?: string;
                 intent?: string;
                 heartbeat?: { target?: string };
+                scheduledEveryMs?: number;
+                scheduledAnchorMs?: number;
               }) => void;
             };
           };
@@ -1909,6 +1984,8 @@ describe("buildGatewayCronService", () => {
         reason: "cron:test",
         sessionKey: "discord:channel:ops",
         heartbeat: { target: "last" },
+        scheduledEveryMs: 15 * 60_000,
+        scheduledAnchorMs: 42_000,
       });
 
       expect(requestHeartbeatMock).toHaveBeenCalledWith({
@@ -1918,6 +1995,8 @@ describe("buildGatewayCronService", () => {
         agentId: "main",
         sessionKey: "agent:main:discord:channel:ops",
         heartbeat: { target: "last", to: undefined, accountId: undefined },
+        scheduledEveryMs: 15 * 60_000,
+        scheduledAnchorMs: 42_000,
       });
     } finally {
       state.cron.stop();
@@ -2467,7 +2546,6 @@ describe("buildGatewayCronService", () => {
 
       const options = expectIsolatedRunFields({ sessionKey });
       expect(requireRecord(options.job, "isolated job").id).toBe(job.id);
-      expectCleanupForSessionKeys([sessionKey]);
     } finally {
       state.cron.stop();
     }
@@ -2508,7 +2586,6 @@ describe("buildGatewayCronService", () => {
           return record.sessionKey === "main";
         }),
       ).toBe(false);
-      expectCleanupForSessionKeys([`cron:${job.id}`]);
     } finally {
       state.cron.stop();
     }

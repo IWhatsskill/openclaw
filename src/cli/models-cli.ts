@@ -112,6 +112,17 @@ export function registerModelsCli(program: Command) {
     });
 
   models
+    .command("refresh")
+    .description("Refresh the hosted model catalog")
+    .option("--json", "Output JSON", false)
+    .action(async (opts) => {
+      await withModelsRuntime(async ({ defaultRuntime }) => {
+        const { modelsRefreshCommand } = await import("../commands/models/refresh.js");
+        await modelsRefreshCommand({ json: Boolean(opts.json) }, defaultRuntime);
+      });
+    });
+
+  models
     .command("set")
     .description("Set the default model")
     .argument("<model>", "Model id or alias")
@@ -339,6 +350,27 @@ export function registerModelsCli(program: Command) {
         const agent = resolveModelAgentOption(command) ?? resolveModelAgentOption(auth);
         const { modelsAuthAddCommand } = await loadModelsAuthCommands();
         await modelsAuthAddCommand({ agent }, defaultRuntime);
+      });
+    });
+
+  auth
+    .command("logout")
+    .description("Remove a saved auth profile (see `models auth list` for ids)")
+    .argument("<profileId>", "Auth profile id (e.g. openai:manual)")
+    .option("--agent <id>", "Agent id (default: configured default agent)")
+    .option("--yes", "Skip the confirmation prompt", false)
+    .action(async (profileId: string, opts, command) => {
+      await withModelsRuntime(async ({ defaultRuntime, resolveModelAgentOption }) => {
+        const agent = resolveModelAgentOption(command, opts);
+        const { modelsAuthLogoutCommand } = await import("../commands/models/auth-logout.js");
+        await modelsAuthLogoutCommand(
+          {
+            profileId,
+            agent,
+            yes: Boolean(opts.yes),
+          },
+          defaultRuntime,
+        );
       });
     });
 

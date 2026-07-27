@@ -21,9 +21,9 @@ function createContext(request: ReturnType<typeof vi.fn>) {
   const client = { request } as unknown as GatewayBrowserClient;
   const snapshot: ApplicationGatewaySnapshot = {
     client,
-    connected: true,
+    phase: "connected",
     offlineStable: false,
-    reconnecting: false,
+    canvasPluginSurfaceUrl: null,
     hello: {
       type: "hello-ok",
       protocol: 1,
@@ -56,7 +56,11 @@ function createContext(request: ReturnType<typeof vi.fn>) {
   });
   const context = {
     gateway,
-    agents: { refreshList },
+    agents: {
+      state: { agentsList: { mainKey: "main" } },
+      refreshList,
+    },
+    agentSelection: { state: { selectedId: "main" } },
     basePath: "",
     navigate: vi.fn(),
   } as unknown as ApplicationContext;
@@ -112,7 +116,8 @@ describe("custodian new-agent flow", () => {
     expect(refreshList).toHaveBeenCalledOnce();
     expect(setSessionKey).toHaveBeenCalledWith("agent:researcher:main");
     expect(context.navigate).toHaveBeenCalledWith("chat", {
-      search: "?session=agent%3Aresearcher%3Amain&draft=Wake%20up%2C%20my%20friend!",
+      pathname: "/chat/researcher",
+      search: "?draft=Wake%20up%2C%20my%20friend!",
     });
   });
 });

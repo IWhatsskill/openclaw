@@ -300,6 +300,7 @@ describe("method scope resolution", () => {
       resolveLeastPrivilegeOperatorScopesForMethod("sessions.patch", {
         key: "agent:main:ios-1",
         label: "Trip planning",
+        boardFace: "dashboard",
         icon: "name:spark",
         pinned: true,
         archived: false,
@@ -340,6 +341,31 @@ describe("method scope resolution", () => {
         cwd: "/other/repo",
       }),
     ).toEqual({ allowed: false, missingScope: "operator.admin" });
+  });
+
+  it("requires admin for incognito session creation and inheritance", () => {
+    const incognitoKey = "agent:main:dashboard:incognito-parent";
+    for (const params of [
+      { agentId: "main", incognito: true },
+      { key: incognitoKey },
+      { parentSessionKey: incognitoKey },
+      { parentSessionKey: incognitoKey, fork: true },
+      { parentSessionKey: incognitoKey, spawnDepth: 1 },
+      { parentSessionKey: incognitoKey, succeedsParent: false, emitCommandHooks: true },
+    ]) {
+      expect(resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", params)).toEqual([
+        "operator.admin",
+      ]);
+      expect(
+        authorizeOperatorScopesForMethod("sessions.create", ["operator.write"], params),
+      ).toEqual({ allowed: false, missingScope: "operator.admin" });
+      expect(
+        authorizeOperatorScopesForMethod("sessions.create", ["operator.admin"], params),
+      ).toEqual({ allowed: true });
+    }
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", { incognito: false }),
+    ).toEqual(["operator.write"]);
   });
 
   it("keeps keyed sessions.create model selection at write scope for handler-state checks", () => {
@@ -423,7 +449,10 @@ describe("method scope resolution", () => {
     ["sendPolicy", { key: "agent:main:ios-1", sendPolicy: "deny" }],
     ["inheritedToolAllow", { key: "agent:main:ios-1", inheritedToolAllow: ["exec"] }],
     ["inheritedToolPolicyVersion", { key: "agent:main:ios-1", inheritedToolPolicyVersion: 1 }],
-    ["spawnedBy", { key: "agent:main:ios-1", spawnedBy: "agent:main:main" }],
+    [
+      "completionOwnerSessionKey",
+      { key: "agent:main:ios-1", completionOwnerSessionKey: "agent:main:main" },
+    ],
     ["mixed with safe fields", { key: "agent:main:ios-1", label: "x", execHost: "node-1" }],
     ["unknown fields", { key: "agent:main:ios-1", futureField: true }],
   ])("keeps sessions.patch admin-only when params include %s", (_name, params) => {

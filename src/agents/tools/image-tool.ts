@@ -30,10 +30,10 @@ import {
   type MediaUnderstandingProvider,
 } from "../../plugin-sdk/media-understanding.js";
 import { resolvePluginCapabilityProvider } from "../../plugins/capability-provider-runtime.js";
-import {
-  isManifestPluginAvailableForControlPlane,
-  loadManifestMetadataSnapshot,
-} from "../../plugins/manifest-contract-eligibility.js";
+import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { isManifestPluginAvailableForControlPlane } from "../../plugins/manifest-contract-eligibility.js";
+import { isPluginMetadataSnapshotCompatible } from "../../plugins/plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { resolveUserPath } from "../../utils.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
@@ -68,7 +68,7 @@ import {
   buildTextToolResult,
   REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS,
   resolveMediaToolInboundRoots,
-  resolveMediaToolLocalRoots,
+  resolveMediaToolReferenceAccess,
   resolveRemoteMediaSsrfPolicy,
   resolvePromptAndModelOverride,
 } from "./media-tool-shared.js";
@@ -80,7 +80,6 @@ import {
 } from "./model-config.helpers.js";
 import {
   createSandboxBridgeReadFile,
-  resolveSandboxedBridgeMediaPath,
   runWithImageModelFallback,
   type AnyAgentTool,
   type SandboxedBridgeMediaPathConfig,
@@ -100,6 +99,7 @@ type ImageToolLoadWebMediaOptions = {
   inboundRoots?: readonly string[];
   ssrfPolicy?: ReturnType<typeof resolveRemoteMediaSsrfPolicy>;
   readIdleTimeoutMs?: number;
+  requestInit?: RequestInit;
 };
 
 type ImageWebMediaRuntime = {
@@ -490,6 +490,7 @@ function providerUsesRuntimeModelAugment(params: {
   cfg?: OpenClawConfig;
   provider: string;
   workspaceDir?: string;
+  metadataSnapshot?: PluginMetadataSnapshot;
 }): boolean {
   const provider = normalizeMediaProviderId(params.provider);
   if (!provider) {
@@ -499,11 +500,27 @@ function providerUsesRuntimeModelAugment(params: {
     return true;
   }
   const config = params.cfg ?? {};
-  const snapshot = loadManifestMetadataSnapshot({
-    config,
-    env: process.env,
-    ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
-  });
+  const preparedSnapshot =
+    params.metadataSnapshot &&
+    params.metadataSnapshot.pluginIds === undefined &&
+    isPluginMetadataSnapshotCompatible({
+      snapshot: params.metadataSnapshot,
+      config,
+      env: process.env,
+      workspaceDir: params.workspaceDir,
+    })
+      ? params.metadataSnapshot
+      : undefined;
+  const snapshot =
+    preparedSnapshot ??
+    getCurrentPluginMetadataSnapshot({
+      config,
+      env: process.env,
+      ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+    });
+  if (!snapshot) {
+    return false;
+  }
   return snapshot.plugins.some((plugin) => {
     const ownsProvider =
       plugin.providers.some((candidate) => normalizeMediaProviderId(candidate) === provider) ||
@@ -559,6 +576,7 @@ async function resolveCompressionModelPolicy(params: {
   model: string;
   agentDir?: string;
   workspaceDir?: string;
+  metadataSnapshot?: PluginMetadataSnapshot;
 }): Promise<ImageCompressionModelPolicy> {
   const configuredStaticPolicy = await resolveCompressionModelPolicyWithHooks({
     ...params,
@@ -574,6 +592,7 @@ async function resolveCompressionModelPolicy(params: {
       cfg: params.cfg,
       provider: params.provider,
       workspaceDir: params.workspaceDir,
+      metadataSnapshot: params.metadataSnapshot,
     })
   ) {
     return staticPolicy;
@@ -592,6 +611,7 @@ async function resolveImageCompressionPolicy(params: {
   imageCount: number;
   agentDir?: string;
   workspaceDir?: string;
+  metadataSnapshot?: PluginMetadataSnapshot;
 }): Promise<ImageCompressionPolicy> {
   const modelCandidates = resolveCompressionModelCandidates(params);
   const quality = params.cfg?.agents?.defaults?.imageQuality;
@@ -603,6 +623,7 @@ async function resolveImageCompressionPolicy(params: {
         model: candidate.model,
         agentDir: params.agentDir,
         workspaceDir: params.workspaceDir,
+        metadataSnapshot: params.metadataSnapshot,
       });
     }),
   );
@@ -683,6 +704,7 @@ async function runImagePrompt(params: {
   images: Array<{ buffer: Buffer; mimeType: string }>;
   workspaceDir?: string;
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
+  signal?: AbortSignal;
 }): Promise<{
   text: string;
   provider: string;
@@ -702,6 +724,7 @@ async function runImagePrompt(params: {
   const result = await runWithImageModelFallback({
     cfg: effectiveCfg,
     modelOverride: params.modelOverride,
+    abortSignal: params.signal,
     run: async (provider, modelId) => {
       const timeoutMs = resolveImageToolTimeoutMs({
         cfg: providerCfg,
@@ -719,6 +742,8 @@ async function runImagePrompt(params: {
       ) {
         const describeImages =
           imageProvider?.describeImages ?? imageToolProviderDeps.describeImagesWithModel;
+        // A run cancelled mid-dispatch must not buy another provider call.
+        params.signal?.throwIfAborted();
         const described = await describeImages({
           images: params.images.map((image, index) => ({
             buffer: image.buffer,
@@ -730,6 +755,7 @@ async function runImagePrompt(params: {
           prompt: params.prompt,
           maxTokens: resolveImageToolMaxTokens(undefined),
           timeoutMs,
+          ...(params.signal ? { signal: params.signal } : {}),
           cfg: providerCfg,
           ...(params.agentId ? { agentId: params.agentId } : {}),
           agentDir: params.agentDir,
@@ -748,6 +774,8 @@ async function runImagePrompt(params: {
         if (!image) {
           throw new Error("Image input disappeared during model execution");
         }
+        // A run cancelled mid-dispatch must not buy another provider call.
+        params.signal?.throwIfAborted();
         const described = await describeImage({
           buffer: image.buffer,
           fileName: "image-1",
@@ -757,6 +785,7 @@ async function runImagePrompt(params: {
           prompt: params.prompt,
           maxTokens: resolveImageToolMaxTokens(undefined),
           timeoutMs,
+          ...(params.signal ? { signal: params.signal } : {}),
           cfg: providerCfg,
           ...(params.agentId ? { agentId: params.agentId } : {}),
           agentDir: params.agentDir,
@@ -771,6 +800,8 @@ async function runImagePrompt(params: {
 
       const parts: string[] = [];
       for (const [index, image] of params.images.entries()) {
+        // A run cancelled mid-dispatch must not buy another provider call.
+        params.signal?.throwIfAborted();
         const described = await describeImage({
           buffer: image.buffer,
           fileName: `image-${index + 1}`,
@@ -780,6 +811,7 @@ async function runImagePrompt(params: {
           prompt: `${params.prompt}\n\nDescribe image ${index + 1} of ${params.images.length}.`,
           maxTokens: resolveImageToolMaxTokens(undefined),
           timeoutMs,
+          ...(params.signal ? { signal: params.signal } : {}),
           cfg: providerCfg,
           ...(params.agentId ? { agentId: params.agentId } : {}),
           agentDir: params.agentDir,
@@ -886,7 +918,7 @@ export function createImageTool(options?: {
       maxBytesMb: optionalFiniteNumberSchema({ exclusiveMinimum: 0 }),
       maxImages: optionalPositiveIntegerSchema(),
     }),
-    execute: async (_toolCallId, args) => {
+    execute: async (_toolCallId, args, signal) => {
       const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
 
       // MARK: - Normalize image + images input and dedupe while preserving order
@@ -974,6 +1006,7 @@ export function createImageTool(options?: {
           imageCount: imageInputs.length,
           agentDir,
           workspaceDir: options?.workspaceDir,
+          metadataSnapshot: options?.preparedModelRuntime?.metadataSnapshot,
         });
         imageRoute = { kind: "fallback", imageModelConfig, imageCompression };
       }
@@ -992,6 +1025,9 @@ export function createImageTool(options?: {
       const loadedImages: LoadedImageForTool[] = [];
 
       for (const imageRawInput of imageInputs) {
+        // Stop before starting the next sequential download/decode when the run
+        // was aborted, so a dead run cannot keep pulling up to maxImages remote images.
+        signal?.throwIfAborted();
         const trimmed = imageRawInput.trim();
         const imageRaw = trimmed.startsWith("@") ? trimmed.slice(1).trim() : trimmed;
         if (!imageRaw) {
@@ -1049,30 +1085,22 @@ export function createImageTool(options?: {
           }
           return normalizedRef;
         })();
-        const resolvedPathInfo: { resolved: string; rewrittenFrom?: string } = isDataUrl
-          ? { resolved: "" }
-          : sandboxConfig
-            ? await resolveSandboxedBridgeMediaPath({
-                sandbox: sandboxConfig,
-                mediaPath: resolvedImage,
-                inboundFallbackDir: "media/inbound",
-              })
-            : {
-                resolved: resolvedImage.startsWith("file://")
-                  ? resolvedImage.slice("file://".length)
-                  : resolvedImage,
-              };
-        const resolvedPath = isDataUrl ? null : resolvedPathInfo.resolved;
-        const mediaLocalRoots = resolveMediaToolLocalRoots(
-          options?.workspaceDir,
-          {
+        const {
+          resolvedPath,
+          localRoots: mediaLocalRoots,
+          rewrittenFrom,
+        } = await resolveMediaToolReferenceAccess({
+          input: resolvedImage,
+          isDataUrl,
+          workspaceDir: options?.workspaceDir,
+          sandbox: sandboxConfig,
+          rootOptions: {
             workspaceOnly: options?.fsPolicy?.workspaceOnly === true,
             cfg: options?.config,
             channelId: options?.agentChannel ?? options?.currentChannelId,
             accountId: options?.agentAccountId,
           },
-          resolvedPath ? [resolvedPath] : undefined,
-        );
+        });
         const mediaInboundRoots = resolveMediaToolInboundRoots({
           workspaceOnly: options?.fsPolicy?.workspaceOnly === true,
           cfg: options?.config,
@@ -1104,6 +1132,9 @@ export function createImageTool(options?: {
                 inboundRoots: mediaInboundRoots,
                 ssrfPolicy: remoteMediaSsrfPolicy,
                 ...(isHttpUrl ? { readIdleTimeoutMs: REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS } : {}),
+                // Forward the run abort signal into the fetch layer so an abort
+                // mid-download disconnects the in-flight socket.
+                ...(signal ? { requestInit: { signal } } : {}),
                 imageCompression,
               });
         if (media.kind !== "image") {
@@ -1121,9 +1152,7 @@ export function createImageTool(options?: {
           buffer: media.buffer,
           mimeType,
           resolvedImage,
-          ...(resolvedPathInfo.rewrittenFrom
-            ? { rewrittenFrom: resolvedPathInfo.rewrittenFrom }
-            : {}),
+          ...(rewrittenFrom ? { rewrittenFrom } : {}),
         });
       }
 
@@ -1131,8 +1160,11 @@ export function createImageTool(options?: {
         return await buildNativeImageToolResult(loadedImages, options?.config);
       }
 
+      // Do not issue a paid vision-provider call for an already-aborted run.
+      signal?.throwIfAborted();
       // Text-only runs delegate image understanding to the configured fallback model.
       const result = await runImagePrompt({
+        signal,
         cfg: options?.config,
         agentId: options?.agentId,
         agentDir,
