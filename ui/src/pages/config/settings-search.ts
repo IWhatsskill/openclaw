@@ -29,6 +29,7 @@ import {
 import {
   APPEARANCE_SETTINGS_TARGET_IDS,
   COMMUNICATION_SETTINGS_TARGET_IDS,
+  CONNECTION_SETTINGS_TARGET_IDS,
   GENERAL_SETTINGS_TARGET_IDS,
   PROFILE_SETTINGS_TARGET_IDS,
 } from "./settings-targets.ts";
@@ -81,9 +82,9 @@ const GENERAL_SETTINGS_BLOCKS = {
     ],
   },
   system: {
-    routeId: "config",
+    routeId: "connection",
     labelKey: "quickSettings.system.gatewayHost",
-    hash: `#${GENERAL_SETTINGS_TARGET_IDS.system}`,
+    hash: `#${CONNECTION_SETTINGS_TARGET_IDS.host}`,
     searchKeys: [
       "quickSettings.system.cpu",
       "quickSettings.system.memory",
@@ -137,12 +138,32 @@ const APPEARANCE_SETTINGS_BLOCKS = {
     ],
     aliases: "scale",
   },
+  sidebar: {
+    routeId: "appearance",
+    labelKey: "configView.sidebarPrefs.title",
+    search: "?section=__appearance__",
+    hash: `#${APPEARANCE_SETTINGS_TARGET_IDS.sidebar}`,
+    searchKeys: [
+      "configView.sidebarPrefs.hint",
+      "configView.sidebarPrefs.liveActivity",
+      "configView.sidebarPrefs.liveActivityHint",
+      "configView.sessionObserver.title",
+      "configView.sessionObserver.hint",
+      "configView.sessionObserver.toggle",
+      "configView.sessionObserver.toggleHint",
+      "configView.sessionObserver.resolvedModel",
+      "configView.sessionObserver.modelPicker",
+      "configView.sessionObserver.modelPickerHint",
+    ],
+  },
   chat: {
     routeId: "appearance",
     labelKey: "configView.chatPrefs.title",
     search: "?section=__appearance__",
     hash: `#${APPEARANCE_SETTINGS_TARGET_IDS.chat}`,
     searchKeys: [
+      "configView.chatPrefs.messageWidth",
+      "configView.chatPrefs.messageWidthHint",
       "chat.sendShortcut",
       "chat.sendShortcutEnter",
       "chat.sendShortcutModifierEnter",
@@ -157,11 +178,15 @@ const APPEARANCE_SETTINGS_BLOCKS = {
       "chat.catalogOpenTarget",
       "chat.catalogOpenTargetViewer",
       "chat.catalogOpenTargetTerminal",
+      "chat.composer.cameraInput",
+      "chat.composer.systemDefaultCamera",
       "chat.composer.microphoneInput",
       "chat.composer.systemDefaultMicrophone",
+      "chat.composer.holdToRecordSetting",
+      "chat.composer.holdToRecordSettingDescription",
     ],
     aliases:
-      "keyboard enter follow-up followup steer queue microphone voice audio input codex claude terminal viewer",
+      "keyboard enter follow-up followup steer queue microphone voice audio input codex claude terminal viewer camera dictation dictate width",
   },
   connection: {
     routeId: "appearance",
