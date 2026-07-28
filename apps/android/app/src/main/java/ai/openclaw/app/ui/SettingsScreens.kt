@@ -6,8 +6,6 @@ import ai.openclaw.app.AppearanceThemeMode
 import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.CronEditorDraftState
 import ai.openclaw.app.GatewayAgentSummary
-import ai.openclaw.app.GatewayConnectionDisplay
-import ai.openclaw.app.GatewayConnectionProblem
 import ai.openclaw.app.GatewayCronActionState
 import ai.openclaw.app.GatewayCronJobDetail
 import ai.openclaw.app.GatewayCronJobDetailState

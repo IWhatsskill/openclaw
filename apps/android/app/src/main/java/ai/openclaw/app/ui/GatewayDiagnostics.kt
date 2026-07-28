@@ -50,8 +50,7 @@ internal fun gatewayStatusLabel(
   }
 }
 
-internal fun gatewayStatusLabel(display: GatewayConnectionDisplay): String =
-  gatewayStatusLabel(display.statusText, display.isConnected, display.problem)
+internal fun gatewayStatusLabel(display: GatewayConnectionDisplay): String = gatewayStatusLabel(display.statusText, display.isConnected, display.problem)
 
 /** Resolves the best non-secret endpoint label available to diagnostics surfaces. */
 internal fun gatewayDiagnosticsEndpoint(
