@@ -1934,6 +1934,80 @@ describe("memory index", () => {
     }
   });
 
+  it("clears retained queued targets when close interrupts a competing sync", async () => {
+    const manager = await getFreshManager(
+      createCfg({
+        provider: "none",
+        sources: ["sessions"],
+        sessionMemory: true,
+      }),
+    );
+    let resolveFullSync: (() => void) | undefined;
+    const fullSyncGate = new Promise<void>((resolve) => {
+      resolveFullSync = resolve;
+    });
+    const owner = manager as unknown as {
+      closing: boolean;
+      closed: boolean;
+      queuedSessions: Map<string, MemorySessionSyncTarget>;
+      queuedProgressCallbacks: Set<NonNullable<MemorySyncParams["progress"]>>;
+      queuedForce: boolean;
+      syncAdmitted: (params?: MemorySyncParams) => Promise<void>;
+      runSyncWithReadonlyRecovery: (params?: MemorySyncParams) => Promise<void>;
+    };
+    const syncAdmitted = vi.spyOn(owner, "syncAdmitted");
+    const runSyncWithReadonlyRecovery = vi
+      .spyOn(owner, "runSyncWithReadonlyRecovery")
+      .mockReturnValueOnce(fullSyncGate);
+    const progress = vi.fn();
+    owner.queuedSessions.set("retained", {
+      agentId: "main",
+      sessionId: "retained-close",
+      sessionKey: "agent:main:retained-close",
+    });
+
+    try {
+      const recovery = manager.sync({
+        reason: "test-close-recovery",
+        sessions: [
+          {
+            agentId: "main",
+            sessionId: "trigger-close",
+            sessionKey: "agent:main:trigger-close",
+          },
+        ],
+        force: true,
+        progress,
+      });
+      const competingFullSync = manager.sync({ reason: "test-close-competing-full-sync" });
+
+      await vi.waitFor(() => {
+        expect(syncAdmitted).toHaveBeenCalledTimes(2);
+      });
+      const closing = manager.close?.() ?? Promise.resolve();
+      expect(owner.closing).toBe(true);
+      resolveFullSync?.();
+
+      await expect(Promise.all([recovery, competingFullSync, closing])).resolves.toEqual([
+        undefined,
+        undefined,
+        undefined,
+      ]);
+      expect(runSyncWithReadonlyRecovery).toHaveBeenCalledTimes(1);
+      expect(syncAdmitted).toHaveBeenCalledTimes(2);
+      expect(owner.closed).toBe(true);
+      expect(owner.queuedSessions.size).toBe(0);
+      expect(owner.queuedProgressCallbacks.size).toBe(0);
+      expect(owner.queuedForce).toBe(false);
+      expect(progress).not.toHaveBeenCalled();
+    } finally {
+      resolveFullSync?.();
+      await manager.close?.();
+      runSyncWithReadonlyRecovery.mockRestore();
+      syncAdmitted.mockRestore();
+    }
+  });
+
   it("keeps provider cutover vector search paused during targeted session sync", async () => {
     try {
       setMemoryIndexStateDir(path.join(workspaceDir, ".state-targeted-cutover"));

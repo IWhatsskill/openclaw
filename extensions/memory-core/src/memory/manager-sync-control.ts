@@ -207,6 +207,14 @@ export function enqueueMemoryTargetedSessionSync(
             }
           }
         } finally {
+          if (state.isClosed()) {
+            // A closed manager cannot drain retained work. Release every
+            // manager-owned target and caller closure with the queue owner.
+            state.getQueuedArchiveFiles().clear();
+            state.getQueuedSessions().clear();
+            state.setQueuedForce(false);
+            state.getQueuedProgressCallbacks().clear();
+          }
           state.setQueuedSessionSync(null);
         }
       })(),

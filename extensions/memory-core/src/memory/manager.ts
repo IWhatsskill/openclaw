@@ -1935,6 +1935,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
           // created. Wait for it, then retry admission instead of enqueueing
           // into the promise that is already awaiting this call.
           await this.syncing.catch(() => undefined);
+          if (this.closing || this.closed) {
+            return;
+          }
           return await this.syncAdmitted(params, options);
         }
         return this.enqueueTargetedSessionSync(params);
@@ -2032,7 +2035,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   ): Promise<void> {
     return enqueueMemoryTargetedSessionSync(
       {
-        isClosed: () => this.closed,
+        isClosed: () => this.closing || this.closed,
         getSyncing: () => this.syncing,
         getQueuedArchiveFiles: () => this.queuedArchiveFiles,
         getQueuedSessions: () => this.queuedSessions,

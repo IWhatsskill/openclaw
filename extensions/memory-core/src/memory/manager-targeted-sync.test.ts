@@ -212,4 +212,54 @@ describe("memory targeted session sync", () => {
     expect(queuedSessionSync).toBeNull();
     expect(queuedForce).toBe(false);
   });
+
+  it("clears queued state when the manager closes while the queue waits", async () => {
+    let resolveSyncing: (() => void) | undefined;
+    const syncing = new Promise<void>((resolve) => {
+      resolveSyncing = resolve;
+    });
+    let closed = false;
+    const queuedArchiveFiles = new Set(["/tmp/close-retained.jsonl"]);
+    const queuedSessions = new Map<string, MemorySessionSyncTarget>();
+    let queuedForce = false;
+    const queuedProgressCallbacks = new Set<NonNullable<MemorySyncParams["progress"]>>();
+    let queuedSessionSync: Promise<void> | null = null;
+    const sync = vi.fn(async () => undefined);
+    const progress = vi.fn();
+
+    const queued = enqueueMemoryTargetedSessionSync(
+      {
+        isClosed: () => closed,
+        getSyncing: () => syncing,
+        getQueuedArchiveFiles: () => queuedArchiveFiles,
+        getQueuedSessions: () => queuedSessions,
+        getQueuedForce: () => queuedForce,
+        setQueuedForce: (value) => {
+          queuedForce = value;
+        },
+        getQueuedProgressCallbacks: () => queuedProgressCallbacks,
+        getQueuedSessionSync: () => queuedSessionSync,
+        setQueuedSessionSync: (value) => {
+          queuedSessionSync = value;
+        },
+        sync,
+      },
+      {
+        sessions: [{ agentId: "main", sessionId: "close", sessionKey: "agent:main:close" }],
+        force: true,
+        progress,
+      },
+    );
+
+    closed = true;
+    resolveSyncing?.();
+    await queued;
+
+    expect(sync).not.toHaveBeenCalled();
+    expect(queuedArchiveFiles.size).toBe(0);
+    expect(queuedSessions.size).toBe(0);
+    expect(queuedProgressCallbacks.size).toBe(0);
+    expect(queuedForce).toBe(false);
+    expect(queuedSessionSync).toBeNull();
+  });
 });

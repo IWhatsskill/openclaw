@@ -1,0 +1,265 @@
+import { execFileSync } from "node:child_process";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
+import {
+  closeAllMemorySearchManagers,
+  getMemorySearchManager,
+} from "../extensions/memory-core/src/memory/index.ts";
+
+const proofRoot = process.argv[2];
+const exactHead = process.argv[3];
+if (!proofRoot || !exactHead?.match(/^[0-9a-f]{40}$/)) {
+  throw new Error("proof root and exact 40-character head are required");
+}
+const observedHead = execFileSync("git", ["rev-parse", "HEAD"], {
+  encoding: "utf8",
+}).trim();
+if (observedHead !== exactHead) {
+  throw new Error(`exact head mismatch: expected ${exactHead}, observed ${observedHead}`);
+}
+const dirtyState = execFileSync("git", ["status", "--porcelain"], {
+  encoding: "utf8",
+}).trim();
+if (dirtyState) {
+  throw new Error("the production repro requires a clean exact-head worktree");
+}
+
+const agentId = "main";
+const stateDir = path.join(proofRoot, "state");
+const workspaceDir = path.join(proofRoot, "workspace");
+const markers = {
+  blocker: "BLOCKER_LOCKED_SYNC_729",
+  retained: "RETAINED_RETRY_TARGET_729",
+  trigger: "CONCURRENT_TRIGGER_TARGET_729",
+};
+
+Reflect.set(process.env, "OPENCLAW_STATE_DIR", stateDir);
+await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "# Proof workspace\n");
+
+const cfg: OpenClawConfig = {
+  memory: {
+    search: {
+      provider: "none",
+      sources: ["sessions"],
+      rememberAcrossConversations: true,
+      store: { vector: { enabled: false } },
+      query: { minScore: 0 },
+    },
+  },
+  agents: {
+    defaults: { workspace: workspaceDir },
+    list: [{ id: agentId, default: true }],
+  },
+};
+
+async function seedSession(sessionId: string, marker: string): Promise<string> {
+  const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId);
+  const storePath = path.join(sessionsDir, "sessions.json");
+  const sessionKey = `agent:${agentId}:proof:${sessionId}`;
+  await fs.mkdir(sessionsDir, { recursive: true });
+  await upsertSessionEntry({
+    agentId,
+    sessionKey,
+    storePath,
+    entry: { sessionId, updatedAt: Date.now() },
+  });
+  await appendSessionTranscriptMessageByIdentity({
+    agentId,
+    sessionId,
+    sessionKey,
+    storePath,
+    message: {
+      role: "user",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: marker }],
+    },
+  });
+  return sessionKey;
+}
+
+function openExclusiveLock(dbPath: string): DatabaseSync {
+  const db = new DatabaseSync(dbPath);
+  db.exec("PRAGMA busy_timeout = 0");
+  db.exec("BEGIN EXCLUSIVE");
+  return db;
+}
+
+function releaseExclusiveLock(db: DatabaseSync | null): void {
+  if (!db) {
+    return;
+  }
+  try {
+    db.exec("ROLLBACK");
+  } finally {
+    db.close();
+  }
+}
+
+function describeSqliteFailure(failure: unknown): string {
+  const details = [String(failure)];
+  if (failure && typeof failure === "object") {
+    const record = failure as Record<string, unknown>;
+    for (const key of ["message", "code"] as const) {
+      if (typeof record[key] === "string") {
+        details.push(record[key]);
+      }
+    }
+    if (record.cause && typeof record.cause === "object") {
+      const cause = record.cause as Record<string, unknown>;
+      for (const key of ["message", "code"] as const) {
+        if (typeof cause[key] === "string") {
+          details.push(cause[key]);
+        }
+      }
+    }
+  }
+  return details.join(" ");
+}
+
+function isSqliteLockFailure(failure: unknown): boolean {
+  return /SQLITE_(?:BUSY|LOCKED)|database is (?:busy|locked)/i.test(describeSqliteFailure(failure));
+}
+
+let lock: DatabaseSync | null = null;
+try {
+  const result = await getMemorySearchManager({ cfg, agentId });
+  if (!result.manager) {
+    throw new Error(`memory manager unavailable: ${result.failureReason ?? "unknown"}`);
+  }
+  const manager = result.manager;
+  await manager.sync({ reason: "proof-baseline", force: true });
+
+  const blockerKey = await seedSession("proof-blocker", markers.blocker);
+  const retainedKey = await seedSession("proof-retained", markers.retained);
+  const triggerKey = await seedSession("proof-trigger", markers.trigger);
+  const dbPath = resolveOpenClawAgentSqlitePath({ agentId });
+
+  lock = openExclusiveLock(dbPath);
+  const blockedOwner = manager.sync({
+    reason: "proof-locked-owner",
+    sessions: [{ agentId, sessionId: "proof-blocker", sessionKey: blockerKey }],
+  });
+  const failedQueued = manager.sync({
+    reason: "proof-queued-retained",
+    sessions: [{ agentId, sessionId: "proof-retained", sessionKey: retainedKey }],
+  });
+  const failures = await Promise.allSettled([blockedOwner, failedQueued]);
+  const lockedSyncFailures = failures.filter((entry) => entry.status === "rejected").length;
+  const sqliteLockFailures = failures.filter(
+    (entry) => entry.status === "rejected" && isSqliteLockFailure(entry.reason),
+  ).length;
+  releaseExclusiveLock(lock);
+  lock = null;
+  if (lockedSyncFailures !== 2) {
+    throw new Error(`expected two locked sync failures, received ${lockedSyncFailures}`);
+  }
+  if (sqliteLockFailures !== 2) {
+    throw new Error(`expected two SQLite lock failures, received ${sqliteLockFailures}`);
+  }
+
+  const observer = new DatabaseSync(dbPath, { readOnly: true });
+  const retainedBefore =
+    (
+      observer
+        .prepare("SELECT COUNT(*) AS count FROM memory_index_chunks WHERE text LIKE ?")
+        .get(`%${markers.retained}%`) as { count: number }
+    ).count > 0;
+  const triggerBefore =
+    (
+      observer
+        .prepare("SELECT COUNT(*) AS count FROM memory_index_chunks WHERE text LIKE ?")
+        .get(`%${markers.trigger}%`) as { count: number }
+    ).count > 0;
+  observer.close();
+  if (retainedBefore || triggerBefore) {
+    throw new Error("a recovery target was unexpectedly indexed before the idle trigger");
+  }
+
+  const recoveryState = manager as unknown as {
+    syncing: Promise<void> | null;
+    queuedSessions: Map<string, unknown>;
+    sessionsDirtyFiles: Set<string>;
+    sessionsFullRetryDirty: boolean;
+  };
+  const retainedQueueBeforeRecovery = recoveryState.queuedSessions.size;
+  const dirtySessionFilesBeforeRecovery = recoveryState.sessionsDirtyFiles.size;
+  const fullRetryBeforeRecovery = recoveryState.sessionsFullRetryDirty;
+  if (recoveryState.syncing !== null || retainedQueueBeforeRecovery !== 1) {
+    throw new Error("manager was not idle with exactly one retained target");
+  }
+
+  const recoveryProgress: Array<{ completed: number; total: number; label?: string }> = [];
+  const recovery = manager.sync({
+    reason: "proof-idle-recovery-trigger",
+    sessions: [{ agentId, sessionId: "proof-trigger", sessionKey: triggerKey }],
+    progress: (update) => recoveryProgress.push(update),
+  });
+  // Claim the ordinary sync slot before the retained queue owner resumes.
+  // This is the production scheduling sequence that previously made the
+  // queue owner await its own queuedSessionSync promise.
+  const competingFullSync = manager.sync({ reason: "proof-competing-full-sync" });
+  const competingSyncClaimedSlot = recoveryState.syncing !== null;
+  if (!competingSyncClaimedSlot) {
+    throw new Error("competing full sync did not claim the production sync slot");
+  }
+  const recoveryResults = await Promise.allSettled([recovery, competingFullSync]);
+  const recoveryStatus = recoveryResults[0]?.status;
+  const competingFullSyncStatus = recoveryResults[1]?.status;
+  if (recoveryStatus !== "fulfilled" || competingFullSyncStatus !== "fulfilled") {
+    throw new Error(
+      `concurrent recovery did not settle: recovery=${String(recoveryStatus)} full=${String(
+        competingFullSyncStatus,
+      )}`,
+    );
+  }
+
+  const recoveryObserver = new DatabaseSync(dbPath, { readOnly: true });
+  const indexedCount = (marker: string) =>
+    (
+      recoveryObserver
+        .prepare("SELECT COUNT(*) AS count FROM memory_index_chunks WHERE text LIKE ?")
+        .get(`%${marker}%`) as { count: number }
+    ).count;
+  const retainedAfter = indexedCount(markers.retained) > 0;
+  const triggerAfter = indexedCount(markers.trigger) > 0;
+  recoveryObserver.close();
+  if (!retainedAfter || !triggerAfter) {
+    throw new Error(
+      `recovery result mismatch: retained=${String(retainedAfter)} trigger=${String(triggerAfter)}`,
+    );
+  }
+  if (recoveryProgress.length === 0) {
+    throw new Error("idle recovery trigger did not receive progress");
+  }
+
+  console.log(`exact_head=${exactHead}`);
+  console.log("test_runner=none");
+  console.log("entrypoint=MemoryIndexManager.sync");
+  console.log("owners=memory-manager,session-store,sqlite");
+  console.log(`locked_sync_failures=${lockedSyncFailures}`);
+  console.log("locked_sync_failure_kind=sqlite-busy");
+  console.log("recovery_manager_state=idle");
+  console.log("recovery_input_sessions=proof-trigger");
+  console.log(`recovery_progress_updates=${recoveryProgress.length}`);
+  console.log(`competing_full_sync_claimed_slot=${String(competingSyncClaimedSlot)}`);
+  console.log(`recovery_sync_status=${recoveryStatus}`);
+  console.log(`competing_full_sync_status=${competingFullSyncStatus}`);
+  console.log(`retained_queue_before_recovery=${retainedQueueBeforeRecovery}`);
+  console.log(`sessions_dirty_files_before_recovery=${dirtySessionFilesBeforeRecovery}`);
+  console.log(`sessions_full_retry_dirty_before_recovery=${String(fullRetryBeforeRecovery)}`);
+  console.log("retained_target_before_recovery=absent");
+  console.log("retained_target_after_recovery=indexed");
+  console.log("idle_trigger_after_recovery=indexed");
+  console.log(`retained_queue_after_recovery=${recoveryState.queuedSessions.size}`);
+  console.log("verdict=pass");
+} finally {
+  releaseExclusiveLock(lock);
+  await closeAllMemorySearchManagers();
+}
