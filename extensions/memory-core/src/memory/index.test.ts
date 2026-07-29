@@ -1862,7 +1862,13 @@ describe("memory index", () => {
     }
   });
 
-  it("routes transition-window calls into retained queued targets", async () => {
+  it("drains retained queued targets from a live rejection transition", async () => {
+    const markers = {
+      retained: "LIVE REJECTION RETAINED TARGET 729",
+      transition: "LIVE REJECTION TRANSITION TARGET 729",
+      trigger: "LIVE REJECTION RECOVERY TARGET 729",
+    };
+    const sessionKey = (sessionId: string) => `agent:main:live-rejection:${sessionId}`;
     const manager = await getFreshManager(
       createCfg({
         provider: "none",
@@ -1870,67 +1876,177 @@ describe("memory index", () => {
         sessionMemory: true,
       }),
     );
-    let resolveQueueOwner: (() => void) | undefined;
-    const queueOwner = new Promise<void>((resolve) => {
-      resolveQueueOwner = resolve;
+    let resolveActiveSync: (() => void) | undefined;
+    const activeSyncGate = new Promise<void>((resolve) => {
+      resolveActiveSync = resolve;
+    });
+    let rejectQueuedSync: ((error: Error) => void) | undefined;
+    const queuedSyncGate = new Promise<void>((_resolve, reject) => {
+      rejectQueuedSync = reject;
     });
     const owner = manager as unknown as {
       syncing: Promise<void> | null;
-      queuedArchiveFiles: Set<string>;
       queuedSessions: Map<string, MemorySessionSyncTarget>;
-      queuedProgressCallbacks: Set<NonNullable<MemorySyncParams["progress"]>>;
       queuedSessionSync: Promise<void> | null;
-      syncAdmitted: (params?: MemorySyncParams) => Promise<void>;
+      runSyncWithReadonlyRecovery: (params?: MemorySyncParams) => Promise<void>;
     };
-    const syncAdmitted = vi.spyOn(owner, "syncAdmitted").mockResolvedValue(undefined);
-    const progress = vi.fn();
+    const runSyncWithReadonlyRecovery = owner.runSyncWithReadonlyRecovery.bind(owner);
+    const runSync = vi
+      .spyOn(owner, "runSyncWithReadonlyRecovery")
+      .mockImplementationOnce(async (params) => await runSyncWithReadonlyRecovery(params))
+      .mockImplementationOnce(async () => await activeSyncGate)
+      .mockImplementationOnce(async () => await queuedSyncGate)
+      .mockImplementation(async (params) => await runSyncWithReadonlyRecovery(params));
+    const queuedError = new Error("controlled queued rejection");
     try {
-      // Model the microtask window after the inner sync promise clears
-      // `syncing` but before the queue owner restores its failed snapshot.
-      owner.syncing = null;
-      owner.queuedArchiveFiles.clear();
-      owner.queuedSessions.clear();
-      owner.queuedProgressCallbacks.clear();
-      owner.queuedSessionSync = queueOwner;
+      await manager.sync({ reason: "test-live-rejection-baseline", force: true });
+      for (const [sessionId, marker] of Object.entries(markers)) {
+        await seedMemoryIndexSessionTranscript({
+          sessionId,
+          sessionKey: sessionKey(sessionId),
+          messages: [
+            {
+              role: "user",
+              timestamp: Date.now(),
+              content: marker,
+            },
+          ],
+        });
+      }
 
-      const transitionCall = manager.sync({
-        reason: "test-transition-window",
+      const active = manager.sync({
+        reason: "test-live-rejection-owner",
         sessions: [
           {
             agentId: "main",
-            sessionId: "transition",
-            sessionKey: "agent:main:transition",
+            sessionId: "active",
+            sessionKey: sessionKey("active"),
           },
         ],
-        progress,
+      });
+      const queuedProgress = vi.fn();
+      const failedQueued = manager.sync({
+        reason: "test-live-rejection-queued",
+        sessions: [
+          {
+            agentId: "main",
+            sessionId: "retained",
+            sessionKey: sessionKey("retained"),
+          },
+        ],
+        force: true,
+        progress: queuedProgress,
+      });
+      const failuresPromise = Promise.allSettled([active, failedQueued]);
+      resolveActiveSync?.();
+      await vi.waitFor(() => {
+        expect(runSync).toHaveBeenCalledTimes(3);
+        expect(owner.syncing).not.toBeNull();
+        expect(owner.queuedSessionSync).not.toBeNull();
+      });
+      const rejectingQueuedSync = owner.syncing;
+      if (!rejectingQueuedSync) {
+        throw new Error("expected a live queued sync");
+      }
+
+      let resolveTransitionResult!: (result: PromiseSettledResult<void>) => void;
+      const transitionResult = new Promise<PromiseSettledResult<void>>((resolve) => {
+        resolveTransitionResult = resolve;
+      });
+      let transitionState:
+        | { syncingNull: boolean; queueOwnerLive: boolean; queuedTargets: number }
+        | undefined;
+      const transitionProgress = vi.fn();
+      void rejectingQueuedSync.catch(() => {
+        transitionState = {
+          syncingNull: owner.syncing === null,
+          queueOwnerLive: owner.queuedSessionSync !== null,
+          queuedTargets: owner.queuedSessions.size,
+        };
+        const transitionCall = manager.sync({
+          reason: "test-live-rejection-transition",
+          sessions: [
+            {
+              agentId: "main",
+              sessionId: "transition",
+              sessionKey: sessionKey("transition"),
+            },
+          ],
+          progress: transitionProgress,
+        });
+        void transitionCall.then(
+          (value) => resolveTransitionResult({ status: "fulfilled", value }),
+          (reason) => resolveTransitionResult({ status: "rejected", reason }),
+        );
       });
 
-      expect(syncAdmitted).not.toHaveBeenCalled();
+      rejectQueuedSync?.(queuedError);
+      const failures = await failuresPromise;
+      const transitionFailure = await transitionResult;
+      expect(failures[0]?.status).toBe("fulfilled");
+      expect(failures[1]?.status).toBe("rejected");
+      expect(transitionFailure.status).toBe("rejected");
+      if (failures[1]?.status !== "rejected" || transitionFailure.status !== "rejected") {
+        throw new Error("expected shared queued rejection");
+      }
+      expect(failures[1].reason).toBe(queuedError);
+      expect(transitionFailure.reason).toBe(queuedError);
+      expect(transitionState).toEqual({
+        syncingNull: true,
+        queueOwnerLive: true,
+        queuedTargets: 0,
+      });
       expect(Array.from(owner.queuedSessions.values())).toEqual([
         {
           agentId: "main",
           sessionId: "transition",
-          sessionKey: "agent:main:transition",
+          sessionKey: sessionKey("transition"),
+        },
+        {
+          agentId: "main",
+          sessionId: "retained",
+          sessionKey: sessionKey("retained"),
         },
       ]);
-      expect(owner.queuedProgressCallbacks.has(progress)).toBe(true);
+      expect(queuedProgress).not.toHaveBeenCalled();
+      expect(transitionProgress).not.toHaveBeenCalled();
 
-      owner.queuedSessions.set("restored", {
-        agentId: "main",
-        sessionId: "retained",
-        sessionKey: "agent:main:retained",
+      const recoveryProgress = vi.fn();
+      await manager.sync({
+        reason: "test-live-rejection-recovery",
+        sessions: [
+          {
+            agentId: "main",
+            sessionId: "trigger",
+            sessionKey: sessionKey("trigger"),
+          },
+        ],
+        progress: recoveryProgress,
       });
-      resolveQueueOwner?.();
-      await transitionCall;
 
-      expect(Array.from(owner.queuedSessions.values())).toHaveLength(2);
+      const dbPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+      const observer = new DatabaseSync(dbPath, { readOnly: true });
+      try {
+        const indexedCount = (marker: string) =>
+          (
+            observer
+              .prepare("SELECT COUNT(*) AS count FROM memory_index_chunks WHERE text LIKE ?")
+              .get(`%${marker}%`) as { count: number }
+          ).count;
+        expect(indexedCount(markers.retained)).toBeGreaterThan(0);
+        expect(indexedCount(markers.transition)).toBeGreaterThan(0);
+        expect(indexedCount(markers.trigger)).toBeGreaterThan(0);
+      } finally {
+        observer.close();
+      }
+      expect(owner.queuedSessions.size).toBe(0);
+      expect(recoveryProgress).toHaveBeenCalled();
+      expect(transitionProgress).not.toHaveBeenCalled();
     } finally {
-      resolveQueueOwner?.();
-      owner.queuedSessionSync = null;
-      owner.queuedSessions.clear();
-      owner.queuedProgressCallbacks.clear();
-      syncAdmitted.mockRestore();
+      resolveActiveSync?.();
+      rejectQueuedSync?.(queuedError);
       await manager.close?.();
+      runSync.mockRestore();
     }
   });
 

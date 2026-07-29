@@ -201,26 +201,27 @@ try {
     sessions: [{ agentId, sessionId: "proof-trigger", sessionKey: triggerKey }],
     progress: (update) => recoveryProgress.push(update),
   });
-  // Start an untargeted full sync before the retained queue owner resumes.
+  // Start an untargeted sync before the retained queue owner resumes.
   // Its distinct public progress callback proves that this call, rather than
-  // an implementation token, owned and executed the competing full scan.
-  const competingFullSyncProgress: Array<{ completed: number; total: number; label?: string }> = [];
-  const competingFullSync = manager.sync({
-    reason: "proof-competing-full-sync",
-    progress: (update) => competingFullSyncProgress.push(update),
+  // an implementation token, reached competing production admission.
+  const competingUntargetedProgress: Array<{ completed: number; total: number; label?: string }> =
+    [];
+  const competingUntargetedSync = manager.sync({
+    reason: "proof-competing-untargeted-sync",
+    progress: (update) => competingUntargetedProgress.push(update),
   });
-  const recoveryResults = await Promise.allSettled([recovery, competingFullSync]);
+  const recoveryResults = await Promise.allSettled([recovery, competingUntargetedSync]);
   const recoveryStatus = recoveryResults[0]?.status;
-  const competingFullSyncStatus = recoveryResults[1]?.status;
-  if (recoveryStatus !== "fulfilled" || competingFullSyncStatus !== "fulfilled") {
+  const competingUntargetedStatus = recoveryResults[1]?.status;
+  if (recoveryStatus !== "fulfilled" || competingUntargetedStatus !== "fulfilled") {
     throw new Error(
-      `concurrent recovery did not settle: recovery=${String(recoveryStatus)} full=${String(
-        competingFullSyncStatus,
+      `concurrent recovery did not settle: recovery=${String(recoveryStatus)} untargeted=${String(
+        competingUntargetedStatus,
       )}`,
     );
   }
-  if (competingFullSyncProgress.length === 0) {
-    throw new Error("competing full sync emitted no public progress updates");
+  if (competingUntargetedProgress.length === 0) {
+    throw new Error("competing untargeted sync emitted no public progress updates");
   }
 
   const recoveryObserver = new DatabaseSync(dbPath, { readOnly: true });
@@ -251,9 +252,9 @@ try {
   console.log("recovery_manager_state=idle");
   console.log("recovery_input_sessions=proof-trigger");
   console.log(`recovery_progress_updates=${recoveryProgress.length}`);
-  console.log(`competing_full_sync_progress_updates=${competingFullSyncProgress.length}`);
+  console.log(`competing_untargeted_sync_progress_updates=${competingUntargetedProgress.length}`);
   console.log(`recovery_sync_status=${recoveryStatus}`);
-  console.log(`competing_full_sync_status=${competingFullSyncStatus}`);
+  console.log(`competing_untargeted_sync_status=${competingUntargetedStatus}`);
   console.log(`retained_queue_before_recovery=${retainedQueueBeforeRecovery}`);
   console.log(`sessions_dirty_files_before_recovery=${dirtySessionFilesBeforeRecovery}`);
   console.log(`sessions_full_retry_dirty_before_recovery=${String(fullRetryBeforeRecovery)}`);
