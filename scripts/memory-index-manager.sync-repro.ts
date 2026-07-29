@@ -131,10 +131,14 @@ let lock: DatabaseSync | null = null;
 try {
   const result = await getMemorySearchManager({ cfg, agentId });
   if (!result.manager) {
-    throw new Error(`memory manager unavailable: ${result.failureReason ?? "unknown"}`);
+    throw new Error(`memory manager unavailable: ${result.error ?? "unknown"}`);
   }
   const manager = result.manager;
-  await manager.sync({ reason: "proof-baseline", force: true });
+  const sync = manager.sync?.bind(manager);
+  if (!sync) {
+    throw new Error("memory manager sync is unavailable");
+  }
+  await sync({ reason: "proof-baseline", force: true });
 
   const blockerKey = await seedSession("proof-blocker", markers.blocker);
   const retainedKey = await seedSession("proof-retained", markers.retained);
@@ -142,11 +146,11 @@ try {
   const dbPath = resolveOpenClawAgentSqlitePath({ agentId });
 
   lock = openExclusiveLock(dbPath);
-  const blockedOwner = manager.sync({
+  const blockedOwner = sync({
     reason: "proof-locked-owner",
     sessions: [{ agentId, sessionId: "proof-blocker", sessionKey: blockerKey }],
   });
-  const failedQueued = manager.sync({
+  const failedQueued = sync({
     reason: "proof-queued-retained",
     sessions: [{ agentId, sessionId: "proof-retained", sessionKey: retainedKey }],
   });
@@ -196,7 +200,7 @@ try {
   }
 
   const recoveryProgress: Array<{ completed: number; total: number; label?: string }> = [];
-  const recovery = manager.sync({
+  const recovery = sync({
     reason: "proof-idle-recovery-trigger",
     sessions: [{ agentId, sessionId: "proof-trigger", sessionKey: triggerKey }],
     progress: (update) => recoveryProgress.push(update),
@@ -206,7 +210,7 @@ try {
   // an implementation token, reached competing production admission.
   const competingUntargetedProgress: Array<{ completed: number; total: number; label?: string }> =
     [];
-  const competingUntargetedSync = manager.sync({
+  const competingUntargetedSync = sync({
     reason: "proof-competing-untargeted-sync",
     progress: (update) => competingUntargetedProgress.push(update),
   });
@@ -242,6 +246,16 @@ try {
   if (recoveryProgress.length === 0) {
     throw new Error("idle recovery trigger did not receive progress");
   }
+  const retainedQueueAfterRecovery = recoveryState.queuedSessions.size;
+  if (
+    dirtySessionFilesBeforeRecovery !== 0 ||
+    fullRetryBeforeRecovery ||
+    retainedQueueAfterRecovery !== 0
+  ) {
+    throw new Error(
+      `unexpected recovery ownership state: dirty=${dirtySessionFilesBeforeRecovery} fullRetry=${String(fullRetryBeforeRecovery)} retainedAfter=${retainedQueueAfterRecovery}`,
+    );
+  }
 
   console.log(`exact_head=${exactHead}`);
   console.log("test_runner=none");
@@ -261,7 +275,7 @@ try {
   console.log("retained_target_before_recovery=absent");
   console.log("retained_target_after_recovery=indexed");
   console.log("idle_trigger_after_recovery=indexed");
-  console.log(`retained_queue_after_recovery=${recoveryState.queuedSessions.size}`);
+  console.log(`retained_queue_after_recovery=${retainedQueueAfterRecovery}`);
   console.log("verdict=pass");
 } finally {
   releaseExclusiveLock(lock);
