@@ -13,11 +13,11 @@
     },
     {
       "path": "compare.mjs",
-      "sha256": "d2c7c1a3fe143c3fa6a2f30aab72887ece3b2b8b24f542e8152e3ef5868b004a"
+      "sha256": "09e926304e3dee41d6e40841feb14d40a820d9ffe549de104e2a05022113a132"
     },
     {
       "path": "raw-comparison-ac9610a4026c.json",
-      "sha256": "0c3206208a36f3a434e1fb98d6d53ac9b5d8aa82c07653e69cd7fad10109ab3d"
+      "sha256": "dea292d854f47493cf516773e7e5e843040b6cdee0145258695130c04af9ddcc"
     }
   ],
   "privacy": "Sanitized aggregate and per-run counts, sizes, timings, memory samples, and digests only; no session ids, paths, prompts, or preview text."
