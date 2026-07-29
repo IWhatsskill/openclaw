@@ -3,13 +3,12 @@ import { mkdirSync, rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import { clearMemoryEmbeddingProviders as clearRegistry } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
   hashText,
   INVALID_PROJECT_ANNOTATION_KEY,
   MEMORY_CHUNKING_VERSION,
-  type MemorySyncParams,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
@@ -1710,6 +1709,12 @@ describe("memory index", () => {
   });
 
   it("drains retained queued targets through the next idle sync call", async () => {
+    const markers = {
+      blocker: "BLOCKER LOCKED SYNC 729",
+      retained: "RETAINED RETRY TARGET 729",
+      trigger: "IDLE TRIGGER TARGET 729",
+    };
+    const sessionKey = (sessionId: string) => `agent:main:proof:${sessionId}`;
     const manager = await getFreshManager(
       createCfg({
         provider: "none",
@@ -1717,66 +1722,104 @@ describe("memory index", () => {
         sessionMemory: true,
       }),
     );
+    let lock: DatabaseSync | null = null;
     try {
-      let releaseActiveSync = () => {};
-      const activeSyncGate = new Promise<void>((resolve) => {
-        releaseActiveSync = resolve;
-      });
-      const observedParams: Array<MemorySyncParams | undefined> = [];
-      let syncCall = 0;
-      const syncOwner = manager as unknown as {
-        runSyncWithReadonlyRecovery: (params?: MemorySyncParams) => Promise<void>;
-      };
-      const runSync = vi
-        .spyOn(syncOwner, "runSyncWithReadonlyRecovery")
-        .mockImplementation(async (params) => {
-          observedParams.push(params);
-          syncCall += 1;
-          if (syncCall === 1) {
-            await activeSyncGate;
-          } else if (syncCall === 2) {
-            throw new Error("transient sqlite failure");
-          }
+      await manager.sync({ reason: "test-baseline", force: true });
+      for (const [sessionId, marker] of Object.entries(markers)) {
+        await seedMemoryIndexSessionTranscript({
+          sessionId,
+          sessionKey: sessionKey(sessionId),
+          messages: [
+            {
+              role: "user",
+              timestamp: Date.now(),
+              content: marker,
+            },
+          ],
         });
+      }
+
+      const dbPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+      lock = new DatabaseSync(dbPath);
+      lock.exec("PRAGMA busy_timeout = 0");
+      lock.exec("BEGIN EXCLUSIVE");
 
       const active = manager.sync({
-        reason: "test-active",
-        sessions: [{ agentId: "main", sessionId: "active", sessionKey: "agent:main:active" }],
+        reason: "test-locked-owner",
+        sessions: [
+          {
+            agentId: "main",
+            sessionId: "blocker",
+            sessionKey: sessionKey("blocker"),
+          },
+        ],
       });
-      await vi.waitFor(() => {
-        expect(runSync).toHaveBeenCalledTimes(1);
-      });
-
       const failedQueued = manager.sync({
-        reason: "test-failed-queued",
-        sessions: [{ agentId: "main", sessionId: "retained", sessionKey: "agent:main:retained" }],
+        reason: "test-queued-retained",
+        sessions: [
+          {
+            agentId: "main",
+            sessionId: "retained",
+            sessionKey: sessionKey("retained"),
+          },
+        ],
       });
-      const queuedRejection = expect(failedQueued).rejects.toThrow("transient sqlite failure");
-      releaseActiveSync();
-      await active;
-      await queuedRejection;
+      const failures = await Promise.allSettled([active, failedQueued]);
+      lock.exec("ROLLBACK");
+      lock.close();
+      lock = null;
+      expect(failures.map((result) => result.status)).toEqual(["rejected", "rejected"]);
 
-      expect(observedParams[1]).toEqual({
-        reason: "queued-sessions",
-        sessions: [{ agentId: "main", sessionId: "retained", sessionKey: "agent:main:retained" }],
-        archiveFiles: [],
-      });
+      const ftsMatchCount = (marker: string): number => {
+        const observer = new DatabaseSync(dbPath, { readOnly: true });
+        try {
+          return (
+            observer
+              .prepare(
+                "SELECT COUNT(*) AS count FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH ?",
+              )
+              .get(`\"${marker}\"`) as { count: number }
+          ).count;
+        } finally {
+          observer.close();
+        }
+      };
+
+      expect(ftsMatchCount(markers.retained)).toBe(0);
+      expect(ftsMatchCount(markers.trigger)).toBe(0);
+      const recoveryState = manager as unknown as {
+        syncing: Promise<void> | null;
+        queuedSessions: Map<string, unknown>;
+        sessionsDirtyFiles: Set<string>;
+        sessionsFullRetryDirty: boolean;
+      };
+      expect(recoveryState.syncing).toBeNull();
+      expect(recoveryState.queuedSessions.size).toBe(1);
+      expect(recoveryState.sessionsDirtyFiles.size).toBe(0);
+      expect(recoveryState.sessionsFullRetryDirty).toBe(false);
 
       await manager.sync({
         reason: "test-recovery-trigger",
-        sessions: [{ agentId: "main", sessionId: "trigger", sessionKey: "agent:main:trigger" }],
+        sessions: [
+          {
+            agentId: "main",
+            sessionId: "trigger",
+            sessionKey: sessionKey("trigger"),
+          },
+        ],
       });
 
-      expect(runSync).toHaveBeenCalledTimes(3);
-      expect(observedParams[2]).toEqual({
-        reason: "queued-sessions",
-        sessions: [
-          { agentId: "main", sessionId: "retained", sessionKey: "agent:main:retained" },
-          { agentId: "main", sessionId: "trigger", sessionKey: "agent:main:trigger" },
-        ],
-        archiveFiles: [],
-      });
+      expect(ftsMatchCount(markers.retained)).toBeGreaterThan(0);
+      expect(ftsMatchCount(markers.trigger)).toBeGreaterThan(0);
+      expect(recoveryState.queuedSessions.size).toBe(0);
     } finally {
+      if (lock) {
+        try {
+          lock.exec("ROLLBACK");
+        } finally {
+          lock.close();
+        }
+      }
       await manager.close?.();
     }
   });
