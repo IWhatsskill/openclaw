@@ -28,6 +28,7 @@ describe("codex cli node sessions", () => {
     } else {
       process.env.CODEX_HOME = previousCodexHome;
     }
+    vi.restoreAllMocks();
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
@@ -152,6 +153,70 @@ describe("codex cli node sessions", () => {
         sessionFile,
         messageCount: 1,
       },
+    ]);
+  });
+
+  it("streams Codex history and rollout JSONL files without whole-file reads", async () => {
+    const sessionId = "019e23d1-f33d-78e3-959e-0f56f30a5250";
+    const sessionDir = path.join(tempDir, "sessions", "2026", "05", "14");
+    const sessionFile = path.join(sessionDir, `rollout-2026-05-14T00-10-22-${sessionId}.jsonl`);
+    await fs.mkdir(sessionDir, { recursive: true });
+    await fs.writeFile(
+      path.join(tempDir, "history.jsonl"),
+      JSON.stringify({
+        session_id: sessionId,
+        ts: 1778678322,
+        text: "history wins",
+      }),
+    );
+    const filler = JSON.stringify({
+      timestamp: "2026-05-14T00:10:23.619Z",
+      type: "event_msg",
+      payload: { type: "token_count" },
+    });
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({
+          timestamp: "2026-05-14T00:10:23.618Z",
+          type: "session_meta",
+          payload: { id: sessionId, cwd: "/tmp/codex-streaming" },
+        }),
+        ...Array.from({ length: 4_096 }, () => filler),
+        JSON.stringify({
+          timestamp: "2026-05-14T00:10:24.000Z",
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "rollout fallback" }],
+          },
+        }),
+      ].join("\n"),
+    );
+    const readFile = vi.spyOn(fs, "readFile");
+
+    const command = createCodexCliSessionNodeHostCommands().find(
+      (entry) => entry.command === CODEX_CLI_SESSIONS_LIST_COMMAND,
+    );
+    const raw = await command?.handle(JSON.stringify({ limit: 5 }));
+    const parsed = JSON.parse(raw ?? "{}") as {
+      sessions?: Array<{
+        sessionId?: string;
+        cwd?: string;
+        lastMessage?: string;
+        messageCount?: number;
+      }>;
+    };
+
+    expect(readFile).not.toHaveBeenCalled();
+    expect(parsed.sessions).toEqual([
+      expect.objectContaining({
+        sessionId,
+        cwd: "/tmp/codex-streaming",
+        lastMessage: "history wins",
+        messageCount: 1,
+      }),
     ]);
   });
 

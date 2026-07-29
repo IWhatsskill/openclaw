@@ -1,9 +1,11 @@
 // Codex plugin module implements node cli sessions behavior.
 import { spawn } from "node:child_process";
+import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { createInterface } from "node:readline";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
 import type {
@@ -347,40 +349,40 @@ async function readHistorySessions(
 ): Promise<Map<string, CodexCliSessionSummary>> {
   const summaries = new Map<string, CodexCliSessionSummary>();
   const historyPath = path.join(codexHome, "history.jsonl");
-  const content = await readFileIfExists(historyPath);
-  if (!content) {
-    return summaries;
-  }
-  for (const line of content.split(/\r?\n/u)) {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      continue;
+  try {
+    for await (const line of readLines(historyPath)) {
+      const trimmed = line.trim();
+      if (!trimmed) {
+        continue;
+      }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(trimmed) as unknown;
+      } catch {
+        continue;
+      }
+      if (!isRecord(parsed) || typeof parsed.session_id !== "string") {
+        continue;
+      }
+      const sessionId = parsed.session_id.trim();
+      if (!sessionId) {
+        continue;
+      }
+      const entry = summaries.get(sessionId) ?? {
+        sessionId,
+        messageCount: 0,
+      };
+      entry.messageCount += 1;
+      if (typeof parsed.text === "string" && parsed.text.trim()) {
+        entry.lastMessage = truncateText(parsed.text.trim(), 140);
+      }
+      if (typeof parsed.ts === "number") {
+        entry.updatedAt = timestampMsToIsoString(parsed.ts * 1000) ?? entry.updatedAt;
+      }
+      summaries.set(sessionId, entry);
     }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(trimmed) as unknown;
-    } catch {
-      continue;
-    }
-    if (!isRecord(parsed) || typeof parsed.session_id !== "string") {
-      continue;
-    }
-    const sessionId = parsed.session_id.trim();
-    if (!sessionId) {
-      continue;
-    }
-    const entry = summaries.get(sessionId) ?? {
-      sessionId,
-      messageCount: 0,
-    };
-    entry.messageCount += 1;
-    if (typeof parsed.text === "string" && parsed.text.trim()) {
-      entry.lastMessage = truncateText(parsed.text.trim(), 140);
-    }
-    if (typeof parsed.ts === "number") {
-      entry.updatedAt = timestampMsToIsoString(parsed.ts * 1000) ?? entry.updatedAt;
-    }
-    summaries.set(sessionId, entry);
+  } catch {
+    return new Map();
   }
   return summaries;
 }
@@ -443,46 +445,51 @@ async function hydrateSessionsFromSessionFiles(
 }
 
 async function readSessionFileSummary(file: string): Promise<CodexCliSessionSummary | null> {
-  const content = await readFileIfExists(file);
-  if (!content) {
-    return null;
-  }
   let sessionId = "";
   let cwd: string | undefined;
   let updatedAt: string | undefined;
   let lastMessage: string | undefined;
   let messageCount = 0;
-  for (const line of content.split(/\r?\n/u)) {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      continue;
-    }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(trimmed) as unknown;
-    } catch {
-      continue;
-    }
-    if (!isRecord(parsed)) {
-      continue;
-    }
-    if (typeof parsed.timestamp === "string" && parsed.timestamp.trim()) {
-      updatedAt = parsed.timestamp.trim();
-    }
-    if (parsed.type === "session_meta" && isRecord(parsed.payload)) {
-      if (typeof parsed.payload.id === "string" && parsed.payload.id.trim()) {
-        sessionId = parsed.payload.id.trim();
+  let sawLine = false;
+  try {
+    for await (const line of readLines(file)) {
+      sawLine = true;
+      const trimmed = line.trim();
+      if (!trimmed) {
+        continue;
       }
-      if (typeof parsed.payload.cwd === "string" && parsed.payload.cwd.trim()) {
-        cwd = parsed.payload.cwd.trim();
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(trimmed) as unknown;
+      } catch {
+        continue;
       }
-      continue;
+      if (!isRecord(parsed)) {
+        continue;
+      }
+      if (typeof parsed.timestamp === "string" && parsed.timestamp.trim()) {
+        updatedAt = parsed.timestamp.trim();
+      }
+      if (parsed.type === "session_meta" && isRecord(parsed.payload)) {
+        if (typeof parsed.payload.id === "string" && parsed.payload.id.trim()) {
+          sessionId = parsed.payload.id.trim();
+        }
+        if (typeof parsed.payload.cwd === "string" && parsed.payload.cwd.trim()) {
+          cwd = parsed.payload.cwd.trim();
+        }
+        continue;
+      }
+      const messageText = readResponseItemMessageText(parsed);
+      if (messageText) {
+        messageCount += 1;
+        lastMessage = truncateText(messageText, 140);
+      }
     }
-    const messageText = readResponseItemMessageText(parsed);
-    if (messageText) {
-      messageCount += 1;
-      lastMessage = truncateText(messageText, 140);
-    }
+  } catch {
+    return null;
+  }
+  if (!sawLine) {
+    return null;
   }
   if (!sessionId) {
     sessionId = readSessionIdFromFilename(file) ?? "";
@@ -661,17 +668,31 @@ function resolveCodexHome(): string {
   return process.env.CODEX_HOME?.trim() || path.join(os.homedir(), ".codex");
 }
 
-async function readFileIfExists(file: string): Promise<string | undefined> {
+async function* readLines(file: string): AsyncGenerator<string> {
+  const input = createReadStream(file, { encoding: "utf8" });
+  const lines = createInterface({
+    input,
+    crlfDelay: Infinity,
+  });
   try {
-    return await fs.readFile(file, "utf8");
-  } catch {
-    return undefined;
+    for await (const line of lines) {
+      yield line;
+    }
+  } finally {
+    lines.close();
+    input.destroy();
   }
 }
 
 async function readFirstLine(file: string): Promise<string | undefined> {
-  const content = await readFileIfExists(file);
-  return content?.split(/\r?\n/u)[0];
+  try {
+    for await (const line of readLines(file)) {
+      return line;
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
 }
 
 async function readFileMtimeIso(file: string): Promise<string | undefined> {
