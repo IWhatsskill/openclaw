@@ -158,11 +158,23 @@ export function enqueueMemoryTargetedSessionSync(
             const pendingSessions = Array.from(state.getQueuedSessions().values());
             state.getQueuedArchiveFiles().clear();
             state.getQueuedSessions().clear();
-            await state.sync({
-              reason: "queued-sessions",
-              sessions: pendingSessions,
-              archiveFiles: pendingArchiveFiles,
-            });
+            try {
+              await state.sync({
+                reason: "queued-sessions",
+                sessions: pendingSessions,
+                archiveFiles: pendingArchiveFiles,
+              });
+            } catch (err) {
+              // Merge the failed batch with arrivals queued during sync so the
+              // next trigger can retry every target instead of dropping work.
+              for (const archiveFile of pendingArchiveFiles) {
+                state.getQueuedArchiveFiles().add(archiveFile);
+              }
+              for (const session of pendingSessions) {
+                state.getQueuedSessions().set(memorySessionSyncTargetKey(session), session);
+              }
+              throw err;
+            }
           }
         } finally {
           state.setQueuedSessionSync(null);

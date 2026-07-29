@@ -109,4 +109,72 @@ describe("memory targeted session sync", () => {
       archiveFiles: [],
     });
   });
+
+  it("keeps failed queued targets for a later retry", async () => {
+    let resolveSyncing: (() => void) | undefined;
+    const syncing = new Promise<void>((resolve) => {
+      resolveSyncing = resolve;
+    });
+    let rejectQueuedSync: ((error: Error) => void) | undefined;
+    const queuedSync = new Promise<void>((_resolve, reject) => {
+      rejectQueuedSync = reject;
+    });
+    const queuedArchiveFiles = new Set<string>();
+    const queuedSessions = new Map<string, MemorySessionSyncTarget>();
+    let queuedSessionSync: Promise<void> | null = null;
+    const sync = vi.fn().mockReturnValueOnce(queuedSync).mockResolvedValueOnce(undefined);
+    const state = {
+      isClosed: () => false,
+      getSyncing: () => syncing,
+      getQueuedArchiveFiles: () => queuedArchiveFiles,
+      getQueuedSessions: () => queuedSessions,
+      getQueuedSessionSync: () => queuedSessionSync,
+      setQueuedSessionSync: (value: Promise<void> | null) => {
+        queuedSessionSync = value;
+      },
+      sync,
+    };
+
+    const first = enqueueMemoryTargetedSessionSync(state, {
+      sessions: [{ agentId: "main", sessionId: "first", sessionKey: "agent:main:first" }],
+      archiveFiles: ["/tmp/first.jsonl"],
+    });
+    const firstRejection = expect(first).rejects.toThrow("transient sqlite failure");
+
+    resolveSyncing?.();
+    await vi.waitFor(() => {
+      expect(sync).toHaveBeenCalledTimes(1);
+    });
+
+    const concurrent = enqueueMemoryTargetedSessionSync(state, {
+      sessions: [{ agentId: "main", sessionId: "second", sessionKey: "agent:main:second" }],
+      archiveFiles: ["/tmp/second.jsonl"],
+    });
+    expect(concurrent).toBe(first);
+
+    rejectQueuedSync?.(new Error("transient sqlite failure"));
+    await firstRejection;
+
+    expect(queuedArchiveFiles).toEqual(new Set(["/tmp/second.jsonl", "/tmp/first.jsonl"]));
+    expect(Array.from(queuedSessions.values())).toEqual([
+      { agentId: "main", sessionId: "second", sessionKey: "agent:main:second" },
+      { agentId: "main", sessionId: "first", sessionKey: "agent:main:first" },
+    ]);
+    expect(queuedSessionSync).toBeNull();
+
+    await enqueueMemoryTargetedSessionSync(state);
+
+    expect(sync).toHaveBeenCalledTimes(2);
+    expect(sync).toHaveBeenLastCalledWith({
+      reason: "queued-sessions",
+      sessions: [
+        { agentId: "main", sessionId: "second", sessionKey: "agent:main:second" },
+        { agentId: "main", sessionId: "first", sessionKey: "agent:main:first" },
+      ],
+      archiveFiles: ["/tmp/second.jsonl", "/tmp/first.jsonl"],
+    });
+    expect(queuedArchiveFiles.size).toBe(0);
+    expect(queuedSessions.size).toBe(0);
+    expect(queuedSessionSync).toBeNull();
+  });
 });
