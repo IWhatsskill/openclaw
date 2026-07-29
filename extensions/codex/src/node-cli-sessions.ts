@@ -26,6 +26,7 @@ export const CODEX_CLI_SESSION_RESUME_COMMAND = "codex.cli.session.resume";
 const DEFAULT_SESSION_LIMIT = 10;
 const MAX_SESSION_LIMIT = 50;
 const DEFAULT_RESUME_TIMEOUT_MS = 20 * 60_000;
+const JSONL_STREAM_THRESHOLD_BYTES = 4 * 1024 * 1024;
 const JSONL_READ_CHUNK_BYTES = 1024 * 1024;
 const JSONL_FIRST_LINE_CHUNK_BYTES = 64 * 1024;
 const SESSION_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
@@ -669,6 +670,32 @@ async function visitLines(
   visitor: (line: string) => boolean | void,
   chunkBytes = JSONL_READ_CHUNK_BYTES,
 ): Promise<{ ok: boolean; lineCount: number }> {
+  let size: number;
+  try {
+    size = (await fs.stat(file)).size;
+  } catch {
+    return { ok: false, lineCount: 0 };
+  }
+  if (size <= JSONL_STREAM_THRESHOLD_BYTES) {
+    let content: string;
+    try {
+      content = await fs.readFile(file, "utf8");
+    } catch {
+      return { ok: false, lineCount: 0 };
+    }
+    if (content.length === 0) {
+      return { ok: true, lineCount: 0 };
+    }
+    let lineCount = 0;
+    for (const line of content.split(/\r?\n/u)) {
+      lineCount += 1;
+      if (visitor(line) === false) {
+        break;
+      }
+    }
+    return { ok: true, lineCount };
+  }
+
   let handle: Awaited<ReturnType<typeof fs.open>>;
   try {
     handle = await fs.open(file, "r");
