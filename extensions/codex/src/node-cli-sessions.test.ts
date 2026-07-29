@@ -156,7 +156,7 @@ describe("codex cli node sessions", () => {
     ]);
   });
 
-  it("streams Codex history and rollout JSONL files without whole-file reads", async () => {
+  it("streams rollout JSONL with a record spanning many chunks", async () => {
     const sessionId = "019e23d1-f33d-78e3-959e-0f56f30a5250";
     const sessionDir = path.join(tempDir, "sessions", "2026", "05", "14");
     const sessionFile = path.join(sessionDir, `rollout-2026-05-14T00-10-22-${sessionId}.jsonl`);
@@ -172,7 +172,7 @@ describe("codex cli node sessions", () => {
     const filler = JSON.stringify({
       timestamp: "2026-05-14T00:10:23.619Z",
       type: "event_msg",
-      payload: { type: "token_count", padding: "x".repeat(1_024) },
+      payload: { type: "token_count", padding: "x".repeat(5 * 1_024 * 1_024) },
     });
     await fs.writeFile(
       sessionFile,
@@ -182,7 +182,7 @@ describe("codex cli node sessions", () => {
           type: "session_meta",
           payload: { id: sessionId, cwd: "/tmp/codex-streaming" },
         }),
-        ...Array.from({ length: 5_000 }, () => filler),
+        filler,
         JSON.stringify({
           timestamp: "2026-05-14T00:10:24.000Z",
           type: "response_item",

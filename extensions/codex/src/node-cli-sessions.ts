@@ -704,7 +704,7 @@ async function visitLines(
   }
   const buffer = Buffer.allocUnsafe(chunkBytes);
   const decoder = new TextDecoder();
-  let pending = "";
+  let pendingFragments: string[] = [];
   let lineCount = 0;
   try {
     while (true) {
@@ -712,14 +712,19 @@ async function visitLines(
       if (bytesRead === 0) {
         break;
       }
-      const content = pending + decoder.decode(buffer.subarray(0, bytesRead), { stream: true });
+      const content = decoder.decode(buffer.subarray(0, bytesRead), { stream: true });
       let lineStart = 0;
       while (true) {
         const newline = content.indexOf("\n", lineStart);
         if (newline === -1) {
           break;
         }
-        const rawLine = content.slice(lineStart, newline);
+        let rawLine = content.slice(lineStart, newline);
+        if (pendingFragments.length > 0) {
+          pendingFragments.push(rawLine);
+          rawLine = pendingFragments.join("");
+          pendingFragments = [];
+        }
         const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
         lineCount += 1;
         if (visitor(line) === false) {
@@ -727,11 +732,17 @@ async function visitLines(
         }
         lineStart = newline + 1;
       }
-      pending = content.slice(lineStart);
+      if (lineStart < content.length) {
+        pendingFragments.push(content.slice(lineStart));
+      }
     }
-    pending += decoder.decode();
-    if (pending.length > 0) {
-      const line = pending.endsWith("\r") ? pending.slice(0, -1) : pending;
+    const decoderTail = decoder.decode();
+    if (decoderTail.length > 0) {
+      pendingFragments.push(decoderTail);
+    }
+    if (pendingFragments.length > 0) {
+      const rawLine = pendingFragments.join("");
+      const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
       lineCount += 1;
       visitor(line);
     }
