@@ -19,6 +19,7 @@ import {
   resolveWindowsSpawnProgram,
 } from "openclaw/plugin-sdk/windows-spawn";
 import { formatCodexDisplayText } from "./command-formatters.js";
+import { JSONL_FIRST_LINE_CHUNK_BYTES, visitJsonlLines } from "./jsonl-lines.js";
 
 const CODEX_CLI_SESSIONS_LIST_COMMAND = "codex.cli.sessions.list";
 export const CODEX_CLI_SESSION_RESUME_COMMAND = "codex.cli.session.resume";
@@ -26,9 +27,6 @@ export const CODEX_CLI_SESSION_RESUME_COMMAND = "codex.cli.session.resume";
 const DEFAULT_SESSION_LIMIT = 10;
 const MAX_SESSION_LIMIT = 50;
 const DEFAULT_RESUME_TIMEOUT_MS = 20 * 60_000;
-const JSONL_STREAM_THRESHOLD_BYTES = 4 * 1024 * 1024;
-const JSONL_READ_CHUNK_BYTES = 1024 * 1024;
-const JSONL_FIRST_LINE_CHUNK_BYTES = 64 * 1024;
 const SESSION_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 const activeResumeSessions = new Set<string>();
 
@@ -350,7 +348,7 @@ async function readHistorySessions(
 ): Promise<Map<string, CodexCliSessionSummary>> {
   const summaries = new Map<string, CodexCliSessionSummary>();
   const historyPath = path.join(codexHome, "history.jsonl");
-  const result = await visitLines(historyPath, (line) => {
+  const result = await visitJsonlLines(historyPath, (line) => {
     const trimmed = line.trim();
     if (!trimmed) {
       return;
@@ -450,7 +448,7 @@ async function readSessionFileSummary(file: string): Promise<CodexCliSessionSumm
   let updatedAt: string | undefined;
   let lastMessage: string | undefined;
   let messageCount = 0;
-  const result = await visitLines(file, (line) => {
+  const result = await visitJsonlLines(file, (line) => {
     const trimmed = line.trim();
     if (!trimmed) {
       return;
@@ -665,98 +663,9 @@ function resolveCodexHome(): string {
   return process.env.CODEX_HOME?.trim() || path.join(os.homedir(), ".codex");
 }
 
-async function visitLines(
-  file: string,
-  visitor: (line: string) => boolean | void,
-  chunkBytes = JSONL_READ_CHUNK_BYTES,
-): Promise<{ ok: boolean; lineCount: number }> {
-  let size: number;
-  try {
-    size = (await fs.stat(file)).size;
-  } catch {
-    return { ok: false, lineCount: 0 };
-  }
-  if (size <= JSONL_STREAM_THRESHOLD_BYTES) {
-    let content: string;
-    try {
-      content = await fs.readFile(file, "utf8");
-    } catch {
-      return { ok: false, lineCount: 0 };
-    }
-    if (content.length === 0) {
-      return { ok: true, lineCount: 0 };
-    }
-    let lineCount = 0;
-    for (const line of content.split(/\r?\n/u)) {
-      lineCount += 1;
-      if (visitor(line) === false) {
-        break;
-      }
-    }
-    return { ok: true, lineCount };
-  }
-
-  let handle: Awaited<ReturnType<typeof fs.open>>;
-  try {
-    handle = await fs.open(file, "r");
-  } catch {
-    return { ok: false, lineCount: 0 };
-  }
-  const buffer = Buffer.allocUnsafe(chunkBytes);
-  const decoder = new TextDecoder();
-  let pendingFragments: string[] = [];
-  let lineCount = 0;
-  try {
-    while (true) {
-      const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
-      if (bytesRead === 0) {
-        break;
-      }
-      const content = decoder.decode(buffer.subarray(0, bytesRead), { stream: true });
-      let lineStart = 0;
-      while (true) {
-        const newline = content.indexOf("\n", lineStart);
-        if (newline === -1) {
-          break;
-        }
-        let rawLine = content.slice(lineStart, newline);
-        if (pendingFragments.length > 0) {
-          pendingFragments.push(rawLine);
-          rawLine = pendingFragments.join("");
-          pendingFragments = [];
-        }
-        const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
-        lineCount += 1;
-        if (visitor(line) === false) {
-          return { ok: true, lineCount };
-        }
-        lineStart = newline + 1;
-      }
-      if (lineStart < content.length) {
-        pendingFragments.push(content.slice(lineStart));
-      }
-    }
-    const decoderTail = decoder.decode();
-    if (decoderTail.length > 0) {
-      pendingFragments.push(decoderTail);
-    }
-    if (pendingFragments.length > 0) {
-      const rawLine = pendingFragments.join("");
-      const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
-      lineCount += 1;
-      visitor(line);
-    }
-    return { ok: true, lineCount };
-  } catch {
-    return { ok: false, lineCount: 0 };
-  } finally {
-    await handle.close().catch(() => undefined);
-  }
-}
-
 async function readFirstLine(file: string): Promise<string | undefined> {
   let firstLine: string | undefined;
-  const result = await visitLines(
+  const result = await visitJsonlLines(
     file,
     (line) => {
       firstLine = line;
