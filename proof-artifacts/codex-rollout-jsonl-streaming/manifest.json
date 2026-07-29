@@ -1,0 +1,24 @@
+{
+  "schema": "openclaw-pr-proof-artifact-v1",
+  "repository": "openclaw/openclaw",
+  "base_sha": "d7864458a7e0d128013bd15e46d92a7c6410d96d",
+  "head_sha": "ac9610a4026c62cec5853ac3028fede2c257cb9d",
+  "proof_command": "PRODUCTION_ENTRYPOINT=codex.cli.sessions.list PROOF_OUTPUT_JSON=raw-comparison-ac9610a4026c.json node compare.mjs <base-checkout> <head-checkout> d7864458a7e0d128013bd15e46d92a7c6410d96d ac9610a4026c62cec5853ac3028fede2c257cb9d",
+  "test_runner": "none",
+  "entrypoint": "extensions/codex/index.ts register -> registerNodeHostCommand -> codex.cli.sessions.list.handle",
+  "files": [
+    {
+      "path": "proof.mts",
+      "sha256": "25d57c546ef7d57311cce713a965ea6c27aad23f694715a5290d2f19d65ccb20"
+    },
+    {
+      "path": "compare.mjs",
+      "sha256": "d2c7c1a3fe143c3fa6a2f30aab72887ece3b2b8b24f542e8152e3ef5868b004a"
+    },
+    {
+      "path": "raw-comparison-ac9610a4026c.json",
+      "sha256": "0c3206208a36f3a434e1fb98d6d53ac9b5d8aa82c07653e69cd7fad10109ab3d"
+    }
+  ],
+  "privacy": "Sanitized aggregate and per-run counts, sizes, timings, memory samples, and digests only; no session ids, paths, prompts, or preview text."
+}
