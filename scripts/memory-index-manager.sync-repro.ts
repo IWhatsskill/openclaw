@@ -277,9 +277,7 @@ try {
   const competingUntargetedStatus = recoveryResults[1]?.status;
   if (recoveryStatus !== "fulfilled" || competingUntargetedStatus !== "fulfilled") {
     throw new Error(
-      `concurrent recovery did not settle: recovery=${String(recoveryStatus)} untargeted=${String(
-        competingUntargetedStatus,
-      )}`,
+      `concurrent recovery did not settle: recovery=${recoveryStatus ?? "missing"} untargeted=${competingUntargetedStatus ?? "missing"}`,
     );
   }
   if (competingUntargetedProgress.length === 0) {

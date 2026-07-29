@@ -1808,7 +1808,7 @@ describe("memory index", () => {
               .prepare(
                 "SELECT COUNT(*) AS count FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH ?",
               )
-              .get(`\"${marker}\"`) as { count: number }
+              .get(`"${marker}"`) as { count: number }
           ).count;
         } finally {
           observer.close();
@@ -1976,7 +1976,7 @@ describe("memory index", () => {
         });
         void transitionCall.then(
           (value) => resolveTransitionResult({ status: "fulfilled", value }),
-          (reason) => resolveTransitionResult({ status: "rejected", reason }),
+          (reason: unknown) => resolveTransitionResult({ status: "rejected", reason }),
         );
       });
 
