@@ -1829,7 +1829,7 @@ describe("memory index", () => {
       expect(recoveryState.sessionsFullRetryDirty).toBe(false);
 
       const recoveryProgress = vi.fn();
-      await manager.sync({
+      const recovery = manager.sync({
         reason: "test-recovery-trigger",
         sessions: [
           {
@@ -1840,6 +1840,11 @@ describe("memory index", () => {
         ],
         progress: recoveryProgress,
       });
+      // A full sync can claim `syncing` before the retained queue owner resumes.
+      // Both owners must settle without the queue awaiting its own promise.
+      const competingFullSync = manager.sync({ reason: "test-competing-full-sync" });
+      const recoveryResults = await Promise.allSettled([recovery, competingFullSync]);
+      expect(recoveryResults.map((result) => result.status)).toEqual(["fulfilled", "fulfilled"]);
 
       expect(ftsMatchCount(markers.retained)).toBeGreaterThan(0);
       expect(ftsMatchCount(markers.trigger)).toBeGreaterThan(0);

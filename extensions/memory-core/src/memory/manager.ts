@@ -1923,10 +1923,20 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
 
   private async syncAdmitted(
     params?: MemorySyncParams,
-    options?: { allowEmbeddingBootstrapFallback?: boolean },
+    options?: {
+      allowEmbeddingBootstrapFallback?: boolean;
+      queuedSessionOwner?: boolean;
+    },
   ): Promise<void> {
     if (this.syncing) {
       if (hasTargetedSessionSyncParams(params)) {
+        if (options?.queuedSessionOwner) {
+          // Another caller claimed the sync slot after this queue owner was
+          // created. Wait for it, then retry admission instead of enqueueing
+          // into the promise that is already awaiting this call.
+          await this.syncing.catch(() => undefined);
+          return await this.syncAdmitted(params, options);
+        }
         return this.enqueueTargetedSessionSync(params);
       }
       try {
@@ -2035,7 +2045,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         setQueuedSessionSync: (value) => {
           this.queuedSessionSync = value;
         },
-        sync: async (params) => await this.syncAdmitted(params),
+        sync: async (params) => await this.syncAdmitted(params, { queuedSessionOwner: true }),
       },
       targets,
     );
