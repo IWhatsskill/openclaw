@@ -2355,6 +2355,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
 
   private async closeOnce(): Promise<void> {
     this.closing = true;
+    this.queuedArchiveFiles.clear();
+    this.queuedSessions.clear();
+    this.queuedForce = false;
+    this.queuedProgressCallbacks.clear();
     await this.awaitManagerIdle();
     this.closed = true;
     const pendingProviderInit = this.providerInitPromise;

@@ -2008,6 +2008,92 @@ describe("memory index", () => {
     }
   });
 
+  it("clears retained queued targets after failure when the manager closes", async () => {
+    const manager = await getFreshManager(
+      createCfg({
+        provider: "none",
+        sources: ["sessions"],
+        sessionMemory: true,
+      }),
+    );
+    let resolveActiveSync: (() => void) | undefined;
+    const activeSyncGate = new Promise<void>((resolve) => {
+      resolveActiveSync = resolve;
+    });
+    const owner = manager as unknown as {
+      closed: boolean;
+      queuedArchiveFiles: Set<string>;
+      queuedSessions: Map<string, MemorySessionSyncTarget>;
+      queuedProgressCallbacks: Set<NonNullable<MemorySyncParams["progress"]>>;
+      queuedForce: boolean;
+      queuedSessionSync: Promise<void> | null;
+      runSyncWithReadonlyRecovery: (params?: MemorySyncParams) => Promise<void>;
+    };
+    const runSyncWithReadonlyRecovery = vi
+      .spyOn(owner, "runSyncWithReadonlyRecovery")
+      .mockReturnValueOnce(activeSyncGate)
+      .mockRejectedValueOnce(new Error("test queued failure"));
+    const progress = vi.fn();
+
+    try {
+      const active = manager.sync({
+        reason: "test-close-after-failure-owner",
+        sessions: [
+          {
+            agentId: "main",
+            sessionId: "active-close-after-failure",
+            sessionKey: "agent:main:active-close-after-failure",
+          },
+        ],
+      });
+      const failedQueued = manager.sync({
+        reason: "test-close-after-failure-queued",
+        sessions: [
+          {
+            agentId: "main",
+            sessionId: "retained-close-after-failure",
+            sessionKey: "agent:main:retained-close-after-failure",
+          },
+        ],
+        archiveFiles: ["/tmp/retained-close-after-failure.jsonl"],
+        force: true,
+        progress,
+      });
+      const queuedRejection = expect(failedQueued).rejects.toThrow("test queued failure");
+
+      resolveActiveSync?.();
+      await active;
+      await queuedRejection;
+
+      expect(runSyncWithReadonlyRecovery).toHaveBeenCalledTimes(2);
+      expect(owner.queuedArchiveFiles).toEqual(
+        new Set(["/tmp/retained-close-after-failure.jsonl"]),
+      );
+      expect(Array.from(owner.queuedSessions.values())).toEqual([
+        {
+          agentId: "main",
+          sessionId: "retained-close-after-failure",
+          sessionKey: "agent:main:retained-close-after-failure",
+        },
+      ]);
+      expect(owner.queuedForce).toBe(true);
+      expect(owner.queuedProgressCallbacks.size).toBe(0);
+      expect(owner.queuedSessionSync).toBeNull();
+
+      await manager.close?.();
+
+      expect(owner.closed).toBe(true);
+      expect(owner.queuedArchiveFiles.size).toBe(0);
+      expect(owner.queuedSessions.size).toBe(0);
+      expect(owner.queuedProgressCallbacks.size).toBe(0);
+      expect(owner.queuedForce).toBe(false);
+    } finally {
+      resolveActiveSync?.();
+      await manager.close?.();
+      runSyncWithReadonlyRecovery.mockRestore();
+    }
+  });
+
   it("keeps provider cutover vector search paused during targeted session sync", async () => {
     try {
       setMemoryIndexStateDir(path.join(workspaceDir, ".state-targeted-cutover"));

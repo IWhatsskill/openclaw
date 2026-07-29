@@ -201,14 +201,14 @@ try {
     sessions: [{ agentId, sessionId: "proof-trigger", sessionKey: triggerKey }],
     progress: (update) => recoveryProgress.push(update),
   });
-  // Claim the ordinary sync slot before the retained queue owner resumes.
-  // This is the production scheduling sequence that previously made the
-  // queue owner await its own queuedSessionSync promise.
-  const competingFullSync = manager.sync({ reason: "proof-competing-full-sync" });
-  const competingSyncClaimedSlot = recoveryState.syncing !== null;
-  if (!competingSyncClaimedSlot) {
-    throw new Error("competing full sync did not claim the production sync slot");
-  }
+  // Start an untargeted full sync before the retained queue owner resumes.
+  // Its distinct public progress callback proves that this call, rather than
+  // an implementation token, owned and executed the competing full scan.
+  const competingFullSyncProgress: Array<{ completed: number; total: number; label?: string }> = [];
+  const competingFullSync = manager.sync({
+    reason: "proof-competing-full-sync",
+    progress: (update) => competingFullSyncProgress.push(update),
+  });
   const recoveryResults = await Promise.allSettled([recovery, competingFullSync]);
   const recoveryStatus = recoveryResults[0]?.status;
   const competingFullSyncStatus = recoveryResults[1]?.status;
@@ -218,6 +218,9 @@ try {
         competingFullSyncStatus,
       )}`,
     );
+  }
+  if (competingFullSyncProgress.length === 0) {
+    throw new Error("competing full sync emitted no public progress updates");
   }
 
   const recoveryObserver = new DatabaseSync(dbPath, { readOnly: true });
@@ -248,7 +251,7 @@ try {
   console.log("recovery_manager_state=idle");
   console.log("recovery_input_sessions=proof-trigger");
   console.log(`recovery_progress_updates=${recoveryProgress.length}`);
-  console.log(`competing_full_sync_claimed_slot=${String(competingSyncClaimedSlot)}`);
+  console.log(`competing_full_sync_progress_updates=${competingFullSyncProgress.length}`);
   console.log(`recovery_sync_status=${recoveryStatus}`);
   console.log(`competing_full_sync_status=${competingFullSyncStatus}`);
   console.log(`retained_queue_before_recovery=${retainedQueueBeforeRecovery}`);
