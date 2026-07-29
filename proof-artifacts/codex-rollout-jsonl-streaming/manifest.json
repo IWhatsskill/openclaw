@@ -1,0 +1,37 @@
+{
+  "schema": "openclaw-pr-proof-artifact-v1",
+  "repository": "openclaw/openclaw",
+  "base_sha": "d7864458a7e0d128013bd15e46d92a7c6410d96d",
+  "head_sha": "a6a828d83c105b03f3b26a9e8289a979c5ff6d00",
+  "proof_command": "PRODUCTION_ENTRYPOINT=codex.cli.sessions.list PROOF_OUTPUT_JSON=raw-comparison-a6a828d83c10.json node compare.mjs <base-checkout> <head-checkout> d7864458a7e0d128013bd15e46d92a7c6410d96d a6a828d83c105b03f3b26a9e8289a979c5ff6d00",
+  "peak_proof_command": "PRODUCTION_ENTRYPOINT=codex.cli.sessions.list PEAK_OUTPUT_JSON=raw-peak-a6a828d83c10.json node peak-compare.mjs <base-checkout> <head-checkout> d7864458a7e0d128013bd15e46d92a7c6410d96d a6a828d83c105b03f3b26a9e8289a979c5ff6d00",
+  "test_runner": "none",
+  "entrypoint": "extensions/codex/index.ts register -> registerNodeHostCommand -> codex.cli.sessions.list.handle",
+  "files": [
+    {
+      "path": "proof.mts",
+      "sha256": "25d57c546ef7d57311cce713a965ea6c27aad23f694715a5290d2f19d65ccb20"
+    },
+    {
+      "path": "compare.mjs",
+      "sha256": "09e926304e3dee41d6e40841feb14d40a820d9ffe549de104e2a05022113a132"
+    },
+    {
+      "path": "raw-comparison-a6a828d83c10.json",
+      "sha256": "77a7fcb976d99b02bb83bdd76f9d1b61de0696e65dae80f8867151cbbcf5c21d"
+    },
+    {
+      "path": "peak-child.mts",
+      "sha256": "51ab930928338d2c93a7b6f9f35268cef122c34e6270e7336a3dfabb43650266"
+    },
+    {
+      "path": "peak-compare.mjs",
+      "sha256": "73a33b5ba46cf71879521cc6f35d10b8ffaa42ae64ea414b185461a24cb9fe08"
+    },
+    {
+      "path": "raw-peak-a6a828d83c10.json",
+      "sha256": "06b5cc7eb2cdb1652a22a05451f7e3c06f7fe9a6fbcf853904842b451f3417bb"
+    }
+  ],
+  "privacy": "Sanitized aggregate and per-run counts, sizes, timings, external maximum-RSS samples, and digests only; no session ids, paths, prompts, or preview text."
+}
