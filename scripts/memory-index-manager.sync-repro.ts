@@ -37,6 +37,7 @@ const markers = {
   blocker: "BLOCKER_LOCKED_SYNC_729",
   retained: "RETAINED_RETRY_TARGET_729",
   trigger: "CONCURRENT_TRIGGER_TARGET_729",
+  archive: "RETAINED_ARCHIVE_TARGET_729",
 };
 
 Reflect.set(process.env, "OPENCLAW_STATE_DIR", stateDir);
@@ -127,6 +128,22 @@ function isSqliteLockFailure(failure: unknown): boolean {
   return /SQLITE_(?:BUSY|LOCKED)|database is (?:busy|locked)/i.test(describeSqliteFailure(failure));
 }
 
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
 let lock: DatabaseSync | null = null;
 try {
   const result = await getMemorySearchManager({ cfg, agentId });
@@ -143,6 +160,12 @@ try {
   const blockerKey = await seedSession("proof-blocker", markers.blocker);
   const retainedKey = await seedSession("proof-retained", markers.retained);
   const triggerKey = await seedSession("proof-trigger", markers.trigger);
+  await seedSession("proof-archive", markers.archive);
+  const archiveFile = path.join(
+    resolveSessionTranscriptsDirForAgent(agentId),
+    "proof-archive.jsonl",
+  );
+  await fs.access(archiveFile);
   const dbPath = resolveOpenClawAgentSqlitePath({ agentId });
 
   lock = openExclusiveLock(dbPath);
@@ -153,6 +176,7 @@ try {
   const failedQueued = sync({
     reason: "proof-queued-retained",
     sessions: [{ agentId, sessionId: "proof-retained", sessionKey: retainedKey }],
+    archiveFiles: [archiveFile],
   });
   const failures = await Promise.allSettled([blockedOwner, failedQueued]);
   const lockedSyncFailures = failures.filter((entry) => entry.status === "rejected").length;
@@ -181,22 +205,34 @@ try {
         .prepare("SELECT COUNT(*) AS count FROM memory_index_chunks WHERE text LIKE ?")
         .get(`%${markers.trigger}%`) as { count: number }
     ).count > 0;
+  const archiveBefore =
+    (
+      observer
+        .prepare("SELECT COUNT(*) AS count FROM memory_index_chunks WHERE text LIKE ?")
+        .get(`%${markers.archive}%`) as { count: number }
+    ).count > 0;
   observer.close();
-  if (retainedBefore || triggerBefore) {
+  if (retainedBefore || triggerBefore || archiveBefore) {
     throw new Error("a recovery target was unexpectedly indexed before the idle trigger");
   }
 
   const recoveryState = manager as unknown as {
     syncing: Promise<void> | null;
+    queuedArchiveFiles: Set<string>;
     queuedSessions: Map<string, unknown>;
     sessionsDirtyFiles: Set<string>;
     sessionsFullRetryDirty: boolean;
   };
   const retainedQueueBeforeRecovery = recoveryState.queuedSessions.size;
+  const retainedArchiveQueueBeforeRecovery = recoveryState.queuedArchiveFiles.size;
   const dirtySessionFilesBeforeRecovery = recoveryState.sessionsDirtyFiles.size;
   const fullRetryBeforeRecovery = recoveryState.sessionsFullRetryDirty;
-  if (recoveryState.syncing !== null || retainedQueueBeforeRecovery !== 1) {
-    throw new Error("manager was not idle with exactly one retained target");
+  if (
+    recoveryState.syncing !== null ||
+    retainedQueueBeforeRecovery !== 1 ||
+    retainedArchiveQueueBeforeRecovery !== 1
+  ) {
+    throw new Error("manager was not idle with exactly one retained session and archive target");
   }
 
   const recoveryProgress: Array<{ completed: number; total: number; label?: string }> = [];
@@ -214,7 +250,12 @@ try {
     reason: "proof-competing-untargeted-sync",
     progress: (update) => competingUntargetedProgress.push(update),
   });
-  const recoveryResults = await Promise.allSettled([recovery, competingUntargetedSync]);
+  const queueSettlementTimeoutMs = 15_000;
+  const recoveryResults = await withTimeout(
+    Promise.allSettled([recovery, competingUntargetedSync]),
+    queueSettlementTimeoutMs,
+    "queue-owner self-deadlock check",
+  );
   const recoveryStatus = recoveryResults[0]?.status;
   const competingUntargetedStatus = recoveryResults[1]?.status;
   if (recoveryStatus !== "fulfilled" || competingUntargetedStatus !== "fulfilled") {
@@ -237,23 +278,26 @@ try {
     ).count;
   const retainedAfter = indexedCount(markers.retained) > 0;
   const triggerAfter = indexedCount(markers.trigger) > 0;
+  const archiveAfter = indexedCount(markers.archive) > 0;
   recoveryObserver.close();
-  if (!retainedAfter || !triggerAfter) {
+  if (!retainedAfter || !triggerAfter || !archiveAfter) {
     throw new Error(
-      `recovery result mismatch: retained=${String(retainedAfter)} trigger=${String(triggerAfter)}`,
+      `recovery result mismatch: retained=${String(retainedAfter)} trigger=${String(triggerAfter)} archive=${String(archiveAfter)}`,
     );
   }
   if (recoveryProgress.length === 0) {
     throw new Error("idle recovery trigger did not receive progress");
   }
   const retainedQueueAfterRecovery = recoveryState.queuedSessions.size;
+  const retainedArchiveQueueAfterRecovery = recoveryState.queuedArchiveFiles.size;
   if (
     dirtySessionFilesBeforeRecovery !== 0 ||
     fullRetryBeforeRecovery ||
-    retainedQueueAfterRecovery !== 0
+    retainedQueueAfterRecovery !== 0 ||
+    retainedArchiveQueueAfterRecovery !== 0
   ) {
     throw new Error(
-      `unexpected recovery ownership state: dirty=${dirtySessionFilesBeforeRecovery} fullRetry=${String(fullRetryBeforeRecovery)} retainedAfter=${retainedQueueAfterRecovery}`,
+      `unexpected recovery ownership state: dirty=${dirtySessionFilesBeforeRecovery} fullRetry=${String(fullRetryBeforeRecovery)} retainedAfter=${retainedQueueAfterRecovery} archiveAfter=${retainedArchiveQueueAfterRecovery}`,
     );
   }
 
@@ -269,13 +313,18 @@ try {
   console.log(`competing_untargeted_sync_progress_updates=${competingUntargetedProgress.length}`);
   console.log(`recovery_sync_status=${recoveryStatus}`);
   console.log(`competing_untargeted_sync_status=${competingUntargetedStatus}`);
+  console.log(`queue_settlement_timeout_ms=${queueSettlementTimeoutMs}`);
   console.log(`retained_queue_before_recovery=${retainedQueueBeforeRecovery}`);
+  console.log(`retained_archive_queue_before_recovery=${retainedArchiveQueueBeforeRecovery}`);
   console.log(`sessions_dirty_files_before_recovery=${dirtySessionFilesBeforeRecovery}`);
   console.log(`sessions_full_retry_dirty_before_recovery=${String(fullRetryBeforeRecovery)}`);
   console.log("retained_target_before_recovery=absent");
+  console.log("retained_archive_target_before_recovery=absent");
   console.log("retained_target_after_recovery=indexed");
+  console.log("retained_archive_target_after_recovery=indexed");
   console.log("idle_trigger_after_recovery=indexed");
   console.log(`retained_queue_after_recovery=${retainedQueueAfterRecovery}`);
+  console.log(`retained_archive_queue_after_recovery=${retainedArchiveQueueAfterRecovery}`);
   console.log("verdict=pass");
 } finally {
   releaseExclusiveLock(lock);
