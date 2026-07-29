@@ -162,7 +162,7 @@ try {
   const triggerKey = await seedSession("proof-trigger", markers.trigger);
   const archiveFile = path.join(
     resolveSessionTranscriptsDirForAgent(agentId),
-    "proof-archive.jsonl",
+    "proof-archive.jsonl.deleted.2026-07-29T00-00-00.000Z",
   );
   await fs.writeFile(
     archiveFile,
