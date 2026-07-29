@@ -9,6 +9,7 @@ import {
   hashText,
   INVALID_PROJECT_ANNOTATION_KEY,
   MEMORY_CHUNKING_VERSION,
+  type MemorySyncParams,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
@@ -1678,6 +1679,78 @@ describe("memory index", () => {
       }
     } finally {
       restoreMemoryIndexStateDir();
+    }
+  });
+
+  it("drains retained queued targets through the next idle sync call", async () => {
+    const manager = await getFreshManager(
+      createCfg({
+        provider: "none",
+        sources: ["sessions"],
+        sessionMemory: true,
+      }),
+    );
+    try {
+      let releaseActiveSync = () => {};
+      const activeSyncGate = new Promise<void>((resolve) => {
+        releaseActiveSync = resolve;
+      });
+      const observedParams: Array<MemorySyncParams | undefined> = [];
+      let syncCall = 0;
+      const syncOwner = manager as unknown as {
+        runSyncWithReadonlyRecovery: (params?: MemorySyncParams) => Promise<void>;
+      };
+      const runSync = vi
+        .spyOn(syncOwner, "runSyncWithReadonlyRecovery")
+        .mockImplementation(async (params) => {
+          observedParams.push(params);
+          syncCall += 1;
+          if (syncCall === 1) {
+            await activeSyncGate;
+          } else if (syncCall === 2) {
+            throw new Error("transient sqlite failure");
+          }
+        });
+
+      const active = manager.sync({
+        reason: "test-active",
+        sessions: [{ agentId: "main", sessionId: "active", sessionKey: "agent:main:active" }],
+      });
+      await vi.waitFor(() => {
+        expect(runSync).toHaveBeenCalledTimes(1);
+      });
+
+      const failedQueued = manager.sync({
+        reason: "test-failed-queued",
+        sessions: [{ agentId: "main", sessionId: "retained", sessionKey: "agent:main:retained" }],
+      });
+      const queuedRejection = expect(failedQueued).rejects.toThrow("transient sqlite failure");
+      releaseActiveSync();
+      await active;
+      await queuedRejection;
+
+      expect(observedParams[1]).toEqual({
+        reason: "queued-sessions",
+        sessions: [{ agentId: "main", sessionId: "retained", sessionKey: "agent:main:retained" }],
+        archiveFiles: [],
+      });
+
+      await manager.sync({
+        reason: "test-recovery-trigger",
+        sessions: [{ agentId: "main", sessionId: "trigger", sessionKey: "agent:main:trigger" }],
+      });
+
+      expect(runSync).toHaveBeenCalledTimes(3);
+      expect(observedParams[2]).toEqual({
+        reason: "queued-sessions",
+        sessions: [
+          { agentId: "main", sessionId: "retained", sessionKey: "agent:main:retained" },
+          { agentId: "main", sessionId: "trigger", sessionKey: "agent:main:trigger" },
+        ],
+        archiveFiles: [],
+      });
+    } finally {
+      await manager.close?.();
     }
   });
 

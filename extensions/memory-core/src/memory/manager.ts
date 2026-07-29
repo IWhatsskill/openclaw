@@ -1906,6 +1906,14 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (this.closing || this.closed) {
       return;
     }
+    if (
+      hasTargetedSessionSyncParams(params) &&
+      (this.queuedArchiveFiles.size > 0 || this.queuedSessions.size > 0)
+    ) {
+      // A failed queued batch stays manager-owned. Route the next targeted
+      // call through the queue even while idle so it adopts that retained work.
+      return await this.enqueueTargetedSessionSync(params);
+    }
     return await this.syncAdmitted(params);
   }
 
