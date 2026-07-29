@@ -160,12 +160,29 @@ try {
   const blockerKey = await seedSession("proof-blocker", markers.blocker);
   const retainedKey = await seedSession("proof-retained", markers.retained);
   const triggerKey = await seedSession("proof-trigger", markers.trigger);
-  await seedSession("proof-archive", markers.archive);
   const archiveFile = path.join(
     resolveSessionTranscriptsDirForAgent(agentId),
     "proof-archive.jsonl",
   );
-  await fs.access(archiveFile);
+  await fs.writeFile(
+    archiveFile,
+    [
+      JSON.stringify({
+        type: "session",
+        id: "proof-archive",
+        timestamp: new Date().toISOString(),
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          timestamp: Date.now(),
+          content: [{ type: "text", text: markers.archive }],
+        },
+      }),
+    ].join("\n") + "\n",
+    "utf8",
+  );
   const dbPath = resolveOpenClawAgentSqlitePath({ agentId });
 
   lock = openExclusiveLock(dbPath);
