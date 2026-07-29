@@ -9,6 +9,8 @@ import {
   hashText,
   INVALID_PROJECT_ANNOTATION_KEY,
   MEMORY_CHUNKING_VERSION,
+  type MemorySessionSyncTarget,
+  type MemorySyncParams,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
@@ -1768,7 +1770,35 @@ describe("memory index", () => {
       lock.exec("ROLLBACK");
       lock.close();
       lock = null;
-      expect(failures.map((result) => result.status)).toEqual(["rejected", "rejected"]);
+      const describeSqliteFailure = (failure: unknown): string => {
+        const details = [String(failure)];
+        if (failure && typeof failure === "object") {
+          const record = failure as Record<string, unknown>;
+          for (const key of ["message", "code"] as const) {
+            if (typeof record[key] === "string") {
+              details.push(record[key]);
+            }
+          }
+          if (record.cause && typeof record.cause === "object") {
+            const cause = record.cause as Record<string, unknown>;
+            for (const key of ["message", "code"] as const) {
+              if (typeof cause[key] === "string") {
+                details.push(cause[key]);
+              }
+            }
+          }
+        }
+        return details.join(" ");
+      };
+      for (const result of failures) {
+        expect(result.status).toBe("rejected");
+        if (result.status !== "rejected") {
+          throw new Error("expected SQLite-locked sync to reject");
+        }
+        expect(describeSqliteFailure(result.reason)).toMatch(
+          /SQLITE_(?:BUSY|LOCKED)|database is (?:busy|locked)/i,
+        );
+      }
 
       const ftsMatchCount = (marker: string): number => {
         const observer = new DatabaseSync(dbPath, { readOnly: true });
@@ -1798,6 +1828,7 @@ describe("memory index", () => {
       expect(recoveryState.sessionsDirtyFiles.size).toBe(0);
       expect(recoveryState.sessionsFullRetryDirty).toBe(false);
 
+      const recoveryProgress = vi.fn();
       await manager.sync({
         reason: "test-recovery-trigger",
         sessions: [
@@ -1807,11 +1838,13 @@ describe("memory index", () => {
             sessionKey: sessionKey("trigger"),
           },
         ],
+        progress: recoveryProgress,
       });
 
       expect(ftsMatchCount(markers.retained)).toBeGreaterThan(0);
       expect(ftsMatchCount(markers.trigger)).toBeGreaterThan(0);
       expect(recoveryState.queuedSessions.size).toBe(0);
+      expect(recoveryProgress).toHaveBeenCalled();
     } finally {
       if (lock) {
         try {
@@ -1820,6 +1853,78 @@ describe("memory index", () => {
           lock.close();
         }
       }
+      await manager.close?.();
+    }
+  });
+
+  it("routes transition-window calls into retained queued targets", async () => {
+    const manager = await getFreshManager(
+      createCfg({
+        provider: "none",
+        sources: ["sessions"],
+        sessionMemory: true,
+      }),
+    );
+    let resolveQueueOwner: (() => void) | undefined;
+    const queueOwner = new Promise<void>((resolve) => {
+      resolveQueueOwner = resolve;
+    });
+    const owner = manager as unknown as {
+      syncing: Promise<void> | null;
+      queuedArchiveFiles: Set<string>;
+      queuedSessions: Map<string, MemorySessionSyncTarget>;
+      queuedProgressCallbacks: Set<NonNullable<MemorySyncParams["progress"]>>;
+      queuedSessionSync: Promise<void> | null;
+      syncAdmitted: (params?: MemorySyncParams) => Promise<void>;
+    };
+    const syncAdmitted = vi.spyOn(owner, "syncAdmitted").mockResolvedValue(undefined);
+    const progress = vi.fn();
+    try {
+      // Model the microtask window after the inner sync promise clears
+      // `syncing` but before the queue owner restores its failed snapshot.
+      owner.syncing = null;
+      owner.queuedArchiveFiles.clear();
+      owner.queuedSessions.clear();
+      owner.queuedProgressCallbacks.clear();
+      owner.queuedSessionSync = queueOwner;
+
+      const transitionCall = manager.sync({
+        reason: "test-transition-window",
+        sessions: [
+          {
+            agentId: "main",
+            sessionId: "transition",
+            sessionKey: "agent:main:transition",
+          },
+        ],
+        progress,
+      });
+
+      expect(syncAdmitted).not.toHaveBeenCalled();
+      expect(Array.from(owner.queuedSessions.values())).toEqual([
+        {
+          agentId: "main",
+          sessionId: "transition",
+          sessionKey: "agent:main:transition",
+        },
+      ]);
+      expect(owner.queuedProgressCallbacks.has(progress)).toBe(true);
+
+      owner.queuedSessions.set("restored", {
+        agentId: "main",
+        sessionId: "retained",
+        sessionKey: "agent:main:retained",
+      });
+      resolveQueueOwner?.();
+      await transitionCall;
+
+      expect(Array.from(owner.queuedSessions.values())).toHaveLength(2);
+    } finally {
+      resolveQueueOwner?.();
+      owner.queuedSessionSync = null;
+      owner.queuedSessions.clear();
+      owner.queuedProgressCallbacks.clear();
+      syncAdmitted.mockRestore();
       await manager.close?.();
     }
   });

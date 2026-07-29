@@ -491,6 +491,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   private syncing: Promise<void> | null = null;
   private queuedArchiveFiles = new Set<string>();
   private queuedSessions = new Map<string, MemorySessionSyncTarget>();
+  private queuedForce = false;
+  private queuedProgressCallbacks = new Set<NonNullable<MemorySyncParams["progress"]>>();
   private queuedSessionSync: Promise<void> | null = null;
   private readonlyRecoveryAttempts = 0;
   private readonlyRecoverySuccesses = 0;
@@ -1908,7 +1910,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     }
     if (
       hasTargetedSessionSyncParams(params) &&
-      (this.queuedArchiveFiles.size > 0 || this.queuedSessions.size > 0)
+      (this.queuedSessionSync !== null ||
+        this.queuedArchiveFiles.size > 0 ||
+        this.queuedSessions.size > 0)
     ) {
       // A failed queued batch stays manager-owned. Route the next targeted
       // call through the queue even while idle so it adopts that retained work.
@@ -2014,7 +2018,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   }
 
   private enqueueTargetedSessionSync(
-    targets?: Pick<MemorySyncParams, "sessions" | "archiveFiles">,
+    targets?: Pick<MemorySyncParams, "sessions" | "archiveFiles" | "force" | "progress">,
   ): Promise<void> {
     return enqueueMemoryTargetedSessionSync(
       {
@@ -2022,6 +2026,11 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         getSyncing: () => this.syncing,
         getQueuedArchiveFiles: () => this.queuedArchiveFiles,
         getQueuedSessions: () => this.queuedSessions,
+        getQueuedForce: () => this.queuedForce,
+        setQueuedForce: (value) => {
+          this.queuedForce = value;
+        },
+        getQueuedProgressCallbacks: () => this.queuedProgressCallbacks,
         getQueuedSessionSync: () => this.queuedSessionSync,
         setQueuedSessionSync: (value) => {
           this.queuedSessionSync = value;
