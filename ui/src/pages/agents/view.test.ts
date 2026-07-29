@@ -1,9 +1,10 @@
 // Control UI tests cover agents behavior.
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+import type { ChannelAccountSnapshot } from "../../api/types.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { renderAgentFiles } from "./panels-status-files.ts";
+import { renderAgentChannels, renderAgentFiles } from "./panels-status-files.ts";
 import { renderAgents } from "./view.ts";
 
 type AgentsProps = Parameters<typeof renderAgents>[0];
@@ -153,11 +154,27 @@ function createProps(overrides: Partial<AgentsProps> = {}): AgentsProps {
     onIdentityAvatarSelect: () => undefined,
     onIdentitySave: () => undefined,
     onTogglePinnedAgent: () => undefined,
+    onOpenAgentDefaults: () => undefined,
     ...overrides,
   };
 }
 
 describe("renderAgents", () => {
+  it("opens global Agent defaults before the per-agent tabs", () => {
+    const container = document.createElement("div");
+    const onOpenAgentDefaults = vi.fn();
+    render(renderAgents(createProps({ onOpenAgentDefaults })), container);
+
+    const defaultsRow = container.querySelector<HTMLButtonElement>(".settings-row--nav");
+    const tabs = container.querySelector(".agent-tabs");
+    expect(defaultsRow?.textContent).toContain("Agent defaults");
+    expect(defaultsRow?.textContent).toContain("Defaults every agent inherits unless overridden.");
+    expect(defaultsRow?.compareDocumentPosition(tabs!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+
+    defaultsRow?.click();
+    expect(onOpenAgentDefaults).toHaveBeenCalledOnce();
+  });
+
   it("prefills the identity editor from the fetched agent identity", () => {
     const container = document.createElement("div");
     render(
@@ -270,6 +287,73 @@ describe("renderAgents", () => {
     expect(inheritedSelect?.selectedOptions[0]?.textContent?.trim()).toBe(
       "Inherit default (openai/gpt-5.4)",
     );
+  });
+
+  it("shows canonical model names alongside configured aliases in agent options", async () => {
+    const container = document.createElement("div");
+    const configForm = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-8" },
+          models: {
+            "anthropic/claude-opus-4-8": { alias: "opus" },
+            "anthropic/claude-sonnet-5": { alias: "sonnet" },
+            "nvidia/moonshotai/kimi-k2.5": { alias: "Kimi K2.5 (NVIDIA)" },
+            "local/unlisted-model": { alias: "My local model" },
+          },
+        },
+        list: [{ id: "alpha" }, { id: "beta" }],
+      },
+    };
+
+    render(
+      renderAgents(
+        createProps({
+          selectedAgentId: "alpha",
+          config: {
+            form: configForm,
+            loading: false,
+            saving: false,
+            dirty: false,
+          },
+          modelCatalog: [
+            {
+              id: "claude-opus-4-8",
+              alias: "opus",
+              name: "Opus 4.8",
+              provider: "anthropic",
+            },
+            {
+              id: "claude-sonnet-5",
+              alias: "sonnet",
+              name: "Sonnet 5",
+              provider: "anthropic",
+            },
+            {
+              id: "moonshotai/kimi-k2.5",
+              alias: "Kimi K2.5 (NVIDIA)",
+              name: "Kimi K2.5",
+              provider: "nvidia",
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    const select = await vi.waitFor(() => {
+      const candidate = container.querySelector<HTMLSelectElement>("select.settings-select");
+      expect(candidate?.value).toBe("anthropic/claude-opus-4-8");
+      return candidate;
+    });
+    const options = new Map(
+      Array.from(select?.options ?? []).map((option) => [option.value, option.textContent?.trim()]),
+    );
+
+    expect(options.get("anthropic/claude-opus-4-8")).toBe("Opus 4.8 · opus");
+    expect(options.get("anthropic/claude-sonnet-5")).toBe("Sonnet 5 · sonnet");
+    expect(options.get("nvidia/moonshotai/kimi-k2.5")).toBe("Kimi K2.5 (NVIDIA)");
+    expect(options.get("local/unlisted-model")).toBe("My local model (local/unlisted-model)");
   });
 
   it.each([
@@ -496,6 +580,78 @@ describe("renderAgents", () => {
       await i18n.setLocale("en");
       vi.unstubAllGlobals();
     }
+  });
+});
+
+describe("renderAgentChannels", () => {
+  function renderChannelStatus(accounts: ChannelAccountSnapshot[]) {
+    const container = document.createElement("div");
+    render(
+      renderAgentChannels({
+        context: {
+          workspace: "default",
+          model: "—",
+          runtime: "pi",
+          identityName: "Alpha",
+          identityAvatar: "—",
+          skillsLabel: "all skills",
+          isDefault: true,
+        },
+        configForm: null,
+        snapshot: {
+          ts: Date.now(),
+          channelOrder: ["discord"],
+          channelLabels: { discord: "Discord" },
+          channels: {},
+          channelAccounts: { discord: accounts },
+          channelDefaultAccountId: { discord: "default" },
+        },
+        loading: false,
+        error: null,
+        lastSuccess: Date.now(),
+        onRefresh: () => undefined,
+        onSelectPanel: () => undefined,
+      }),
+      container,
+    );
+    const row = Array.from(container.querySelectorAll(".settings-row")).find(
+      (candidate) => candidate.querySelector(".settings-row__title")?.textContent === "Discord",
+    );
+    const status = row?.querySelector(".settings-status");
+    return {
+      className: status?.className,
+      label: status?.textContent?.trim(),
+    };
+  }
+
+  it("does not let a successful probe override an explicitly stopped runtime", () => {
+    expect(
+      renderChannelStatus([
+        {
+          accountId: "stopped",
+          connected: false,
+          running: false,
+          probe: { ok: true },
+        },
+      ]),
+    ).toEqual({
+      className: "settings-status settings-status--warn",
+      label: "0/1 connected",
+    });
+  });
+
+  it("counts live runtimes and preserves probe fallback for passive channels", () => {
+    expect(
+      renderChannelStatus([
+        { accountId: "connected", connected: true, probe: { ok: false } },
+        { accountId: "running", running: true, probe: { ok: false } },
+        { accountId: "passive", probe: { ok: true } },
+        { accountId: "unreachable", probe: { ok: false } },
+      ]),
+    ).toEqual({
+      className: "settings-status settings-status--ok",
+      label: "3/4 connected",
+    });
   });
 });
 
