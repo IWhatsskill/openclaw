@@ -9,9 +9,22 @@ if (!baseCheckout || !headCheckout || !baseSha || !headSha) {
   throw new Error("usage: compare.mjs <base-checkout> <head-checkout> <base-sha> <head-sha>");
 }
 const proofScript = path.join(path.dirname(fileURLToPath(import.meta.url)), "proof.mts");
+const compareScript = fileURLToPath(import.meta.url);
+const sourceIdentityScript = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "source-identity.mjs",
+);
 const proofHarnessSha256 = crypto
   .createHash("sha256")
   .update(fs.readFileSync(proofScript))
+  .digest("hex");
+const compareHarnessSha256 = crypto
+  .createHash("sha256")
+  .update(fs.readFileSync(compareScript))
+  .digest("hex");
+const sourceIdentityHarnessSha256 = crypto
+  .createHash("sha256")
+  .update(fs.readFileSync(sourceIdentityScript))
   .digest("hex");
 const samples = { base: [], head: [] };
 
@@ -22,7 +35,11 @@ function run(label, checkout, sha) {
     {
       cwd: checkout,
       encoding: "utf8",
-      env: { ...process.env, PRODUCTION_ENTRYPOINT: "codex.cli.sessions.list" },
+      env: {
+        ...process.env,
+        PRODUCTION_ENTRYPOINT: "codex.cli.sessions.list",
+        PROOF_CHECKOUT_LABEL: label,
+      },
       timeout: 60_000,
     },
   );
@@ -56,7 +73,18 @@ const retained = {
 const all = [...retained.base, ...retained.head];
 const inventoryDigests = new Set(all.map((sample) => sample.inventory.digest));
 const resultDigests = new Set(all.map((sample) => sample.result.digest));
-if (inventoryDigests.size !== 1 || resultDigests.size !== 1) {
+const baseSourceIdentities = new Set(
+  retained.base.map((sample) => JSON.stringify(sample.sourceIdentity)),
+);
+const headSourceIdentities = new Set(
+  retained.head.map((sample) => JSON.stringify(sample.sourceIdentity)),
+);
+if (
+  inventoryDigests.size !== 1 ||
+  resultDigests.size !== 1 ||
+  baseSourceIdentities.size !== 1 ||
+  headSourceIdentities.size !== 1
+) {
   throw new Error("real Codex inventory or production output changed during the proof");
 }
 
@@ -97,7 +125,15 @@ const report = {
   ],
   mockedAffectedOwners: [],
   supportHarness: "registration receiver only",
-  harness: { proofSha256: proofHarnessSha256 },
+  harness: {
+    compareSha256: compareHarnessSha256,
+    proofSha256: proofHarnessSha256,
+    sourceIdentitySha256: sourceIdentityHarnessSha256,
+  },
+  sourceIdentity: {
+    base: retained.base[0].sourceIdentity,
+    head: retained.head[0].sourceIdentity,
+  },
   dataSource: {
     kind: "real default Codex home",
     fileCount: reference.inventory.fileCount,

@@ -1,0 +1,90 @@
+{
+  "schema": "codex-rollout-jsonl-focused-test-transcript-v1",
+  "base": "d7864458a7e0d128013bd15e46d92a7c6410d96d",
+  "head": "a6a828d83c105b03f3b26a9e8289a979c5ff6d00",
+  "harness": {
+    "focusedTestSha256": "ec0d13d4800a697c7dd4efc476f0d130e5c3a34d677515e702760a2de1c5ad83",
+    "sourceIdentitySha256": "e8dee00a56d8b43f371be4b51cd412ac00fb2d4054742cfbca070118c895dd4e"
+  },
+  "sourceIdentity": {
+    "checkout": "head",
+    "checkoutMode": "detached-clean-worktree",
+    "head": "a6a828d83c105b03f3b26a9e8289a979c5ff6d00",
+    "tree": "060336d2452f6c6d67828095df90898b2efd705d",
+    "statusPorcelain": "",
+    "workingTreeDiffExit": 0,
+    "indexDiffExit": 0,
+    "sourceFiles": [
+      {
+        "path": "extensions/codex/index.ts",
+        "present": true,
+        "gitBlob": "d3944785b0ce999f5fe1f84bbcec8bba1a48ab71",
+        "bytes": 14830,
+        "sha256": "c1fd85e9aa2f7b5b3e7162f9a12f6084f5ffd88e74553ef2fc376335c1ad1b01"
+      },
+      {
+        "path": "extensions/codex/src/jsonl-lines.ts",
+        "present": true,
+        "gitBlob": "20099cbed4de8dd51e477ae81f817256683bccd8",
+        "bytes": 2751,
+        "sha256": "62ab3fb33f6424fc4cfbcc1d0d03acae66d1b2dfd8049b6233fdeb551fc9561d"
+      },
+      {
+        "path": "extensions/codex/src/node-cli-sessions.ts",
+        "present": true,
+        "gitBlob": "bae01bf9a87a662df239ced202894a80278357d9",
+        "bytes": 22619,
+        "sha256": "783d57a0c18656107ebd745da14cb50008ba52ad882e59ae4a827b9be73eeb99"
+      },
+      {
+        "path": "extensions/codex/src/node-cli-sessions.test.ts",
+        "present": true,
+        "gitBlob": "161f11e7378c2e49dd14ef2fdc0b8f1009ce6637",
+        "bytes": 14076,
+        "sha256": "2d795ad02f10b17676a0e83fbdec105ac4fadf15a0e563f6c29eb47dcc5e3ee7"
+      },
+      {
+        "path": "package.json",
+        "present": true,
+        "gitBlob": "142def61a5c11ca490142663e653bff3678e6d89",
+        "bytes": 113681,
+        "sha256": "1d37b9146efdf7f8d2ddfb5f07299934637c02f0763ba70bfa86bbd403c4c0c5"
+      },
+      {
+        "path": "pnpm-lock.yaml",
+        "present": true,
+        "gitBlob": "6afc556a049c649b8a2aa9e2d4d682e42772886b",
+        "bytes": 537680,
+        "sha256": "99c880317053fc182b913e7501b7373d2fb9feef858d604aae2873732588adcc"
+      },
+      {
+        "path": "scripts/run-vitest.mjs",
+        "present": true,
+        "gitBlob": "e6c436717c0099b42a1e6f08393d3e483be4154c",
+        "bytes": 34402,
+        "sha256": "869439ee71ec20aaf37878ca933ce7440c660d149e18d67b24ae25430be0ec43"
+      }
+    ],
+    "verifiedBeforeAndAfter": true
+  },
+  "command": {
+    "argv": [
+      "node",
+      "scripts/run-vitest.mjs",
+      "extensions/codex/src/node-cli-sessions.test.ts"
+    ],
+    "cwd": "<immutable-head-checkout>",
+    "testRunner": "vitest"
+  },
+  "result": {
+    "exitCode": 0,
+    "signal": null,
+    "passedTests": 9,
+    "failedTests": 0,
+    "skippedTests": 0,
+    "stdout": "\n RUN  v4.1.10 <immutable-head-checkout>\n\n ✓ |extension-codex| extensions/codex/src/node-cli-sessions.test.ts (9 tests) 278ms\n\n Test Files  1 passed (1)\n      Tests  9 passed (9)\n   Start at  17:16:14\n   Duration  1.65s (transform 853ms, setup 527ms, import 674ms, tests 278ms, environment 0ms)",
+    "stderr": "[test] starting test/vitest/vitest.extension-codex.config.ts\n[test] passed 1 Vitest shard in 5.67s",
+    "outputSha256": "c9af87c7fa5056906e003c522b2c93513ce1b2fef415aeee3f4b3fdd664dd5a2"
+  },
+  "verdict": "PASS"
+}

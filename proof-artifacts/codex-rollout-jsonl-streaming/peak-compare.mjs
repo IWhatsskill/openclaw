@@ -11,6 +11,19 @@ if (!baseCheckout || !headCheckout || !baseSha || !headSha) {
 }
 const proofRoot = path.dirname(fileURLToPath(import.meta.url));
 const childScript = path.join(proofRoot, "peak-child.mts");
+const compareScript = fileURLToPath(import.meta.url);
+const sourceIdentityScript = path.join(proofRoot, "source-identity.mjs");
+const harness = {
+  peakCompareSha256: crypto
+    .createHash("sha256")
+    .update(fs.readFileSync(compareScript))
+    .digest("hex"),
+  peakChildSha256: crypto.createHash("sha256").update(fs.readFileSync(childScript)).digest("hex"),
+  sourceIdentitySha256: crypto
+    .createHash("sha256")
+    .update(fs.readFileSync(sourceIdentityScript))
+    .digest("hex"),
+};
 const fixtureRoot = await fsp.mkdtemp(path.join(proofRoot, "peak-fixture-"));
 const codexHome = path.join(fixtureRoot, "codex-home");
 const historyFile = path.join(codexHome, "history.jsonl");
@@ -211,6 +224,7 @@ function run(label, checkout, sha, sampleIndex) {
         EXPECTED_MESSAGE_COUNT: String(fixture.expectations.messageCount),
         EXPECTED_LAST_MESSAGE_DIGEST: fixture.expectations.lastMessageDigest,
         PRODUCTION_ENTRYPOINT: "codex.cli.sessions.list",
+        PROOF_CHECKOUT_LABEL: label,
       },
       timeout: 180_000,
     },
@@ -227,6 +241,7 @@ function run(label, checkout, sha, sampleIndex) {
     result: parsed.result,
     entrypoint: parsed.entrypoint,
     mockedAffectedOwners: parsed.mockedAffectedOwners,
+    sourceIdentity: parsed.sourceIdentity,
   });
 }
 
@@ -259,12 +274,22 @@ try {
   };
   const all = [...retained.base, ...retained.head];
   const outputDigests = new Set(all.map((sample) => sample.result.digest));
+  const baseSourceIdentities = new Set(
+    retained.base.map((sample) => JSON.stringify(sample.sourceIdentity)),
+  );
+  const headSourceIdentities = new Set(
+    retained.head.map((sample) => JSON.stringify(sample.sourceIdentity)),
+  );
   const baseMedianMaxRssBytes = median(retained.base.map((sample) => sample.maxRssBytes));
   const headMedianMaxRssBytes = median(retained.head.map((sample) => sample.maxRssBytes));
   const reductionPercent = Number(
     (((baseMedianMaxRssBytes - headMedianMaxRssBytes) / baseMedianMaxRssBytes) * 100).toFixed(1),
   );
-  const pass = outputDigests.size === 1 && reductionPercent >= 10;
+  const pass =
+    outputDigests.size === 1 &&
+    baseSourceIdentities.size === 1 &&
+    headSourceIdentities.size === 1 &&
+    reductionPercent >= 10;
   const report = {
     schema: "codex-cli-session-jsonl-external-peak-proof-v1",
     base: baseSha,
@@ -282,6 +307,11 @@ try {
     mockedAffectedOwners: [],
     supportHarness:
       "registration receiver, deterministic fixture generator, and sanitized boundary assertions only",
+    harness,
+    sourceIdentity: {
+      base: retained.base[0].sourceIdentity,
+      head: retained.head[0].sourceIdentity,
+    },
     fixture,
     retainedSamples: retained,
     baseMedianMaxRssBytes,

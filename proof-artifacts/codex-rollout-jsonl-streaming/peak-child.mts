@@ -1,7 +1,7 @@
-import { execFileSync } from "node:child_process";
 import crypto from "node:crypto";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { captureSourceIdentity, requireStableSourceIdentity } from "./source-identity.mjs";
 
 const checkout = path.resolve(process.argv[2] ?? "");
 const expectedHead = process.argv[3]?.trim() ?? "";
@@ -21,12 +21,12 @@ if (
 ) {
   throw new Error("boundary expectations are required");
 }
-const actualHead = execFileSync("git", ["-C", checkout, "rev-parse", "HEAD"], {
-  encoding: "utf8",
-}).trim();
-if (actualHead !== expectedHead) {
-  throw new Error(`HEAD mismatch: expected ${expectedHead}, got ${actualHead}`);
-}
+const sourceIdentityBefore = captureSourceIdentity(
+  checkout,
+  expectedHead,
+  process.env.PROOF_CHECKOUT_LABEL?.trim() || "unspecified",
+);
+const actualHead = sourceIdentityBefore.head;
 
 const moduleUrl = pathToFileURL(path.join(checkout, "extensions/codex/index.ts")).href;
 const { default: plugin } = await import(moduleUrl);
@@ -94,10 +94,19 @@ if (
 ) {
   throw new Error("production node-host command failed boundary assertions");
 }
+const sourceIdentity = requireStableSourceIdentity(
+  sourceIdentityBefore,
+  captureSourceIdentity(
+    checkout,
+    expectedHead,
+    process.env.PROOF_CHECKOUT_LABEL?.trim() || "unspecified",
+  ),
+);
 
 console.log(
   JSON.stringify({
     head: actualHead,
+    sourceIdentity,
     testRunner: "none",
     entrypoint:
       "extensions/codex/index.ts register -> registerNodeHostCommand -> codex.cli.sessions.list.handle",

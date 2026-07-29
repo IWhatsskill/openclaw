@@ -3,35 +3,48 @@
   "repository": "openclaw/openclaw",
   "base_sha": "d7864458a7e0d128013bd15e46d92a7c6410d96d",
   "head_sha": "a6a828d83c105b03f3b26a9e8289a979c5ff6d00",
-  "proof_command": "PRODUCTION_ENTRYPOINT=codex.cli.sessions.list PROOF_OUTPUT_JSON=raw-comparison-a6a828d83c10.json node compare.mjs <base-checkout> <head-checkout> d7864458a7e0d128013bd15e46d92a7c6410d96d a6a828d83c105b03f3b26a9e8289a979c5ff6d00",
-  "peak_proof_command": "PRODUCTION_ENTRYPOINT=codex.cli.sessions.list PEAK_OUTPUT_JSON=raw-peak-boundaries-a6a828d83c10.json node peak-compare.mjs <base-checkout> <head-checkout> d7864458a7e0d128013bd15e46d92a7c6410d96d a6a828d83c105b03f3b26a9e8289a979c5ff6d00",
+  "proof_command": "PRODUCTION_ENTRYPOINT=codex.cli.sessions.list PROOF_OUTPUT_JSON=raw-comparison-clean-a6a828d83c10.json node compare.mjs <immutable-base-checkout> <immutable-head-checkout> d7864458a7e0d128013bd15e46d92a7c6410d96d a6a828d83c105b03f3b26a9e8289a979c5ff6d00",
+  "peak_proof_command": "PRODUCTION_ENTRYPOINT=codex.cli.sessions.list PEAK_OUTPUT_JSON=raw-peak-boundaries-clean-a6a828d83c10.json node peak-compare.mjs <immutable-base-checkout> <immutable-head-checkout> d7864458a7e0d128013bd15e46d92a7c6410d96d a6a828d83c105b03f3b26a9e8289a979c5ff6d00",
+  "focused_test_command": "FOCUSED_TEST_OUTPUT_JSON=raw-focused-test-a6a828d83c10.json node focused-test.mjs <immutable-head-checkout> d7864458a7e0d128013bd15e46d92a7c6410d96d a6a828d83c105b03f3b26a9e8289a979c5ff6d00",
   "test_runner": "none",
   "entrypoint": "extensions/codex/index.ts register -> registerNodeHostCommand -> codex.cli.sessions.list.handle",
   "files": [
     {
       "path": "proof.mts",
-      "sha256": "25d57c546ef7d57311cce713a965ea6c27aad23f694715a5290d2f19d65ccb20"
+      "sha256": "5c9a518e43a4715432d50ee6ec856554ad7d26085c913026011eccba8c73aa1e"
     },
     {
       "path": "compare.mjs",
-      "sha256": "09e926304e3dee41d6e40841feb14d40a820d9ffe549de104e2a05022113a132"
+      "sha256": "41c7785127c5404123df0d383666cba96ed582d19da1e5d8e1fd870db104182b"
     },
     {
-      "path": "raw-comparison-a6a828d83c10.json",
-      "sha256": "77a7fcb976d99b02bb83bdd76f9d1b61de0696e65dae80f8867151cbbcf5c21d"
+      "path": "source-identity.mjs",
+      "sha256": "e8dee00a56d8b43f371be4b51cd412ac00fb2d4054742cfbca070118c895dd4e"
+    },
+    {
+      "path": "raw-comparison-clean-a6a828d83c10.json",
+      "sha256": "fa31b7d5440d23f36df3028facb4480708d4943b6494a2d01bdde35f489006e5"
     },
     {
       "path": "peak-child.mts",
-      "sha256": "9163e24fc01cce5a20dcb5326b68606e70cf06ee5bd83971b68d1fb06ed92255"
+      "sha256": "f96aa8dc8c93d63a1e83514c9641d2fedc667e008f65d33b0003ae63867ea558"
     },
     {
       "path": "peak-compare.mjs",
-      "sha256": "82ada03c86e83083389718e86d97583f363ce8da70fdc5e8b9fa157e1f0a28b4"
+      "sha256": "4d88d58396b543cfdb5261c37f299c4ca0238fd401957635ca0b85ffc9e3c736"
     },
     {
-      "path": "raw-peak-boundaries-a6a828d83c10.json",
-      "sha256": "b88e515435e17049edbf90d075313361d5a9029a3f7e0170fce3a19bf5e9b726"
+      "path": "raw-peak-boundaries-clean-a6a828d83c10.json",
+      "sha256": "9d59819d47a9b9537a6e8fbc5c7d8f9756bb3fd269e65a244b8d669946608942"
+    },
+    {
+      "path": "focused-test.mjs",
+      "sha256": "ec0d13d4800a697c7dd4efc476f0d130e5c3a34d677515e702760a2de1c5ad83"
+    },
+    {
+      "path": "raw-focused-test-a6a828d83c10.json",
+      "sha256": "a9f48bec22544ad6fa26c361388c6c6744f3c6669c481f8db9857b382cb54eed"
     }
   ],
-  "privacy": "Sanitized aggregate and per-run counts, sizes, timings, external maximum-RSS samples, and digests only; no session ids, paths, prompts, or preview text."
+  "privacy": "Sanitized clean-checkout source identities, aggregate and per-run counts, sizes, timings, external maximum-RSS samples, digests, and focused-test output only; no session ids, private paths, prompts, or preview text."
 }
