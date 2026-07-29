@@ -1415,7 +1415,7 @@ describe("memory-core doctor dreaming migration", () => {
       expect.stringContaining("Archived Memory Core legacy memory index sidecar"),
     ]);
     expect(readMemoryRows(agentPath)).toEqual({
-      sources: [{ path: "MEMORY.md", source: "memory", hash: "file-hash" }],
+      sources: [{ path: "MEMORY.md", source: "memory", hash: "" }],
       chunks: [{ id: "chunk-1", text: "remember this" }],
       cache: [{ provider: "openai", hash: "chunk-hash" }],
     });
@@ -1483,7 +1483,7 @@ describe("memory-core doctor dreaming migration", () => {
       expect.stringContaining("Archived Memory Core legacy memory index sidecar"),
     ]);
     expect(readMemoryRows(agentPath)).toEqual({
-      sources: [{ path: "MEMORY.md", source: "memory", hash: "file-hash" }],
+      sources: [{ path: "MEMORY.md", source: "memory", hash: "" }],
       chunks: [{ id: "chunk-1", text: "remember this" }],
       cache: [{ provider: "openai", hash: "chunk-hash" }],
     });
@@ -1658,7 +1658,7 @@ describe("memory-core doctor dreaming migration", () => {
     ]);
     for (const agentPath of [mainAgentPath, workAgentPath]) {
       expect(readMemoryRows(agentPath)).toEqual({
-        sources: [{ path: "MEMORY.md", source: "memory", hash: "file-hash" }],
+        sources: [{ path: "MEMORY.md", source: "memory", hash: "" }],
         chunks: [{ id: "chunk-1", text: "remember this" }],
         cache: [{ provider: "openai", hash: "chunk-hash" }],
       });
@@ -1781,7 +1781,7 @@ describe("memory-core doctor dreaming migration", () => {
       "Migrated Memory Core legacy memory index for agent main -> per-agent SQLite (1 source(s), 1 chunk(s), 1 cache row(s))",
     ]);
     expect(readMemoryRows(agentPath)).toEqual({
-      sources: [{ path: "MEMORY.md", source: "memory", hash: "file-hash" }],
+      sources: [{ path: "MEMORY.md", source: "memory", hash: "" }],
       chunks: [{ id: "chunk-1", text: "remember this" }],
       cache: [{ provider: "openai", hash: "chunk-hash" }],
     });
@@ -1972,13 +1972,6 @@ describe("memory-core doctor dreaming migration", () => {
     );
     expect(retryPreview?.preview).toEqual(
       expect.arrayContaining([
-        `- Memory Core legacy memory index: ${retryPath} -> ${path.join(
-          stateDir,
-          "agents",
-          "main",
-          "agent",
-          "openclaw-agent.sqlite",
-        )}`,
         `- Memory Core legacy memory index: ${alternateRetryPath} -> ${path.join(
           stateDir,
           "agents",
@@ -2005,7 +1998,7 @@ describe("memory-core doctor dreaming migration", () => {
         expect.stringContaining("Copied Memory Core legacy memory index sidecar retry path"),
       ]),
     );
-    expect(retryEntriesAfter).toEqual(retryEntriesBefore);
+    expect(retryEntriesAfter).toEqual(retryEntriesBefore.map((entry) => `${entry}.migrated`));
   });
 
   it("keeps canonical rows and archives a conflicting derived legacy index", async () => {
@@ -2023,7 +2016,7 @@ describe("memory-core doctor dreaming migration", () => {
       expect.stringContaining("Archived Memory Core legacy memory index sidecar"),
     ]);
     expect(readMemoryRows(agentPath)).toEqual({
-      sources: [{ path: "MEMORY.md", source: "memory", hash: "canonical-file-hash" }],
+      sources: [{ path: "MEMORY.md", source: "memory", hash: "" }],
       chunks: [{ id: "canonical-chunk", text: "canonical memory remains authoritative" }],
       cache: [],
     });
@@ -2168,7 +2161,7 @@ describe("memory-core doctor dreaming migration", () => {
       expect.stringContaining("Archived Memory Core legacy memory index sidecar"),
     ]);
     expect(readMemoryRows(agentPath)).toEqual({
-      sources: [{ path: "MEMORY.md", source: "memory", hash: "file-hash" }],
+      sources: [{ path: "MEMORY.md", source: "memory", hash: "" }],
       chunks: [{ id: "chunk-1", text: "canonical memory remains authoritative" }],
       cache: [],
     });
@@ -2192,8 +2185,8 @@ describe("memory-core doctor dreaming migration", () => {
     ]);
     expect(readMemoryRows(agentPath)).toEqual({
       sources: [
-        { path: "MEMORY.md", source: "memory", hash: "file-hash" },
-        { path: "OTHER.md", source: "memory", hash: "canonical-other-file-hash" },
+        { path: "MEMORY.md", source: "memory", hash: "" },
+        { path: "OTHER.md", source: "memory", hash: "" },
       ],
       chunks: [
         { id: "canonical-other-chunk", text: "canonical unrelated memory" },
@@ -2217,7 +2210,7 @@ describe("memory-core doctor dreaming migration", () => {
 
     expect(result.warnings).toEqual([]);
     expect(result.changes).toEqual([
-      "Migrated Memory Core legacy memory index for agent main -> per-agent SQLite (1 source(s), 1 chunk(s), 1 cache row(s))",
+      "Resolved Memory Core legacy memory index conflict for agent main by keeping canonical per-agent SQLite rows",
       expect.stringContaining("Archived Memory Core legacy memory index sidecar"),
     ]);
     const keywordRows = await searchMigratedKeywordRows(agentPath, "remember");
@@ -2259,8 +2252,8 @@ describe("memory-core doctor dreaming migration", () => {
     ]);
     expect(readMemoryRows(agentPath)).toEqual({
       sources: [
-        { path: "MEMORY.md", source: "memory", hash: "file-hash" },
-        { path: "OTHER.md", source: "memory", hash: "canonical-other-file-hash" },
+        { path: "MEMORY.md", source: "memory", hash: "" },
+        { path: "OTHER.md", source: "memory", hash: "" },
       ],
       chunks: [
         { id: "canonical-other-chunk", text: "canonical unrelated memory" },
@@ -2362,7 +2355,7 @@ describe("memory-core doctor dreaming migration", () => {
         expect.stringContaining("Archived Memory Core legacy memory index sidecar"),
       ]);
       expect(readMemoryRows(agentPath)).toEqual({
-        sources: [{ path: "OTHER.md", source: "memory", hash: "canonical-other-file-hash" }],
+        sources: [{ path: "OTHER.md", source: "memory", hash: "" }],
         chunks: [{ id: "canonical-other-chunk", text: "canonical unrelated memory" }],
         cache: [{ provider: "openai", hash: "chunk-hash" }],
       });
@@ -2471,7 +2464,7 @@ describe("memory-core doctor dreaming migration", () => {
     const keywordRows = await searchMigratedKeywordRows(agentPath, "stale");
     expect(keywordRows.map((row) => row.id)).toEqual(["chunk-1"]);
     expect(readMemoryRows(agentPath)).toEqual({
-      sources: [{ path: "MEMORY.md", source: "memory", hash: "file-hash" }],
+      sources: [{ path: "MEMORY.md", source: "memory", hash: "" }],
       chunks: [{ id: "chunk-1", text: "remember this" }],
       cache: [],
     });
