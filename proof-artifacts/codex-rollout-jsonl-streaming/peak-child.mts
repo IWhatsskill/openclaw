@@ -75,7 +75,7 @@ console.log(
       "bundled Codex plugin registration",
       "registered node-host command",
       "filesystem",
-      "Codex rollout JSONL",
+      "Codex history and rollout JSONL",
     ],
     mockedAffectedOwners: [],
     supportHarness: "registration receiver only",

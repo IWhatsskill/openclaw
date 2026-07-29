@@ -13,11 +13,14 @@ const proofRoot = path.dirname(fileURLToPath(import.meta.url));
 const childScript = path.join(proofRoot, "peak-child.mts");
 const fixtureRoot = await fsp.mkdtemp(path.join(proofRoot, "peak-fixture-"));
 const codexHome = path.join(fixtureRoot, "codex-home");
+const historyFile = path.join(codexHome, "history.jsonl");
 const sessionDir = path.join(codexHome, "sessions", "2026", "07", "29");
 const sessionId = "019e23d1-f33d-78e3-959e-0f56f30a5fff";
 const rolloutFile = path.join(sessionDir, `rollout-2026-07-29T00-00-00-${sessionId}.jsonl`);
 const recordCount = 2_048;
 const paddingBytes = 64 * 1_024;
+const historyRecordCount = 80;
+const historyPaddingBytes = 64 * 1_024;
 const samples = { base: [], head: [] };
 
 function write(stream, value) {
@@ -40,8 +43,43 @@ function write(stream, value) {
   });
 }
 
+async function finish(stream) {
+  await new Promise((resolve, reject) => {
+    stream.once("error", reject);
+    stream.end(resolve);
+  });
+}
+
+async function digestFile(file) {
+  return await new Promise((resolve, reject) => {
+    const hash = crypto.createHash("sha256");
+    const input = fs.createReadStream(file);
+    input.on("error", reject);
+    input.on("data", (chunk) => hash.update(chunk));
+    input.on("end", () => resolve(hash.digest("hex")));
+  });
+}
+
 async function createFixture() {
   await fsp.mkdir(sessionDir, { recursive: true });
+  const historyStream = fs.createWriteStream(historyFile, { encoding: "utf8" });
+  const historyPadding = "h".repeat(historyPaddingBytes);
+  let historyMaxRecordBytes = 0;
+  for (let index = 0; index < historyRecordCount; index += 1) {
+    const text =
+      index === historyRecordCount - 1
+        ? "external peak proof history"
+        : `${String(index).padStart(4, "0")}:${historyPadding}`;
+    const record = JSON.stringify({
+      session_id: sessionId,
+      ts: 1_785_283_200 + index,
+      text,
+    });
+    historyMaxRecordBytes = Math.max(historyMaxRecordBytes, Buffer.byteLength(record));
+    await write(historyStream, `${record}\n`);
+  }
+  await finish(historyStream);
+
   const stream = fs.createWriteStream(rolloutFile, { encoding: "utf8" });
   await write(
     stream,
@@ -74,24 +112,28 @@ async function createFixture() {
       },
     }),
   );
-  await new Promise((resolve, reject) => {
-    stream.once("error", reject);
-    stream.end(resolve);
-  });
-  const stat = await fsp.stat(rolloutFile);
-  const digest = await new Promise((resolve, reject) => {
-    const hash = crypto.createHash("sha256");
-    const input = fs.createReadStream(rolloutFile);
-    input.on("error", reject);
-    input.on("data", (chunk) => hash.update(chunk));
-    input.on("end", () => resolve(hash.digest("hex")));
-  });
+  await finish(stream);
+  const [rolloutStat, historyStat, rolloutDigest, historyDigest] = await Promise.all([
+    fsp.stat(rolloutFile),
+    fsp.stat(historyFile),
+    digestFile(rolloutFile),
+    digestFile(historyFile),
+  ]);
   return {
-    fileBytes: stat.size,
-    physicalRecordCount: recordCount + 2,
-    fillerRecordCount: recordCount,
-    maxRecordBytes,
-    digest,
+    rollout: {
+      fileBytes: rolloutStat.size,
+      physicalRecordCount: recordCount + 2,
+      fillerRecordCount: recordCount,
+      maxRecordBytes,
+      digest: rolloutDigest,
+    },
+    history: {
+      fileBytes: historyStat.size,
+      physicalRecordCount: historyRecordCount,
+      maxRecordBytes: historyMaxRecordBytes,
+      digest: historyDigest,
+    },
+    totalBytes: rolloutStat.size + historyStat.size,
   };
 }
 
@@ -185,7 +227,7 @@ try {
       "bundled Codex plugin registration",
       "registered node-host command",
       "filesystem",
-      "Codex rollout JSONL",
+      "Codex history and rollout JSONL",
     ],
     mockedAffectedOwners: [],
     supportHarness: "registration receiver and deterministic fixture generator only",
