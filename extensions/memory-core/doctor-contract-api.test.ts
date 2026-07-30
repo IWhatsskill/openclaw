@@ -99,6 +99,18 @@ function vectorToBlob(embedding: number[]): Buffer {
   return Buffer.from(new Float32Array(embedding).buffer);
 }
 
+function insertCanonicalChunkProvenance(
+  db: DatabaseSync,
+  chunkId: string,
+  observedAt: number,
+): void {
+  db.prepare(
+    `INSERT INTO memory_index_chunk_provenance (
+       chunk_id, origin_class, session_kind, observed_at
+     ) VALUES (?, 'agent', 'unknown', ?)`,
+  ).run(chunkId, observedAt);
+}
+
 async function writeLegacyMemorySidecar(
   legacyPath: string,
   params: {
@@ -222,6 +234,7 @@ async function createCanonicalMemoryIndex(agentPath: string, text: string): Prom
     db.prepare(
       "INSERT INTO memory_index_chunks_fts (text, id, path, source, model, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?, ?)",
     ).run(text, "canonical-chunk", "MEMORY.md", "memory", "embed-model", 1, 1);
+    insertCanonicalChunkProvenance(db, "canonical-chunk", 31);
   } finally {
     db.close();
   }
@@ -271,6 +284,7 @@ async function createUnrelatedCanonicalMemoryIndex(
       1,
       1,
     );
+    insertCanonicalChunkProvenance(db, "canonical-other-chunk", 31);
   } finally {
     db.close();
   }
@@ -309,6 +323,7 @@ async function createCanonicalLegacyMemoryRowsWithFts(agentPath: string, ftsText
     db.prepare(
       "INSERT INTO memory_index_chunks_fts (text, id, path, source, model, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?, ?)",
     ).run(ftsText, "chunk-1", "MEMORY.md", "memory", "embed-model", 1, 2);
+    insertCanonicalChunkProvenance(db, "chunk-1", 30);
   } finally {
     db.close();
   }
@@ -1970,17 +1985,15 @@ describe("memory-core doctor dreaming migration", () => {
     expect(result.changes).toContain(
       `Copied Memory Core legacy memory index sidecar retry path -> ${alternateRetryPath}`,
     );
-    expect(retryPreview?.preview).toEqual(
-      expect.arrayContaining([
-        `- Memory Core legacy memory index: ${alternateRetryPath} -> ${path.join(
-          stateDir,
-          "agents",
-          "main",
-          "agent",
-          "openclaw-agent.sqlite",
-        )}`,
-      ]),
-    );
+    expect(retryPreview?.preview).toEqual([
+      `- Memory Core legacy memory index: ${alternateRetryPath} -> ${path.join(
+        stateDir,
+        "agents",
+        "main",
+        "agent",
+        "openclaw-agent.sqlite",
+      )}`,
+    ]);
     await expect(fs.access(legacyPath)).resolves.toBeUndefined();
     await expect(fs.access(alternateRetryPath)).resolves.toBeUndefined();
 
@@ -2016,7 +2029,7 @@ describe("memory-core doctor dreaming migration", () => {
       expect.stringContaining("Archived Memory Core legacy memory index sidecar"),
     ]);
     expect(readMemoryRows(agentPath)).toEqual({
-      sources: [{ path: "MEMORY.md", source: "memory", hash: "" }],
+      sources: [{ path: "MEMORY.md", source: "memory", hash: "canonical-file-hash" }],
       chunks: [{ id: "canonical-chunk", text: "canonical memory remains authoritative" }],
       cache: [],
     });
@@ -2161,7 +2174,7 @@ describe("memory-core doctor dreaming migration", () => {
       expect.stringContaining("Archived Memory Core legacy memory index sidecar"),
     ]);
     expect(readMemoryRows(agentPath)).toEqual({
-      sources: [{ path: "MEMORY.md", source: "memory", hash: "" }],
+      sources: [{ path: "MEMORY.md", source: "memory", hash: "file-hash" }],
       chunks: [{ id: "chunk-1", text: "canonical memory remains authoritative" }],
       cache: [],
     });
@@ -2186,7 +2199,7 @@ describe("memory-core doctor dreaming migration", () => {
     expect(readMemoryRows(agentPath)).toEqual({
       sources: [
         { path: "MEMORY.md", source: "memory", hash: "" },
-        { path: "OTHER.md", source: "memory", hash: "" },
+        { path: "OTHER.md", source: "memory", hash: "canonical-other-file-hash" },
       ],
       chunks: [
         { id: "canonical-other-chunk", text: "canonical unrelated memory" },
@@ -2210,7 +2223,7 @@ describe("memory-core doctor dreaming migration", () => {
 
     expect(result.warnings).toEqual([]);
     expect(result.changes).toEqual([
-      "Resolved Memory Core legacy memory index conflict for agent main by keeping canonical per-agent SQLite rows",
+      "Migrated Memory Core legacy memory index for agent main -> per-agent SQLite (1 source(s), 1 chunk(s), 1 cache row(s))",
       expect.stringContaining("Archived Memory Core legacy memory index sidecar"),
     ]);
     const keywordRows = await searchMigratedKeywordRows(agentPath, "remember");
@@ -2253,7 +2266,7 @@ describe("memory-core doctor dreaming migration", () => {
     expect(readMemoryRows(agentPath)).toEqual({
       sources: [
         { path: "MEMORY.md", source: "memory", hash: "" },
-        { path: "OTHER.md", source: "memory", hash: "" },
+        { path: "OTHER.md", source: "memory", hash: "canonical-other-file-hash" },
       ],
       chunks: [
         { id: "canonical-other-chunk", text: "canonical unrelated memory" },
@@ -2355,7 +2368,7 @@ describe("memory-core doctor dreaming migration", () => {
         expect.stringContaining("Archived Memory Core legacy memory index sidecar"),
       ]);
       expect(readMemoryRows(agentPath)).toEqual({
-        sources: [{ path: "OTHER.md", source: "memory", hash: "" }],
+        sources: [{ path: "OTHER.md", source: "memory", hash: "canonical-other-file-hash" }],
         chunks: [{ id: "canonical-other-chunk", text: "canonical unrelated memory" }],
         cache: [{ provider: "openai", hash: "chunk-hash" }],
       });
@@ -2464,7 +2477,7 @@ describe("memory-core doctor dreaming migration", () => {
     const keywordRows = await searchMigratedKeywordRows(agentPath, "stale");
     expect(keywordRows.map((row) => row.id)).toEqual(["chunk-1"]);
     expect(readMemoryRows(agentPath)).toEqual({
-      sources: [{ path: "MEMORY.md", source: "memory", hash: "" }],
+      sources: [{ path: "MEMORY.md", source: "memory", hash: "file-hash" }],
       chunks: [{ id: "chunk-1", text: "remember this" }],
       cache: [],
     });
