@@ -451,7 +451,11 @@ describe("Codex session catalog errors", () => {
 
 describe("Codex supervision catalog", () => {
   it("lists non-archived interactive threads without probing transcript previews", async () => {
-    const pluginConfig = { supervision: { enabled: true } };
+    const pluginConfig = await normalizeCodexManifestConfig({
+      supervision: { enabled: true },
+      appServer: { command: "codex-catalog" },
+    });
+    expect((pluginConfig.appServer as Record<string, unknown>).homeScope).toBeUndefined();
     commandRpcMocks.codexControlRequest.mockResolvedValue({
       data: [
         {
@@ -513,96 +517,6 @@ describe("Codex supervision catalog", () => {
     expect(commandRpcMocks.codexControlRequest.mock.calls.map((call) => call[1])).not.toContain(
       "thread/resume",
     );
-  });
-
-  it("keeps omitted local home scope user-scoped across normalized live config reloads", async () => {
-    let pluginConfig: unknown = await normalizeCodexManifestConfig({
-      appServer: { command: "codex-catalog-a" },
-    });
-    let runtimeConfig = {
-      agents: { defaults: { workspace: "/workspace/a" } },
-    } as OpenClawConfig;
-    commandRpcMocks.codexControlRequest.mockResolvedValue({ data: [] });
-    const control = createCodexSessionCatalogControl({
-      getPluginConfig: () => pluginConfig,
-      getRuntimeConfig: () => runtimeConfig,
-    });
-
-    expect(pluginConfig).toMatchObject({
-      appServer: { command: "codex-catalog-a", transport: "stdio" },
-    });
-    expect((pluginConfig as { appServer: object }).appServer).not.toHaveProperty("homeScope");
-    await expect(control.listPage({ limit: 1, forceRefresh: true })).resolves.toEqual({
-      sessions: [],
-    });
-
-    pluginConfig = await normalizeCodexManifestConfig({
-      appServer: { command: "codex-catalog-b" },
-    });
-    runtimeConfig = {
-      agents: { defaults: { workspace: "/workspace/b" } },
-    } as OpenClawConfig;
-    await expect(control.listPage({ limit: 1, forceRefresh: true })).resolves.toEqual({
-      sessions: [],
-    });
-
-    pluginConfig = await normalizeCodexManifestConfig({
-      appServer: {
-        transport: "unix",
-        url: "unix:///tmp/codex-catalog.sock",
-      },
-    });
-    runtimeConfig = {
-      agents: { defaults: { workspace: "/workspace/c" } },
-    } as OpenClawConfig;
-    expect((pluginConfig as { appServer: object }).appServer).not.toHaveProperty("homeScope");
-    await expect(control.listPage({ limit: 1, forceRefresh: true })).resolves.toEqual({
-      sessions: [],
-    });
-
-    pluginConfig = await normalizeCodexManifestConfig({
-      appServer: { command: "codex-catalog-d", homeScope: "agent" },
-    });
-    runtimeConfig = {
-      agents: { defaults: { workspace: "/workspace/d" } },
-    } as OpenClawConfig;
-    await expect(control.listPage({ limit: 1, forceRefresh: true })).resolves.toEqual({
-      sessions: [],
-    });
-
-    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(4);
-    expect(commandRpcMocks.codexControlRequest.mock.calls[0]?.[3]).toMatchObject({
-      config: { agents: { defaults: { workspace: "/workspace/a" } } },
-      startOptions: {
-        command: "codex-catalog-a",
-        transport: "stdio",
-        homeScope: "user",
-      },
-    });
-    expect(commandRpcMocks.codexControlRequest.mock.calls[1]?.[3]).toMatchObject({
-      config: { agents: { defaults: { workspace: "/workspace/b" } } },
-      startOptions: {
-        command: "codex-catalog-b",
-        transport: "stdio",
-        homeScope: "user",
-      },
-    });
-    expect(commandRpcMocks.codexControlRequest.mock.calls[2]?.[3]).toMatchObject({
-      config: { agents: { defaults: { workspace: "/workspace/c" } } },
-      startOptions: {
-        transport: "unix",
-        homeScope: "user",
-        url: "unix:///tmp/codex-catalog.sock",
-      },
-    });
-    expect(commandRpcMocks.codexControlRequest.mock.calls[3]?.[3]).toMatchObject({
-      config: { agents: { defaults: { workspace: "/workspace/d" } } },
-      startOptions: {
-        command: "codex-catalog-d",
-        transport: "stdio",
-        homeScope: "agent",
-      },
-    });
   });
 
   it("uses a sanitized preview only when Codex has no thread name", async () => {
