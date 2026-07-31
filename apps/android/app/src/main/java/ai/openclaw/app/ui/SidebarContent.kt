@@ -199,10 +199,6 @@ internal fun OpenClawSidebar(
   val recentSessions = sidebarRecentSessions(sessions, query)
   val connectionLabel = gatewayStatusLabel(connection)
 
-  LaunchedEffect(isSearchActive) {
-    if (isSearchActive) searchFocusRequester.requestFocus()
-  }
-
   Column(
     modifier =
       Modifier
@@ -269,6 +265,9 @@ internal fun OpenClawSidebar(
       }
 
       if (isSearchActive) {
+        LaunchedEffect(searchFocusRequester) {
+          searchFocusRequester.requestFocus()
+        }
         SidebarSearchField(
           query = query,
           onQueryChange = { query = it },
