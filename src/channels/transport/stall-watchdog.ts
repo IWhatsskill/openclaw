@@ -23,7 +23,7 @@ export function createArmableStallWatchdog(params: {
   checkIntervalMs?: number;
   abortSignal?: AbortSignal;
   runtime?: RuntimeEnv;
-  onTimeout: (meta: StallWatchdogTimeoutMeta) => void | Promise<void>;
+  onTimeout: (meta: StallWatchdogTimeoutMeta) => void;
 }): ArmableStallWatchdog {
   const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
   const defaultCheckIntervalMs = Math.min(5_000, Math.max(250, timeoutMs / 6));
