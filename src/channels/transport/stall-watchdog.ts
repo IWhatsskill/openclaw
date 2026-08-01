@@ -16,6 +16,16 @@ export type ArmableStallWatchdog = {
   isArmed: () => boolean;
 };
 
+function stringifyFailure(error: unknown): string {
+  try {
+    return String(error);
+  } catch {
+    // Thrown values are hostile input; coercion must not create a second failure
+    // that escapes the watchdog's timer boundary.
+    return "Unknown error";
+  }
+}
+
 /** Creates a watchdog that reports once when an armed transport goes idle. */
 export function createArmableStallWatchdog(params: {
   label: string;
@@ -40,14 +50,19 @@ export function createArmableStallWatchdog(params: {
 
   const report = (message: string) => {
     try {
-      params.runtime?.error?.(message);
+      const result = params.runtime?.error?.(message);
+      // Keep the public reporter contract void while assimilating host callbacks
+      // that return a thenable, so their rejection cannot escape this timer boundary.
+      void Promise.resolve(result).catch(() => {});
     } catch {
       // Runtime reporters are host-owned too; a reporter failure must not escape
       // this timer boundary and terminate the gateway process.
     }
   };
   const reportTimeoutFailure = (error: unknown) =>
-    report(`[${params.label}] transport watchdog timeout handler failed: ${String(error)}`);
+    report(
+      `[${params.label}] transport watchdog timeout handler failed: ${stringifyFailure(error)}`,
+    );
 
   const clearTimer = () => {
     if (!timer) {
