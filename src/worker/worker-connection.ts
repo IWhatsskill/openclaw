@@ -387,9 +387,7 @@ export class WorkerConnection {
     for (const waiter of waiters) {
       waiter.resolve(hello);
     }
-    for (const listener of this.readyListeners) {
-      listener(hello);
-    }
+    notifyListeners(this.readyListeners, hello);
   }
 
   private transition(state: WorkerConnectionState): void {
