@@ -70,6 +70,69 @@ describe("createArmableStallWatchdog", () => {
     }
   });
 
+  it("contains synchronous timeout handler failures at the timer boundary", async () => {
+    vi.useFakeTimers();
+    try {
+      const runtimeErrors: string[] = [];
+      const watchdog = createArmableStallWatchdog({
+        label: "test-watchdog",
+        timeoutMs: 1_000,
+        checkIntervalMs: 100,
+        runtime: {
+          log: vi.fn(),
+          error: (message) => runtimeErrors.push(String(message)),
+          exit: vi.fn(),
+        },
+        onTimeout: () => {
+          throw new Error("owner failed");
+        },
+      });
+
+      watchdog.arm();
+      await vi.advanceTimersByTimeAsync(1_500);
+
+      expect(runtimeErrors).toEqual([
+        "[test-watchdog] transport watchdog timeout: idle 1s (limit 1s)",
+        "[test-watchdog] transport watchdog timeout handler failed: Error: owner failed",
+      ]);
+      expect(watchdog.isArmed()).toBe(false);
+      watchdog.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("contains rejected timeout handlers and host reporter failures", async () => {
+    vi.useFakeTimers();
+    try {
+      const onTimeout = vi.fn(async () => {
+        throw new Error("async owner failed");
+      });
+      const watchdog = createArmableStallWatchdog({
+        label: "test-watchdog",
+        timeoutMs: 1_000,
+        checkIntervalMs: 100,
+        runtime: {
+          log: vi.fn(),
+          error: () => {
+            throw new Error("reporter failed");
+          },
+          exit: vi.fn(),
+        },
+        onTimeout,
+      });
+
+      watchdog.arm();
+      await vi.advanceTimersByTimeAsync(1_500);
+
+      expect(onTimeout).toHaveBeenCalledTimes(1);
+      expect(watchdog.isArmed()).toBe(false);
+      watchdog.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("caps oversized timeout and check interval values before scheduling", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);

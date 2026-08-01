@@ -23,7 +23,7 @@ export function createArmableStallWatchdog(params: {
   checkIntervalMs?: number;
   abortSignal?: AbortSignal;
   runtime?: RuntimeEnv;
-  onTimeout: (meta: StallWatchdogTimeoutMeta) => void;
+  onTimeout: (meta: StallWatchdogTimeoutMeta) => void | Promise<void>;
 }): ArmableStallWatchdog {
   const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
   const defaultCheckIntervalMs = Math.min(5_000, Math.max(250, timeoutMs / 6));
@@ -37,6 +37,17 @@ export function createArmableStallWatchdog(params: {
   let stopped = false;
   let lastActivityAt = Date.now();
   let timer: ReturnType<typeof setInterval> | null = null;
+
+  const report = (message: string) => {
+    try {
+      params.runtime?.error?.(message);
+    } catch {
+      // Runtime reporters are host-owned too; a reporter failure must not escape
+      // this timer boundary and terminate the gateway process.
+    }
+  };
+  const reportTimeoutFailure = (error: unknown) =>
+    report(`[${params.label}] transport watchdog timeout handler failed: ${String(error)}`);
 
   const clearTimer = () => {
     if (!timer) {
@@ -87,10 +98,14 @@ export function createArmableStallWatchdog(params: {
     // Disarm before invoking onTimeout so retries or teardown cannot fire a
     // second timeout from the same idle interval.
     disarm();
-    params.runtime?.error?.(
+    report(
       `[${params.label}] transport watchdog timeout: idle ${Math.round(idleMs / 1000)}s (limit ${Math.round(timeoutMs / 1000)}s)`,
     );
-    params.onTimeout({ idleMs, timeoutMs });
+    try {
+      void Promise.resolve(params.onTimeout({ idleMs, timeoutMs })).catch(reportTimeoutFailure);
+    } catch (error) {
+      reportTimeoutFailure(error);
+    }
   };
 
   if (params.abortSignal?.aborted) {
