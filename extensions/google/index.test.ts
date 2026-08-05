@@ -1,5 +1,5 @@
 // Google tests cover index plugin behavior.
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
@@ -55,6 +55,7 @@ function createDeferred<T>() {
 
 function createMockRealtimeBridge(connectImpl: () => Promise<void> = async () => {}) {
   const connect = vi.fn(connectImpl);
+  const sendAudio = vi.fn();
   const sendUserMessage = vi.fn();
   const triggerGreeting = vi.fn();
   const close = vi.fn();
@@ -62,7 +63,7 @@ function createMockRealtimeBridge(connectImpl: () => Promise<void> = async () =>
     supportsToolResultContinuation: false,
     supportsToolResultSuppression: false,
     connect,
-    sendAudio: vi.fn(),
+    sendAudio,
     setMediaTimestamp: vi.fn(),
     sendUserMessage,
     triggerGreeting,
@@ -72,10 +73,14 @@ function createMockRealtimeBridge(connectImpl: () => Promise<void> = async () =>
     close,
     isConnected: vi.fn(() => false),
   };
-  return { bridge, close, connect, sendUserMessage, triggerGreeting };
+  return { bridge, close, connect, sendAudio, sendUserMessage, triggerGreeting };
 }
 
-function createLazyRealtimeBridge(onError = vi.fn(), onReady?: () => void) {
+function createLazyRealtimeBridge(
+  onError = vi.fn(),
+  onReady?: () => void,
+  onClose?: (reason: "completed" | "error") => void,
+) {
   let realtimeProvider: RealtimeVoiceProviderPlugin | undefined;
   googlePlugin.register(
     createTestPluginApi({
@@ -90,6 +95,7 @@ function createLazyRealtimeBridge(onError = vi.fn(), onReady?: () => void) {
     onClearAudio() {},
     onError,
     onReady,
+    onClose,
   });
   if (!bridge) {
     throw new Error("expected Google realtime bridge");
@@ -103,6 +109,14 @@ function signalRealtimeBridgeReady() {
     throw new Error("expected Google realtime bridge request");
   }
   request.onReady?.();
+}
+
+function signalRealtimeBridgeClose(reason: "completed" | "error") {
+  const request = createRealtimeBridgeMock.mock.calls.at(-1)?.[0];
+  if (!request) {
+    throw new Error("expected Google realtime bridge request");
+  }
+  request.onClose?.(reason);
 }
 
 describe("google provider plugin hooks", () => {
@@ -313,6 +327,86 @@ describe("google provider plugin hooks", () => {
     ).toBe("gcp-vertex-credentials");
   });
 
+  it("prefers relocated Google Cloud SDK ADC over the home fallback", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-cloud-sdk-"));
+    const cloudSdkDir = path.join(tempDir, "cloud-sdk");
+    const homeCredentialsDir = path.join(tempDir, "home", ".config", "gcloud");
+    await Promise.all([
+      mkdir(cloudSdkDir, { recursive: true }),
+      mkdir(homeCredentialsDir, { recursive: true }),
+    ]);
+    const relocatedCredentialsPath = path.join(cloudSdkDir, "application_default_credentials.json");
+    const homeCredentialsPath = path.join(
+      homeCredentialsDir,
+      "application_default_credentials.json",
+    );
+    await Promise.all([
+      writeFile(
+        relocatedCredentialsPath,
+        JSON.stringify({
+          type: "authorized_user",
+          client_id: "fixture-client",
+          client_secret: "fixture-secret",
+          refresh_token: "fixture-refresh",
+        }),
+        "utf8",
+      ),
+      writeFile(homeCredentialsPath, JSON.stringify({ type: "unsupported" }), "utf8"),
+    ]);
+    const { providers } = await registerProviderPlugin({
+      plugin: googleProviderPlugin,
+      id: "google",
+      name: "Google Provider",
+    });
+    const provider = requireRegisteredProvider(providers, "google-vertex");
+    const env = {
+      CLOUDSDK_CONFIG: cloudSdkDir,
+      HOME: path.join(tempDir, "home"),
+      GOOGLE_CLOUD_PROJECT: "fixture-project",
+      GOOGLE_CLOUD_LOCATION: "global",
+    };
+
+    expect(provider.resolveConfigApiKey?.({ provider: "google-vertex", env })).toBe(
+      "gcp-vertex-credentials",
+    );
+    expect(googleProviderDiscovery.resolveConfigApiKey?.({ provider: "google-vertex", env })).toBe(
+      "gcp-vertex-credentials",
+    );
+    expect(
+      provider.resolveConfigApiKey?.({
+        provider: "google-vertex",
+        env: { ...env, GOOGLE_APPLICATION_CREDENTIALS: homeCredentialsPath },
+      }),
+    ).toBeUndefined();
+
+    await writeFile(
+      homeCredentialsPath,
+      JSON.stringify({
+        type: "authorized_user",
+        client_id: "stale-client",
+        client_secret: "stale-secret",
+        refresh_token: "stale-refresh",
+      }),
+      "utf8",
+    );
+    const missingRelocatedCredentialsEnv = {
+      ...env,
+      CLOUDSDK_CONFIG: path.join(tempDir, "missing-cloud-sdk"),
+    };
+    expect(
+      provider.resolveConfigApiKey?.({
+        provider: "google-vertex",
+        env: missingRelocatedCredentialsEnv,
+      }),
+    ).toBeUndefined();
+    expect(
+      googleProviderDiscovery.resolveConfigApiKey?.({
+        provider: "google-vertex",
+        env: missingRelocatedCredentialsEnv,
+      }),
+    ).toBeUndefined();
+  });
+
   it("owns Gemini tool schema normalization for direct and CLI providers", async () => {
     const { providers } = await registerProviderPlugin({
       plugin: googleProviderPlugin,
@@ -485,6 +579,90 @@ describe("google provider plugin hooks", () => {
     expect(bridge.sendAudio(Buffer.alloc(160))).toBeUndefined();
     expect(bridge.setMediaTimestamp(20)).toBeUndefined();
     expect(bridge.sendUserMessage?.("hello")).toBeUndefined();
+  });
+
+  it("evicts the oldest lazy audio when the startup chunk limit is reached", async () => {
+    const loaded = createMockRealtimeBridge();
+    createRealtimeBridgeMock.mockReturnValue(loaded.bridge);
+    const { bridge } = createLazyRealtimeBridge();
+
+    for (let index = 0; index < 322; index += 1) {
+      bridge.sendAudio(Buffer.from([index & 0xff]));
+    }
+    await bridge.connect();
+    signalRealtimeBridgeReady();
+
+    expect(loaded.sendAudio).toHaveBeenCalledTimes(320);
+    expect(loaded.sendAudio.mock.calls[0]?.[0]).toEqual(Buffer.from([2]));
+    expect(loaded.sendAudio.mock.calls.at(-1)?.[0]).toEqual(Buffer.from([65]));
+  });
+
+  it("preserves lazy audio order across bridge loading and provider readiness", async () => {
+    const connected = createDeferred<void>();
+    const loaded = createMockRealtimeBridge(() => connected.promise);
+    createRealtimeBridgeMock.mockReturnValue(loaded.bridge);
+    const { bridge } = createLazyRealtimeBridge();
+
+    bridge.sendAudio(Buffer.from([0x01]));
+    const connectPromise = bridge.connect();
+    await vi.waitFor(() => expect(loaded.connect).toHaveBeenCalledOnce());
+    bridge.sendAudio(Buffer.from([0x02]));
+
+    expect(loaded.sendAudio).not.toHaveBeenCalled();
+    connected.resolve();
+    await connectPromise;
+    expect(loaded.sendAudio).not.toHaveBeenCalled();
+
+    signalRealtimeBridgeReady();
+    expect(loaded.sendAudio.mock.calls.map(([audio]) => audio)).toEqual([
+      Buffer.from([0x01]),
+      Buffer.from([0x02]),
+    ]);
+  });
+
+  it("copies lazy audio and evicts oldest chunks to enforce the byte limit", async () => {
+    const loaded = createMockRealtimeBridge();
+    createRealtimeBridgeMock.mockReturnValue(loaded.bridge);
+    const { bridge } = createLazyRealtimeBridge();
+    const backing = Buffer.alloc(2 * 1024 * 1024, 0x02);
+    const retainedView = backing.subarray(0, 512 * 1024);
+
+    bridge.sendAudio(Buffer.alloc(512 * 1024, 0x01));
+    bridge.sendAudio(retainedView);
+    retainedView.fill(0);
+    bridge.sendAudio(Buffer.from([0x03]));
+    bridge.sendAudio(Buffer.alloc(1024 * 1024 + 1, 0x04));
+    await bridge.connect();
+    signalRealtimeBridgeReady();
+
+    expect(loaded.sendAudio).toHaveBeenCalledTimes(2);
+    expect(loaded.sendAudio.mock.calls[0]?.[0]).toEqual(Buffer.alloc(512 * 1024, 0x02));
+    expect(loaded.sendAudio.mock.calls[1]?.[0]).toEqual(Buffer.from([0x03]));
+  });
+
+  it("clears lazy audio on terminal close and reopens only for an explicit connect", async () => {
+    const loaded = createMockRealtimeBridge();
+    createRealtimeBridgeMock.mockReturnValue(loaded.bridge);
+    const onClose = vi.fn();
+    const { bridge } = createLazyRealtimeBridge(vi.fn(), undefined, onClose);
+
+    bridge.sendAudio(Buffer.from([0x01]));
+    await bridge.connect();
+    signalRealtimeBridgeClose("error");
+    bridge.sendAudio(Buffer.from([0x02]));
+
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(onClose).toHaveBeenCalledWith("error");
+    expect(loaded.sendAudio).not.toHaveBeenCalled();
+
+    await bridge.connect();
+    signalRealtimeBridgeReady();
+    expect(loaded.sendAudio).not.toHaveBeenCalled();
+
+    bridge.sendAudio(Buffer.from([0x03]));
+    expect(loaded.sendAudio).toHaveBeenCalledOnce();
+    expect(loaded.sendAudio).toHaveBeenCalledWith(Buffer.from([0x03]));
+    bridge.close();
   });
 
   it("preserves queued user messages until the loaded bridge reports ready", async () => {

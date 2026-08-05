@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/index.js";
+import { isExecutionIdentityCollectionEnabled } from "../audit/audit-config.js";
+import { createExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import { sanitizePendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
 import type { SessionEntry } from "../config/sessions.js";
 import {
@@ -15,6 +17,7 @@ import type { GatewayRecoveryRuntime } from "../gateway/server-instance-runtime.
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { findRestartRecoveryUnsafeReplyHook } from "../plugins/restart-recovery-hook-safety.js";
+import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { CommandLane } from "../process/lanes.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL } from "../sessions/input-provenance.js";
@@ -39,7 +42,8 @@ import {
   type MainSessionRecoveryReservation,
 } from "./main-session-recovery-state.js";
 import { commitMainSessionRecovery } from "./main-session-recovery-store.js";
-import { ensureRuntimePluginsLoaded } from "./runtime-plugins.js";
+import { normalizeFiniteTimestamp } from "./main-session-restart-recovery-shared.js";
+import { loadAgentRuntimePluginRegistryHandle } from "./runtime-plugins.js";
 
 const log = createSubsystemLogger("main-session-restart-recovery");
 const RESTART_RECOVERY_RESUME_MESSAGE =
@@ -48,10 +52,6 @@ const RESTART_RECOVERY_RESUME_MESSAGE =
   "transcript and finish the interrupted response.";
 
 type RestartRecoveryTerminalStatus = "error" | "ok" | "timeout";
-
-function normalizeFiniteTimestamp(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
 
 export function hasRestartRecoveryMessageActionAuthority(entry: SessionEntry): boolean {
   const authority = resolveRestartRecoveryChannelAuthority(entry);
@@ -95,12 +95,13 @@ export function resolveRestartRecoveryResumeBlockReason(params: {
   if (!params.cfg) {
     return "pre-hook recovery runtime config is unavailable";
   }
+  let pluginRegistry: ReturnType<typeof loadAgentRuntimePluginRegistryHandle>;
   try {
     const agentId = resolveAgentIdFromSessionKey(
       params.sessionKey,
       resolveDefaultAgentId(params.cfg),
     );
-    ensureRuntimePluginsLoaded({
+    pluginRegistry = loadAgentRuntimePluginRegistryHandle({
       config: params.cfg,
       workspaceDir: resolveAgentWorkspaceDir(params.cfg, agentId),
       allowGatewaySubagentBinding: true,
@@ -108,10 +109,15 @@ export function resolveRestartRecoveryResumeBlockReason(params: {
   } catch {
     return "pre-hook recovery runtime plugins could not be loaded";
   }
+  if (!pluginRegistry) {
+    return "pre-hook recovery runtime plugins could not be loaded";
+  }
   // A stored hook result proves that invocation completed, but not that the
   // same plugin code and config are still loaded after restart. Fail closed
   // until hook activation owns a stable cross-process implementation digest.
-  const unsafeHook = findRestartRecoveryUnsafeReplyHook({ trigger: "user" });
+  const unsafeHook = withPluginRuntimeRegistryScope(pluginRegistry, () =>
+    findRestartRecoveryUnsafeReplyHook({ trigger: "user" }),
+  );
   return unsafeHook ? `pre-hook recovery cannot bypass the active ${unsafeHook} hook` : undefined;
 }
 
@@ -414,6 +420,7 @@ export async function resumeMainSession(params: {
   }
   const recoveryRunId = claimedRunId && claimedRunId !== sourceRunId ? claimedRunId : randomUUID();
   const reusingRecoveryRunId = recoveryRunId === claimedRunId;
+  const executionIdentityCollectionEnabled = isExecutionIdentityCollectionEnabled(params.cfg);
   const dispatchSessionKey = params.canonicalSessionKey ?? params.sessionKey;
   const recoverySessionKeys = Array.from(new Set([dispatchSessionKey, params.sessionKey]));
   let reservation: MainSessionRecoveryReservation | undefined;
@@ -441,6 +448,12 @@ export async function resumeMainSession(params: {
         now: Date.now(),
         observation: params.observation,
         runId: recoveryRunId,
+        executionIdentity: executionIdentityCollectionEnabled
+          ? {
+              state: "enabled",
+              token: createExecutionIdentityAdmissionToken(recoveryRunId),
+            }
+          : { state: "disabled" },
       },
       requireWriteSuccess: true,
       shouldContinue: params.shouldContinue,
@@ -506,6 +519,12 @@ export async function resumeMainSession(params: {
       expectedExistingSessionId: params.entry.sessionId,
       ...(params.sessionWorkAdmissionHandoffId
         ? { internalRuntimeHandoffId: params.sessionWorkAdmissionHandoffId }
+        : {}),
+      ...(reservation.executionIdentityAdmission
+        ? {
+            internalExecutionIdentityRetry:
+              reservation.executionIdentityAdmission.kind === "retry-reference",
+          }
         : {}),
       idempotencyKey: recoveryRunId,
       deliver:
