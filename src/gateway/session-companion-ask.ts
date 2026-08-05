@@ -5,6 +5,7 @@ import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../agents/agent
 import { resolveSimpleCompletionSelectionForAgent } from "../agents/simple-completion-runtime.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import { resolveStorePath } from "../config/sessions.js";
+import { isSessionTranscriptProjectionUnavailableError } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Message, Usage } from "../llm/types.js";
 import { redactToolPayloadText } from "../logging/redact.js";
@@ -75,6 +76,7 @@ type SessionCompanionAskRuntimeParams = SessionCompanionAskDeps & {
 type SessionCompanionAskErrorReason =
   | "busy"
   | "rate-limited"
+  | "transcript-rebuilding"
   | "utility-model-unavailable"
   | "unavailable";
 
@@ -432,6 +434,12 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
         params.threads.delete(sessionKey);
       }
       companionLog.warn("session companion ask failed", { sessionKey, error });
+      if (isSessionTranscriptProjectionUnavailableError(error)) {
+        throw new SessionCompanionAskError(
+          "transcript-rebuilding",
+          "Session history is rebuilding. Try again shortly.",
+        );
+      }
       throw new SessionCompanionAskError(
         "unavailable",
         "The session companion could not answer right now.",

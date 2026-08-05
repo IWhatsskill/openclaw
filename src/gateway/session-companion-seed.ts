@@ -1,6 +1,9 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { extractAssistantText, stripToolMessages } from "../agents/tools/chat-history-text.js";
-import { readSessionTranscriptBoundedContextMessageTailPage } from "../config/sessions/session-accessor.js";
+import {
+  isSessionTranscriptProjectionUnavailableError,
+  readSessionTranscriptBoundedContextMessageTailPage,
+} from "../config/sessions/session-accessor.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import type { SessionCompanionSeedMessage } from "./session-companion-state.js";
 
@@ -139,7 +142,10 @@ export function readSessionCompanionSeedMessages(params: {
       serializedBytes += page.serializedBytes;
     }
     return sanitizeSeedMessages(messages);
-  } catch {
+  } catch (error) {
+    if (isSessionTranscriptProjectionUnavailableError(error)) {
+      throw error;
+    }
     return [];
   }
 }

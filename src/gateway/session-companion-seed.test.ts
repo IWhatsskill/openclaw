@@ -3,6 +3,8 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   appendTranscriptEvent,
   persistSessionTranscriptTurn,
+  SessionTranscriptProjectionUnavailableError,
+  waitForSessionTranscriptProjection,
 } from "../config/sessions/session-accessor.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -51,6 +53,37 @@ describe("session companion transcript seed", () => {
     expect(seed.at(0)).toEqual({ role: "user", text: "message 160", ts: 160 });
     expect(seed.at(-1)).toEqual({ role: "assistant", text: "message 199", ts: 199 });
     expect(seed.some((message) => message.text === "message 200")).toBe(false);
+  });
+
+  it("propagates the retryable state while the projection rebuilds", async () => {
+    const stateDir = tempDirs.make("openclaw-companion-rebuild-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const scope = {
+      agentId: "main",
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      sessionId: "companion-rebuild-test",
+      sessionKey: "agent:main:companion-rebuild-test",
+    };
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          eventId: "seed",
+          parentId: null,
+          message: { role: "user" as const, content: "preserve this context", timestamp: 1 },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+    const database = openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
+    database.db
+      .prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?")
+      .run(scope.sessionId);
+
+    expect(() => readSessionCompanionSeedMessages(scope)).toThrow(
+      SessionTranscriptProjectionUnavailableError,
+    );
+
+    await waitForSessionTranscriptProjection(scope);
   });
 
   it("pages past a tool-heavy tail to preserve older seedable context", async () => {
