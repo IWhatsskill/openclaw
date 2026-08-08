@@ -35,7 +35,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 282,
+      "line": 406,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ConversationNotifications.kt",
       "source": "Chat failed",
       "surface": "android",
@@ -43,7 +43,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 328,
+      "line": 452,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ConversationNotifications.kt",
       "source": "Reply to OpenClaw…",
       "surface": "android",
@@ -51,7 +51,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 331,
+      "line": 455,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ConversationNotifications.kt",
       "source": "Reply",
       "surface": "android",
@@ -59,7 +59,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 372,
+      "line": 487,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ConversationNotifications.kt",
       "source": "OpenClaw",
       "surface": "android",
@@ -67,7 +67,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 376,
+      "line": 491,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ConversationNotifications.kt",
       "source": "You",
       "surface": "android",
@@ -75,7 +75,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 391,
+      "line": 506,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ConversationNotifications.kt",
       "source": "Chat",
       "surface": "android",
@@ -619,7 +619,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 380,
+      "line": 383,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/MainActivity.kt",
       "source": "OPENCLAW",
       "surface": "android",
