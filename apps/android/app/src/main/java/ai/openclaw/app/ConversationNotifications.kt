@@ -20,7 +20,9 @@ import androidx.core.content.LocusIdCompat
 import androidx.core.content.pm.ShortcutInfoCompat
 import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.graphics.drawable.IconCompat
-import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.withTimeout
 import java.security.MessageDigest
 
 internal const val actionOpenConversationNotification =
@@ -38,7 +40,7 @@ private const val conversationNotificationId = 1
 private const val conversationNotificationTagPrefix = "openclaw.chat."
 private const val conversationShortcutPrefix = "openclaw-chat-"
 private const val conversationGroup = "openclaw.chat"
-private const val replyTimeoutMs = 20_000L
+private const val replyTimeoutMs = 5_000L
 private const val maxTargetPartLength = 2_048
 private const val maxReplyLength = 16_000
 
@@ -189,6 +191,32 @@ internal suspend fun routeConversationNotificationReply(
   return send(target.toComposerOwner(), reply, idempotencyKey)
 }
 
+internal suspend fun sendConversationNotificationReplyWithRecovery(
+  timeoutMs: Long,
+  send: suspend () -> Boolean,
+  wasAdmitted: suspend () -> Boolean,
+): Boolean {
+  val sent =
+    try {
+      withTimeout(timeoutMs) { send() }
+    } catch (_: TimeoutCancellationException) {
+      false
+    } catch (err: CancellationException) {
+      throw err
+    } catch (_: Throwable) {
+      false
+    }
+  if (sent) return true
+
+  return try {
+    wasAdmitted()
+  } catch (err: CancellationException) {
+    throw err
+  } catch (_: Throwable) {
+    false
+  }
+}
+
 internal class ConversationReplyNotifier(
   private val context: Context,
 ) {
@@ -247,11 +275,12 @@ internal class ConversationReplyNotifier(
       .build()
   }
 
-  private fun buildSendFailureNotification(target: ConversationNotificationTarget): Notification {
+  internal fun buildSendFailureNotification(target: ConversationNotificationTarget): Notification {
     val contentIntent = contentPendingIntent(target)
     return baseBuilder(target, contentIntent)
       .setContentTitle(nativeString("OpenClaw"))
       .setContentText(nativeString("Chat failed"))
+      .addAction(replyAction(target))
       .setPublicVersion(publicVersion(contentIntent))
       .build()
   }
@@ -394,25 +423,34 @@ class ConversationReplyReceiver : BroadcastReceiver() {
     }
     runCatching { NodeForegroundService.resume(context, startNow = true) }
     app.launchRuntimeTask {
-      val sent =
-        runCatching {
-          withTimeoutOrNull(replyTimeoutMs) {
-            app
-              .ensureBackgroundRuntime()
-              .sendConversationNotificationReply(
+      try {
+        val idempotencyKey = conversationNotificationReplyIdempotencyKey(target)
+        var runtime: NodeRuntime? = null
+        val sent =
+          sendConversationNotificationReplyWithRecovery(
+            timeoutMs = replyTimeoutMs,
+            send = {
+              val resolvedRuntime = app.ensureBackgroundRuntime()
+              runtime = resolvedRuntime
+              resolvedRuntime.sendConversationNotificationReply(
                 target = target,
                 reply = reply,
-                idempotencyKey = conversationNotificationReplyIdempotencyKey(target),
+                idempotencyKey = idempotencyKey,
               )
-          } == true
-        }.getOrDefault(false)
-      val notifier = ConversationReplyNotifier(context.applicationContext)
-      if (sent) {
-        runCatching { notifier.cancel(target) }
-      } else {
-        runCatching { notifier.showSendFailure(target) }
+            },
+            wasAdmitted = {
+              runtime?.wasChatOutboxCommandAdmitted(idempotencyKey) == true
+            },
+          )
+        val notifier = ConversationReplyNotifier(context.applicationContext)
+        if (sent) {
+          runCatching { notifier.cancel(target) }
+        } else {
+          runCatching { notifier.showSendFailure(target) }
+        }
+      } finally {
+        pendingResult.finish()
       }
-      pendingResult.finish()
     }
   }
 }

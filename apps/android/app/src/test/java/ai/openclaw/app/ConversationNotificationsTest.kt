@@ -66,4 +66,17 @@ class ConversationNotificationsTest {
     assertEquals("Reply", action.title.toString())
     assertEquals(1, action.remoteInputs.size)
   }
+
+  @Test
+  fun sendFailureNotificationKeepsRemoteInputForRetry() {
+    val notification =
+      ConversationReplyNotifier(context).buildSendFailureNotification(target)
+    val action = notification.actions.single()
+
+    assertEquals(Notification.CATEGORY_MESSAGE, notification.category)
+    assertEquals(Notification.VISIBILITY_PRIVATE, notification.visibility)
+    assertEquals(1, notification.actions.size)
+    assertEquals("Reply", action.title.toString())
+    assertEquals(1, action.remoteInputs.size)
+  }
 }

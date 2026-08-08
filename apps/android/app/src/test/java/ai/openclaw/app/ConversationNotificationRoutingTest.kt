@@ -1,6 +1,8 @@
 package ai.openclaw.app
 
 import ai.openclaw.app.chat.ChatComposerOwner
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -123,5 +125,97 @@ class ConversationNotificationRoutingTest {
       assertFalse(sent)
       assertFalse(sessionSwitched)
       assertFalse(sendCalled)
+    }
+
+  @Test
+  fun successfulReplySkipsAdmissionLookup() =
+    runTest {
+      var admissionChecked = false
+
+      val sent =
+        sendConversationNotificationReplyWithRecovery(
+          timeoutMs = 5_000,
+          send = { true },
+          wasAdmitted = {
+            admissionChecked = true
+            false
+          },
+        )
+
+      assertTrue(sent)
+      assertFalse(admissionChecked)
+    }
+
+  @Test
+  fun timedOutReplyUsesDurableAdmissionReceipt() =
+    runTest {
+      val sent =
+        sendConversationNotificationReplyWithRecovery(
+          timeoutMs = 5,
+          send = {
+            delay(10)
+            false
+          },
+          wasAdmitted = { true },
+        )
+
+      assertTrue(sent)
+    }
+
+  @Test
+  fun failedReplyUsesDurableAdmissionReceipt() =
+    runTest {
+      val sent =
+        sendConversationNotificationReplyWithRecovery(
+          timeoutMs = 5_000,
+          send = { error("transport failed after admission") },
+          wasAdmitted = { true },
+        )
+
+      assertTrue(sent)
+    }
+
+  @Test
+  fun unadmittedReplyRemainsFailed() =
+    runTest {
+      val sent =
+        sendConversationNotificationReplyWithRecovery(
+          timeoutMs = 5_000,
+          send = { false },
+          wasAdmitted = { false },
+        )
+
+      assertFalse(sent)
+    }
+
+  @Test
+  fun admissionLookupFailureRemainsFailed() =
+    runTest {
+      val sent =
+        sendConversationNotificationReplyWithRecovery(
+          timeoutMs = 5_000,
+          send = { false },
+          wasAdmitted = { error("receipt unavailable") },
+        )
+
+      assertFalse(sent)
+    }
+
+  @Test
+  fun externalCancellationIsNotConvertedIntoRetryFailure() =
+    runTest {
+      var cancellationObserved = false
+
+      try {
+        sendConversationNotificationReplyWithRecovery(
+          timeoutMs = 5_000,
+          send = { throw CancellationException("cancelled") },
+          wasAdmitted = { true },
+        )
+      } catch (_: CancellationException) {
+        cancellationObserved = true
+      }
+
+      assertTrue(cancellationObserved)
     }
 }
