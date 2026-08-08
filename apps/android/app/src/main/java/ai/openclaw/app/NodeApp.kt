@@ -24,6 +24,7 @@ class NodeApp : Application() {
   // System share senders can create overlapping Activity tasks; keep one bounded process queue.
   internal val chatShareDraftSeq = AtomicLong()
   internal val chatShareDraftQueue = ChatShareDraftQueue()
+  internal val conversationNotificationLaunchStore = ConversationNotificationLaunchStore()
   internal val permissionRequester by lazy { PermissionRequester(this) }
 
   private val runtimeScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)

@@ -233,7 +233,10 @@ class MainActivity : AppCompatActivity() {
       viewModel.handleShareLaunchIntent(intent)
       return
     }
-    parseConversationNotificationLaunchIntent(intent)?.let { target ->
+    parseConversationNotificationLaunchIntent(
+      intent = intent,
+      takeTarget = (application as NodeApp).conversationNotificationLaunchStore::take,
+    )?.let { target ->
       viewModel.openConversationNotification(target)
       return
     }

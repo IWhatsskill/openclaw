@@ -106,6 +106,12 @@
         <receiver
             android:name=".ConversationReplyReceiver"
             android:exported="false" />
+        <activity
+            android:name=".ConversationNotificationLaunchActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
         <!-- External sender tasks must converge on one visible composer and share queue. -->
         <activity
             android:name=".MainActivity"
