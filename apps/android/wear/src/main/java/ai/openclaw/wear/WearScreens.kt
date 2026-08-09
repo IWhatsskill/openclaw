@@ -38,6 +38,7 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -70,6 +71,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.wear.compose.foundation.lazy.TransformingLazyColumn
 import androidx.wear.compose.foundation.lazy.rememberTransformingLazyColumnState
 import androidx.wear.compose.foundation.pager.HorizontalPager
@@ -90,6 +94,7 @@ internal enum class WearHomePage {
   Chat,
   Voice,
   Controls,
+  Pulse,
 }
 
 private const val VOICE_MODE_COUNT = 2
@@ -154,6 +159,8 @@ internal fun OpenClawWearScreens(
   onSelectAgent: (String) -> Unit,
   onSelectSession: (String) -> Unit,
   onSelectModel: (String) -> Unit,
+  onAgentPulseVisibilityChanged: (Boolean) -> Unit = {},
+  onAgentPulseRefresh: () -> Unit = {},
   onRefresh: () -> Unit,
   onGatewayEnabledChange: (Boolean) -> Unit,
   onThemeModeChange: (WearThemeMode) -> Unit,
@@ -163,6 +170,39 @@ internal fun OpenClawWearScreens(
   onSpeakLatest: () -> Unit,
   onStopSpeaking: () -> Unit,
 ) {
+  val lifecycleOwner = LocalLifecycleOwner.current
+  val pagerState =
+    rememberPagerState(
+      initialPage = initialPage.ordinal,
+      pageCount = { WearHomePage.entries.size },
+    )
+  var lifecycleResumed by remember(lifecycleOwner) {
+    mutableStateOf(
+      lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED),
+    )
+  }
+  DisposableEffect(lifecycleOwner) {
+    val observer =
+      LifecycleEventObserver { _, _ ->
+        val resumed =
+          lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
+        lifecycleResumed = resumed
+        if (!resumed) {
+          onAgentPulseVisibilityChanged(false)
+        }
+      }
+    lifecycleOwner.lifecycle.addObserver(observer)
+    onDispose {
+      lifecycleOwner.lifecycle.removeObserver(observer)
+      onAgentPulseVisibilityChanged(false)
+    }
+  }
+  LaunchedEffect(pagerState, lifecycleResumed, snapshot != null) {
+    snapshotFlow { pagerState.currentPage == WearHomePage.Pulse.ordinal }
+      .collect { selected ->
+        onAgentPulseVisibilityChanged(snapshot != null && lifecycleResumed && selected)
+      }
+  }
   if (snapshot == null) {
     ConnectionStateScreen(
       loading = loading,
@@ -173,11 +213,6 @@ internal fun OpenClawWearScreens(
   }
 
   val colors = OpenClawWearTheme.colors
-  val pagerState =
-    rememberPagerState(
-      initialPage = initialPage.ordinal,
-      pageCount = { WearHomePage.entries.size },
-    )
   val voicePagerState = rememberPagerState(pageCount = { VOICE_MODE_COUNT })
   val pagerScope = rememberCoroutineScope()
   val realtimeActive = snapshot.realtimeTalk.active || realtimeCapturing
@@ -251,22 +286,7 @@ internal fun OpenClawWearScreens(
             onSpeakLatest = onSpeakLatest,
             onStopSpeaking = onStopSpeaking,
           )
-        WearHomePage.Controls.ordinal ->
-          ControlsPage(
-            snapshot = snapshot,
-            themeMode = themeMode,
-            autoSpeak = autoSpeak,
-            notificationsGranted = notificationsGranted,
-            gatewayControlSupported = snapshot.gatewayControlsSupported,
-            actionBusy = actionBusy,
-            onThemeModeChange = onThemeModeChange,
-            onAutoSpeakChange = onAutoSpeakChange,
-            onRequestNotifications = onRequestNotifications,
-            onOpenNotificationSettings = onOpenNotificationSettings,
-            onRefresh = onRefresh,
-            onGatewayEnabledChange = onGatewayEnabledChange,
-          )
-        else ->
+        WearHomePage.Voice.ordinal ->
           VoicePage(
             voicePagerState = voicePagerState,
             showSwipeHint = showVoiceSwipeHint && pagerState.currentPage == WearHomePage.Voice.ordinal,
@@ -285,6 +305,33 @@ internal fun OpenClawWearScreens(
             onRealtimeTalk = onRealtimeTalk,
             onStopSpeaking = onStopSpeaking,
           )
+        WearHomePage.Controls.ordinal ->
+          ControlsPage(
+            snapshot = snapshot,
+            themeMode = themeMode,
+            autoSpeak = autoSpeak,
+            notificationsGranted = notificationsGranted,
+            gatewayControlSupported = snapshot.gatewayControlsSupported,
+            actionBusy = actionBusy,
+            onThemeModeChange = onThemeModeChange,
+            onAutoSpeakChange = onAutoSpeakChange,
+            onRequestNotifications = onRequestNotifications,
+            onOpenNotificationSettings = onOpenNotificationSettings,
+            onRefresh = onRefresh,
+            onGatewayEnabledChange = onGatewayEnabledChange,
+          )
+        WearHomePage.Pulse.ordinal ->
+          AgentPulsePage(
+            snapshot = snapshot,
+            onRefresh = {
+              if (snapshot.agentPulseSupported) {
+                onAgentPulseRefresh()
+              } else {
+                onRefresh()
+              }
+            },
+          )
+        else -> Unit
       }
     }
   }
@@ -1423,6 +1470,254 @@ private fun ControlsPage(
       )
     }
   }
+}
+
+@Composable
+private fun AgentPulsePage(
+  snapshot: WearConversationSnapshot,
+  onRefresh: () -> Unit,
+) {
+  val pulse = snapshot.agentPulse
+  WearPage(pageLabel = stringResource(R.string.pulse)) {
+    when {
+      snapshot.gatewayState != WearGatewayState.CONNECTED ->
+        item {
+          EmptyPanel(
+            title = stringResource(R.string.pulse_unavailable),
+            detail = stringResource(R.string.gateway_offline_detail),
+          )
+        }
+      !snapshot.agentPulseSupported ->
+        item {
+          EmptyPanel(
+            title = stringResource(R.string.pulse_unavailable),
+            detail = stringResource(R.string.update_required_detail),
+          )
+        }
+      pulse == null ->
+        item {
+          EmptyPanel(
+            title =
+              if (snapshot.agentPulseLoading) {
+                stringResource(R.string.pulse_loading)
+              } else {
+                stringResource(R.string.pulse_unavailable)
+              },
+            detail =
+              when {
+                snapshot.agentPulseLoading -> stringResource(R.string.pulse_loading_detail)
+                snapshot.agentPulseFailure != null -> failureDetail(snapshot.agentPulseFailure)
+                else -> stringResource(R.string.try_again)
+              },
+          )
+        }
+      else -> {
+        item { AgentPulseTasksPanel(pulse.tasks) }
+        item { AgentPulseSwarmPanel(pulse.swarm) }
+        item { AgentPulseApprovalsPanel(pulse.approvals) }
+        snapshot.agentPulseFailure?.let { pulseFailure ->
+          item { InlineError(text = failureDetail(pulseFailure)) }
+        }
+      }
+    }
+    item {
+      SecondaryButton(
+        label = stringResource(R.string.refresh),
+        enabled = !snapshot.agentPulseLoading,
+        onClick = onRefresh,
+      )
+    }
+  }
+}
+
+@Composable
+private fun AgentPulseTasksPanel(tasks: WearAgentPulseTasks) {
+  val ready = tasks.state == WearAgentPulseTaskState.Ready
+  Panel {
+    AgentPulsePanelHeader(
+      title = stringResource(R.string.pulse_tasks),
+      status =
+        if (ready) {
+          stringResource(R.string.pulse_ready)
+        } else {
+          stringResource(R.string.pulse_unavailable)
+        },
+      statusColor =
+        if (ready) {
+          OpenClawWearTheme.colors.success
+        } else {
+          OpenClawWearTheme.colors.danger
+        },
+    )
+    if (ready) {
+      AgentPulseMetricRow(stringResource(R.string.pulse_queued), tasks.queued)
+      AgentPulseMetricRow(stringResource(R.string.pulse_running), tasks.running)
+      AgentPulseMetricRow(stringResource(R.string.pulse_completed), tasks.completed)
+      AgentPulseMetricRow(stringResource(R.string.pulse_failed), tasks.failed)
+      AgentPulseDetail(text = stringResource(R.string.pulse_task_snapshot_bounded))
+      if (tasks.activeAtLimit == true) {
+        AgentPulseDetail(
+          text = stringResource(R.string.pulse_active_at_limit),
+          color = OpenClawWearTheme.colors.warning,
+        )
+      }
+      if (tasks.recentAtLimit == true) {
+        AgentPulseDetail(
+          text = stringResource(R.string.pulse_recent_at_limit),
+          color = OpenClawWearTheme.colors.warning,
+        )
+      }
+    }
+  }
+}
+
+@Composable
+private fun AgentPulseSwarmPanel(swarm: WearAgentPulseSwarm) {
+  val colors = OpenClawWearTheme.colors
+  val status =
+    when (swarm.state) {
+      WearAgentPulseSwarmState.Active -> stringResource(R.string.pulse_swarm_active)
+      WearAgentPulseSwarmState.Idle -> stringResource(R.string.pulse_swarm_idle)
+      WearAgentPulseSwarmState.Unavailable -> stringResource(R.string.pulse_unavailable)
+    }
+  val statusColor =
+    when (swarm.state) {
+      WearAgentPulseSwarmState.Active -> colors.warning
+      WearAgentPulseSwarmState.Idle -> colors.success
+      WearAgentPulseSwarmState.Unavailable -> colors.danger
+    }
+  Panel {
+    AgentPulsePanelHeader(
+      title = stringResource(R.string.pulse_swarm),
+      status = status,
+      statusColor = statusColor,
+    )
+    if (swarm.state == WearAgentPulseSwarmState.Active) {
+      AgentPulseMetricRow(stringResource(R.string.pulse_groups), swarm.groups)
+      AgentPulseMetricRow(stringResource(R.string.pulse_running), swarm.running)
+      AgentPulseMetricRow(stringResource(R.string.pulse_done), swarm.done)
+      AgentPulseMetricRow(stringResource(R.string.pulse_failed), swarm.failed)
+      swarm.phases.forEachIndexed { index, phase ->
+        Spacer(modifier = Modifier.height(6.dp))
+        Text(
+          text = stringResource(R.string.pulse_phase, index + 1),
+          color = colors.text,
+          fontSize = 11.sp,
+          fontWeight = FontWeight.SemiBold,
+        )
+        Text(
+          text =
+            stringResource(
+              R.string.pulse_phase_counts,
+              phase.queued,
+              phase.running,
+              phase.done,
+              phase.failed,
+              phase.hidden,
+            ),
+          color = colors.textMuted,
+          fontSize = 10.sp,
+          lineHeight = 14.sp,
+        )
+      }
+      if (swarm.morePhases == true) {
+        AgentPulseDetail(text = stringResource(R.string.pulse_more_phases))
+      }
+    }
+  }
+}
+
+@Composable
+private fun AgentPulseApprovalsPanel(approvals: WearAgentPulseApprovals) {
+  val colors = OpenClawWearTheme.colors
+  val status =
+    when (approvals.state) {
+      WearAgentPulseApprovalsState.Ready -> stringResource(R.string.pulse_ready)
+      WearAgentPulseApprovalsState.Refreshing -> stringResource(R.string.pulse_refreshing)
+      WearAgentPulseApprovalsState.Unavailable -> stringResource(R.string.pulse_unavailable)
+    }
+  val statusColor =
+    when (approvals.state) {
+      WearAgentPulseApprovalsState.Ready -> colors.success
+      WearAgentPulseApprovalsState.Refreshing -> colors.warning
+      WearAgentPulseApprovalsState.Unavailable -> colors.danger
+    }
+  Panel {
+    AgentPulsePanelHeader(
+      title = stringResource(R.string.pulse_attention),
+      status = status,
+      statusColor = statusColor,
+    )
+    if (approvals.state == WearAgentPulseApprovalsState.Ready) {
+      AgentPulseMetricRow(
+        label = stringResource(R.string.pulse_pending_requests),
+        value = approvals.pending,
+      )
+    }
+  }
+}
+
+@Composable
+private fun AgentPulsePanelHeader(
+  title: String,
+  status: String,
+  statusColor: Color,
+) {
+  Text(
+    text = title,
+    color = OpenClawWearTheme.colors.text,
+    fontSize = 15.sp,
+    fontWeight = FontWeight.SemiBold,
+    modifier = Modifier.fillMaxWidth(),
+  )
+  Text(
+    text = stringResource(R.string.pulse_status, status),
+    color = statusColor,
+    fontSize = 11.sp,
+    fontWeight = FontWeight.SemiBold,
+    modifier = Modifier.fillMaxWidth(),
+  )
+  Spacer(modifier = Modifier.height(6.dp))
+}
+
+@Composable
+private fun AgentPulseMetricRow(
+  label: String,
+  value: Int?,
+) {
+  Row(
+    modifier = Modifier.fillMaxWidth(),
+    horizontalArrangement = Arrangement.SpaceBetween,
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
+    Text(
+      text = label,
+      color = OpenClawWearTheme.colors.textMuted,
+      fontSize = 11.sp,
+      modifier = Modifier.weight(1f),
+    )
+    Text(
+      text = value?.toString() ?: stringResource(R.string.pulse_unknown),
+      color = OpenClawWearTheme.colors.text,
+      fontSize = 11.sp,
+      fontWeight = FontWeight.SemiBold,
+    )
+  }
+}
+
+@Composable
+private fun AgentPulseDetail(
+  text: String,
+  color: Color = OpenClawWearTheme.colors.textMuted,
+) {
+  Spacer(modifier = Modifier.height(4.dp))
+  Text(
+    text = text,
+    color = color,
+    fontSize = 10.sp,
+    lineHeight = 14.sp,
+    modifier = Modifier.fillMaxWidth(),
+  )
 }
 
 @Composable

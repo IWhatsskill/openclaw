@@ -35,6 +35,18 @@ class WearLaunchIntentTest {
   }
 
   @Test
+  fun pulseAppendsWithoutChangingExistingHomePageOrdinals() {
+    assertEquals(0, WearHomePage.Chat.ordinal)
+    assertEquals(1, WearHomePage.Voice.ordinal)
+    assertEquals(2, WearHomePage.Controls.ordinal)
+    assertEquals(3, WearHomePage.Pulse.ordinal)
+    assertEquals(
+      listOf(WearHomePage.Chat, WearHomePage.Voice, WearHomePage.Controls, WearHomePage.Pulse),
+      WearHomePage.entries.toList(),
+    )
+  }
+
+  @Test
   fun tileTalkLaunchStartsOnVoice() {
     val target =
       parseWearLaunchTarget(

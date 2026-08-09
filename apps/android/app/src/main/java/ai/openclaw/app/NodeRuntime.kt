@@ -122,6 +122,7 @@ import ai.openclaw.app.wear.WearProxyGatewayException
 import ai.openclaw.app.wear.WearProxyModel
 import ai.openclaw.app.wear.WearRealtimeAttemptOwner
 import ai.openclaw.app.wear.WearRealtimeTalkController
+import ai.openclaw.app.wear.projectWearAgentPulse
 import ai.openclaw.app.wear.wearConnectionFailure
 import ai.openclaw.wear.shared.WearMessage
 import ai.openclaw.wear.shared.WearRealtimeTalkCodec
@@ -1308,6 +1309,7 @@ class NodeRuntime private constructor(
   val execApprovalsNotice: StateFlow<GatewayExecApprovalNotice?> = _execApprovalsNotice.asStateFlow()
   private val execApprovalsRefreshSeq = AtomicLong(0)
   private val execApprovalsStateLock = Any()
+  private var execApprovalsSnapshotReady = false
   private val resolvedExecApprovalIds = Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
   private val pendingExecApprovalWrites = mutableMapOf<String, PendingExecApprovalWrite>()
 
@@ -1516,9 +1518,7 @@ class NodeRuntime private constructor(
       isGatewayConnected = operatorSession::isReady,
       gatewayStatusText = { synchronized(gatewayStatusLock) { operatorStatusText } },
       hasOperatorAdminScope = { OperatorAdminScope in _operatorScopes.value },
-      activeAgentId = {
-        resolveAgentIdFromMainSessionKey(mainSessionKey.value) ?: gatewayDefaultAgentId.value
-      },
+      activeAgentId = ::currentWearAgentId,
       activeSessionKey = { chatSessionKey.value },
       selectedModelRef = { chatSelectedModelRef.value },
       agents = {
@@ -1558,6 +1558,7 @@ class NodeRuntime private constructor(
       },
       connectGateway = { refreshGatewayConnection() },
       disconnectGateway = { disconnect() },
+      loadAgentPulse = ::loadWearAgentPulse,
       startRealtimeTalk = { nodeId, sessionKey, attemptId, language, attemptScopedAudio ->
         if (startWearRealtimeTalk(nodeId, sessionKey, attemptId, language, attemptScopedAudio)) wearRealtimeTalkSnapshot.value else null
       },
@@ -1566,6 +1567,61 @@ class NodeRuntime private constructor(
       },
     )
   }
+
+  private fun currentWearAgentId(): String? = resolveAgentIdFromMainSessionKey(mainSessionKey.value) ?: gatewayDefaultAgentId.value
+
+  private suspend fun loadWearAgentPulse(requestedSessionKey: String?): JsonObject {
+    val gatewayScope = captureGatewayDataScope()
+    val agentId = currentWearAgentId()
+    val sessionKey = chatSessionKey.value
+    val connected = gatewayScope != null && operatorSession.isReady()
+    val tasks =
+      if (connected && agentId != null) {
+        runCatching { listBackgroundTasks(agentId) }.getOrNull()
+      } else {
+        null
+      }
+    // Capture every projection input before the final route check so a route
+    // change cannot mix a current task result with later-route aggregates.
+    val swarmSnapshot = chat.currentSwarmSnapshot()
+    val approvals = currentWearAgentPulseApprovals()
+    val routeStillCurrent =
+      gatewayScope?.let { capturedScope ->
+        connected &&
+          isGatewayDataScopeCurrent(capturedScope) &&
+          operatorSession.isReady() &&
+          currentWearAgentId() == agentId &&
+          chatSessionKey.value == sessionKey
+      } == true
+    val swarmAvailable =
+      routeStillCurrent &&
+        requestedSessionKey == sessionKey &&
+        swarmSnapshot.isAvailableFor(sessionKey)
+    return projectWearAgentPulse(
+      gatewayConnected = routeStillCurrent,
+      tasks = tasks.takeIf { routeStillCurrent },
+      swarmAvailable = swarmAvailable,
+      swarmGroups = if (swarmAvailable) swarmSnapshot.groups else emptyList(),
+      pendingApprovalCount = approvals.pendingCount,
+      approvalsAvailable = routeStillCurrent && approvals.available,
+      approvalsRefreshing = approvals.refreshing,
+    )
+  }
+
+  private fun currentWearAgentPulseApprovals(): WearAgentPulseApprovalSnapshot =
+    synchronized(execApprovalsStateLock) {
+      WearAgentPulseApprovalSnapshot(
+        pendingCount = _execApprovals.value.size,
+        available = execApprovalsSnapshotReady && _execApprovalsErrorText.value == null,
+        refreshing = _execApprovalsRefreshing.value,
+      )
+    }
+
+  private data class WearAgentPulseApprovalSnapshot(
+    val pendingCount: Int,
+    val available: Boolean,
+    val refreshing: Boolean,
+  )
 
   internal suspend fun handleWearProxyRequest(
     sourceNodeId: String,
@@ -1666,8 +1722,11 @@ class NodeRuntime private constructor(
     }
     invalidateExecApprovalRefreshes()
     resolvedExecApprovalIds.clear()
-    if (retirePendingCronRuns) {
-      synchronized(execApprovalsStateLock) { pendingExecApprovalWrites.clear() }
+    synchronized(execApprovalsStateLock) {
+      execApprovalsSnapshotReady = false
+      if (retirePendingCronRuns) {
+        pendingExecApprovalWrites.clear()
+      }
     }
     _execApprovals.value = emptyList()
     _execApprovalsRefreshing.value = false
@@ -7043,7 +7102,9 @@ class NodeRuntime private constructor(
     val gatewayScope = captureGatewayDataScope() ?: return
     val refreshGeneration =
       synchronized(execApprovalsStateLock) {
-        execApprovalsRefreshSeq.incrementAndGet()
+        val nextGeneration = execApprovalsRefreshSeq.incrementAndGet()
+        execApprovalsSnapshotReady = false
+        nextGeneration
       }
     publishGatewayData(gatewayScope) {
       _execApprovalsRefreshing.value = true
@@ -7609,6 +7670,7 @@ class NodeRuntime private constructor(
           resolvedExecApprovalIds.addAll(terminalIds)
           terminalIds.forEach(pendingExecApprovalWrites::remove)
           val nextRows = rows.filterNot { it.id in resolvedExecApprovalIds }.filterActiveExecApprovals()
+          execApprovalsSnapshotReady = true
           _execApprovals.value = nextRows
           scheduleExecApprovalExpiryPrune(nextRows)
         }

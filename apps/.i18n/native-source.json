@@ -15690,6 +15690,214 @@
       "id": "native.android.709aff840be1f167"
     },
     {
+      "kind": "resource-string",
+      "line": 91,
+      "path": "apps/android/wear/src/main/res/values/strings.xml",
+      "source": "Pulse",
+      "surface": "android",
+      "id": "native.android.c2d921039b510784"
+    },
+    {
+      "kind": "resource-string",
+      "line": 92,
+      "path": "apps/android/wear/src/main/res/values/strings.xml",
+      "source": "Background tasks",
+      "surface": "android",
+      "id": "native.android.d8ed834d8063e209"
+    },
+    {
+      "kind": "resource-string",
+      "line": 93,
+      "path": "apps/android/wear/src/main/res/values/strings.xml",
+      "source": "Session swarm",
+      "surface": "android",
+      "id": "native.android.05a6d7c174d87cf4"
+    },
+    {
+      "kind": "resource-string",
+      "line": 94,
+      "path": "apps/android/wear/src/main/res/values/strings.xml",
+      "source": "Attention",
+      "surface": "android",
+      "id": "native.android.77e15364654b7720"
+    },
+    {
+      "kind": "resource-string",
+      "line": 95,
+      "path": "apps/android/wear/src/main/res/values/strings.xml",
+      "source": "Status: %1$s",
+      "surface": "android",
+      "id": "native.android.c208c4e16cb264eb"
+    },
+    {
+      "kind": "resource-string",
+      "line": 96,
+      "path": "apps/android/wear/src/main/res/values/strings.xml",
+      "source": "Ready",
+      "surface": "android",
+      "id": "native.android.6f790004e204e002"
+    },
+    {
+      "kind": "resource-string",
+      "line": 97,
+      "path": "apps/android/wear/src/main/res/values/strings.xml",
+      "source": "Refreshing",
+      "surface": "android",
+      "id": "native.android.f8cbe6e1c08614f2"
+    },
+    {
+      "kind": "resource-string",
+      "line": 98,
+      "path": "apps/android/wear/src/main/res/values/strings.xml",
+      "source": "Unavailable",
+      "surface": "android",
+      "id": "native.android.4852723b3f26254e"
+    },
+    {
+      "kind": "resource-string",
+      "line": 99,
+      "path": "apps/android/wear/src/main/res/values/strings.xml",
+      "source": "Loading Pulse",
+      "surface": "android",
+      "id": "native.android.5846aa00a1cf73af"
+    },
+    {
+      "kind": "resource-string",
+      "line": 100,
+      "path": "apps/android/wear/src/main/res/values/strings.xml",
+      "source": "Reading bounded aggregates from the paired phone.",
+      "surface": "android",
+      "id": "native.android.218af4ba38fa78c0"
+    },
+    {
+      "kind": "resource-string",
+      "line": 101,
+      "path": "apps/android/wear/src/main/res/values/strings.xml",
+      "source": "Queued",
+      "surface": "android",
+      "id": "native.android.6c3bd26eef09f4b5"
+    },
+    {
+      "kind": "resource-string",
+      "line": 102,
+      "path": "apps/android/wear/src/main/res/values/strings.xml",
+      "source": "Running",
+      "surface": "android",
+      "id": "native.android.a50fa396f80a7adc"
+    },
+    {
+      "kind": "resource-string",
+      "line": 103,
+      "path": "apps/android/wear/src/main/res/values/strings.xml",
+      "source": "Completed",
+      "surface": "android",
+      "id": "native.android.32c6b30f5a1c4525"
+    },
+    {
+      "kind": "resource-string",
+      "line": 104,
+      "path": "apps/android/wear/src/main/res/values/strings.xml",
+      "source": "Done",
+      "surface": "android",
+      "id": "native.android.aa0c8ce452c5e1b4"
+    },
+    {
+      "kind": "resource-string",
+      "line": 105,
+      "path": "apps/android/wear/src/main/res/values/strings.xml",
+      "source": "Failed",
+      "surface": "android",
+      "id": "native.android.c62055d018d56128"
+    },
+    {
+      "kind": "resource-string",
+      "line": 106,
+      "path": "apps/android/wear/src/main/res/values/strings.xml",
+      "source": "Groups",
+      "surface": "android",
+      "id": "native.android.38832762c1908e84"
+    },
+    {
+      "kind": "resource-string",
+      "line": 107,
+      "path": "apps/android/wear/src/main/res/values/strings.xml",
+      "source": "Pending requests",
+      "surface": "android",
+      "id": "native.android.d1a38fd7dd7b92cc"
+    },
+    {
+      "kind": "resource-string",
+      "line": 108,
+      "path": "apps/android/wear/src/main/res/values/strings.xml",
+      "source": "Bounded active and recent snapshot",
+      "surface": "android",
+      "id": "native.android.5322dafa9e78e573"
+    },
+    {
+      "kind": "resource-string",
+      "line": 109,
+      "path": "apps/android/wear/src/main/res/values/strings.xml",
+      "source": "Active task list is at its limit",
+      "surface": "android",
+      "id": "native.android.9d1e806411cbb79c"
+    },
+    {
+      "kind": "resource-string",
+      "line": 110,
+      "path": "apps/android/wear/src/main/res/values/strings.xml",
+      "source": "Recent task list is at its limit",
+      "surface": "android",
+      "id": "native.android.1caeea75f442c074"
+    },
+    {
+      "kind": "resource-string",
+      "line": 111,
+      "path": "apps/android/wear/src/main/res/values/strings.xml",
+      "source": "Active",
+      "surface": "android",
+      "id": "native.android.f0a876dda24dac29"
+    },
+    {
+      "kind": "resource-string",
+      "line": 112,
+      "path": "apps/android/wear/src/main/res/values/strings.xml",
+      "source": "Idle",
+      "surface": "android",
+      "id": "native.android.a5331bca16ee38ea"
+    },
+    {
+      "kind": "resource-string",
+      "line": 113,
+      "path": "apps/android/wear/src/main/res/values/strings.xml",
+      "source": "Phase %1$d",
+      "surface": "android",
+      "id": "native.android.4137beec90840594"
+    },
+    {
+      "kind": "resource-string",
+      "line": 114,
+      "path": "apps/android/wear/src/main/res/values/strings.xml",
+      "source": "Queued %1$d, Running %2$d, Done %3$d, Failed %4$d, Hidden %5$d",
+      "surface": "android",
+      "id": "native.android.7aabf005cf689625"
+    },
+    {
+      "kind": "resource-string",
+      "line": 115,
+      "path": "apps/android/wear/src/main/res/values/strings.xml",
+      "source": "More phases not shown",
+      "surface": "android",
+      "id": "native.android.178d1516c2f18ca8"
+    },
+    {
+      "kind": "resource-string",
+      "line": 116,
+      "path": "apps/android/wear/src/main/res/values/strings.xml",
+      "source": "Unknown",
+      "surface": "android",
+      "id": "native.android.16ff935a683a605f"
+    },
+    {
       "kind": "ui-call",
       "line": 18,
       "path": "apps/ios/ActivityWidget/OpenClawLiveActivity.swift",

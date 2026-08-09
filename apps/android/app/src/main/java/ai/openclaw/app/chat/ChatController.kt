@@ -374,6 +374,15 @@ class ChatController internal constructor(
   private var swarmSessionKey: String? = null
   private var swarmEnabled = false
 
+  internal fun currentSwarmSnapshot(): ChatSwarmSnapshot =
+    synchronized(swarmLock) {
+      ChatSwarmSnapshot(
+        sessionKey = swarmSessionKey,
+        enabled = swarmEnabled,
+        groups = _swarmGroups.value,
+      )
+    }
+
   private val _sessionBranches = MutableStateFlow<List<SessionBranch>>(emptyList())
   val sessionBranches: StateFlow<List<SessionBranch>> = _sessionBranches.asStateFlow()
 
@@ -4209,6 +4218,7 @@ class ChatController internal constructor(
       ) {
         return
       }
+      swarmSessionKey = snapshot.parentKey
       _swarmGroups.value = groups
     }
   }
