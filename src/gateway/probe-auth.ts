@@ -124,9 +124,14 @@ async function resolveGatewayProbeAuthResolutionWithSecretInputs(params: {
       env: policy.env,
       surface: "remote",
     });
+    const warning = resolved.diagnostics?.join("\n");
+    if (warning) {
+      // A configured remote ref is an explicit trust choice. If it fails,
+      // never replace it with ambient credentials for a strict probe.
+      return { auth: {}, warning };
+    }
     return {
       auth: { token: resolved.token, password: resolved.password },
-      ...(resolved.diagnostics?.length ? { warning: resolved.diagnostics.join("\n") } : {}),
     };
   }
   const auth = await resolveGatewayCredentialsWithSecretInputs({

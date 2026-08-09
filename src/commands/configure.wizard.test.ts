@@ -4,6 +4,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import {
+  createEnabledWebSearchConfig,
+  createSearchProviderOption,
+} from "./configure.wizard-test-helpers.js";
 
 const mocks = vi.hoisted(() => {
   const writeConfigFile = vi.fn();
@@ -237,33 +241,6 @@ function createRuntime() {
   };
 }
 
-function createSearchProviderOption(overrides: Record<string, unknown>) {
-  return overrides;
-}
-
-function createEnabledWebSearchConfig(provider: string, pluginEntry: Record<string, unknown>) {
-  return (cfg: OpenClawConfig) => ({
-    ...cfg,
-    tools: {
-      ...cfg.tools,
-      web: {
-        ...cfg.tools?.web,
-        search: {
-          provider,
-          enabled: true,
-        },
-      },
-    },
-    plugins: {
-      ...cfg.plugins,
-      entries: {
-        ...cfg.plugins?.entries,
-        [provider]: pluginEntry,
-      },
-    },
-  });
-}
-
 function setupBaseWizardState(config: OpenClawConfig = {}) {
   mocks.readConfigFileSnapshot.mockResolvedValue({
     ...EMPTY_CONFIG_SNAPSHOT,
@@ -485,6 +462,32 @@ describe("runConfigureWizard", () => {
 
     expect(mocks.healthCommand).toHaveBeenCalledWith(
       expect.objectContaining({ config: remoteConfig, token: undefined, password: remotePassword }),
+      expect.anything(),
+    );
+
+    const unresolvedConfig: OpenClawConfig = {
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "wss://gateway.example.test",
+          token: { source: "env", provider: "default", id: "MISSING_REMOTE_TOKEN" },
+        },
+      },
+      secrets: { providers: { default: { source: "env" } } },
+    };
+    setupBaseWizardState(unresolvedConfig);
+    queueWizardPrompts({ select: ["remote"], confirm: [] });
+    mocks.promptRemoteGatewayConfig.mockResolvedValueOnce(unresolvedConfig);
+    await withEnvAsync({ OPENCLAW_GATEWAY_PASSWORD: "ambient-password" }, async () => {
+      await runConfigureWizard({ command: "configure", sections: ["health"] }, createRuntime());
+    });
+
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("gateway.remote.token SecretRef is unresolved"),
+      "Gateway auth",
+    );
+    expect(mocks.healthCommand).toHaveBeenLastCalledWith(
+      expect.objectContaining({ token: undefined, password: undefined }),
       expect.anything(),
     );
   });

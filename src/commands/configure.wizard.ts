@@ -123,6 +123,15 @@ async function runGatewayHealthCheck(params: {
       env: process.env,
       mode: "remote",
     });
+    if (remoteProbeAuth.warning) {
+      note(
+        [
+          "Could not resolve remote gateway SecretRef for health check.",
+          remoteProbeAuth.warning,
+        ].join("\n"),
+        "Gateway auth",
+      );
+    }
     ({ token, password } = remoteProbeAuth.auth);
   } else {
     const [configuredToken, configuredPassword] = await Promise.all([
