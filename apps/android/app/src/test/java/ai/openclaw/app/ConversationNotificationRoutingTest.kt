@@ -82,6 +82,10 @@ class ConversationNotificationRoutingTest {
             events += "gateway:$gatewayId"
             true
           },
+          awaitGatewayReady = { gatewayId ->
+            events += "ready:$gatewayId"
+            true
+          },
           switchSession = { sessionKey, agentId -> events += "session:$sessionKey:$agentId" },
           send = { owner, message, idempotencyKey ->
             sentOwner = owner
@@ -94,6 +98,7 @@ class ConversationNotificationRoutingTest {
       assertEquals(
         listOf(
           "gateway:gateway-a",
+          "ready:gateway-a",
           "session:agent:main:main:main",
           "send:Continue:idempotency-key",
         ),
@@ -115,6 +120,7 @@ class ConversationNotificationRoutingTest {
           idempotencyKey = "idempotency-key",
           activeGatewayStableId = { "gateway-b" },
           switchGateway = { false },
+          awaitGatewayReady = { true },
           switchSession = { _, _ -> sessionSwitched = true },
           send = { _, _, _ ->
             sendCalled = true
@@ -123,6 +129,40 @@ class ConversationNotificationRoutingTest {
         )
 
       assertFalse(sent)
+      assertFalse(sessionSwitched)
+      assertFalse(sendCalled)
+    }
+
+  @Test
+  fun unreadyGatewayCannotCrossIntoSessionOrOutbox() =
+    runTest {
+      val events = mutableListOf<String>()
+      var sessionSwitched = false
+      var sendCalled = false
+
+      val sent =
+        routeConversationNotificationReply(
+          target = target,
+          reply = "Continue",
+          idempotencyKey = "idempotency-key",
+          activeGatewayStableId = { "gateway-b" },
+          switchGateway = { gatewayId ->
+            events += "gateway:$gatewayId"
+            true
+          },
+          awaitGatewayReady = { gatewayId ->
+            events += "ready:$gatewayId"
+            false
+          },
+          switchSession = { _, _ -> sessionSwitched = true },
+          send = { _, _, _ ->
+            sendCalled = true
+            true
+          },
+        )
+
+      assertFalse(sent)
+      assertEquals(listOf("gateway:gateway-a", "ready:gateway-a"), events)
       assertFalse(sessionSwitched)
       assertFalse(sendCalled)
     }

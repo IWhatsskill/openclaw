@@ -284,9 +284,13 @@ internal suspend fun routeConversationNotificationTarget(
   target: ConversationNotificationTarget,
   activeGatewayStableId: () -> String?,
   switchGateway: suspend (String) -> Boolean,
+  awaitGatewayReady: suspend (String) -> Boolean = { true },
   switchSession: (sessionKey: String, agentId: String) -> Unit,
 ): Boolean {
   if (activeGatewayStableId() != target.gatewayStableId && !switchGateway(target.gatewayStableId)) {
+    return false
+  }
+  if (!awaitGatewayReady(target.gatewayStableId)) {
     return false
   }
   switchSession(target.sessionKey, target.agentId)
@@ -299,6 +303,7 @@ internal suspend fun routeConversationNotificationReply(
   idempotencyKey: String,
   activeGatewayStableId: () -> String?,
   switchGateway: suspend (String) -> Boolean,
+  awaitGatewayReady: suspend (String) -> Boolean,
   switchSession: (sessionKey: String, agentId: String) -> Unit,
   send: suspend (owner: ChatComposerOwner, message: String, idempotencyKey: String) -> Boolean,
 ): Boolean {
@@ -307,6 +312,7 @@ internal suspend fun routeConversationNotificationReply(
       target = target,
       activeGatewayStableId = activeGatewayStableId,
       switchGateway = switchGateway,
+      awaitGatewayReady = awaitGatewayReady,
       switchSession = switchSession,
     )
   ) {
