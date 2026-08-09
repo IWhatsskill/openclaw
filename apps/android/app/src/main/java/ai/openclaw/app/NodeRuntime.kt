@@ -1573,7 +1573,6 @@ class NodeRuntime private constructor(
   private suspend fun loadWearAgentPulse(requestedSessionKey: String?): JsonObject {
     val gatewayScope = captureGatewayDataScope()
     val agentId = currentWearAgentId()
-    val sessionKey = chatSessionKey.value
     val connected = gatewayScope != null && operatorSession.isReady()
     val tasks =
       if (connected && agentId != null) {
@@ -1581,22 +1580,32 @@ class NodeRuntime private constructor(
       } else {
         null
       }
+    val swarmSnapshot =
+      if (connected && agentId != null && requestedSessionKey != null) {
+        try {
+          chat.readSwarmSnapshotFor(requestedSessionKey, agentId)
+        } catch (err: CancellationException) {
+          throw err
+        } catch (_: Throwable) {
+          null
+        }
+      } else {
+        null
+      }
     // Capture every projection input before the final route check so a route
     // change cannot mix a current task result with later-route aggregates.
-    val swarmSnapshot = chat.currentSwarmSnapshot()
     val approvals = currentWearAgentPulseApprovals()
     val routeStillCurrent =
       gatewayScope?.let { capturedScope ->
         connected &&
           isGatewayDataScopeCurrent(capturedScope) &&
           operatorSession.isReady() &&
-          currentWearAgentId() == agentId &&
-          chatSessionKey.value == sessionKey
+          currentWearAgentId() == agentId
       } == true
     val swarmAvailable =
       routeStillCurrent &&
-        requestedSessionKey == sessionKey &&
-        swarmSnapshot.isAvailableFor(sessionKey)
+        requestedSessionKey != null &&
+        swarmSnapshot?.isAvailableFor(requestedSessionKey) == true
     return projectWearAgentPulse(
       gatewayConnected = routeStillCurrent,
       tasks = tasks.takeIf { routeStillCurrent },
