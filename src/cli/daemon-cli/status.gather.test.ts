@@ -1229,7 +1229,7 @@ describe("gatherDaemonStatus", () => {
     expect(status.rpc?.authWarning).toContain("probing without configured auth credentials");
   });
 
-  it("keeps remote probe auth strict when remote token is missing", async () => {
+  it("keeps configured remote password authoritative for remote probes", async () => {
     daemonLoadedConfig = {
       gateway: {
         mode: "remote",
@@ -1251,7 +1251,7 @@ describe("gatherDaemonStatus", () => {
 
     const probeInput = callArg(callGatewayStatusProbe) as { token?: string; password?: string };
     expect(probeInput.token).toBeUndefined();
-    expect(probeInput.password).toBe("env-password"); // pragma: allowlist secret
+    expect(probeInput.password).toBe("remote-password"); // pragma: allowlist secret
   });
 
   it("skips TLS runtime loading when probe is disabled", async () => {

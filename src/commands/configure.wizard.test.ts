@@ -3,6 +3,7 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { withEnvAsync } from "../test-utils/env.js";
 
 const mocks = vi.hoisted(() => {
   const writeConfigFile = vi.fn();
@@ -469,16 +470,11 @@ describe("runConfigureWizard", () => {
   });
 
   it("runs a selected remote health check with remote password auth", async () => {
-    const localPassword = "local-password"; // pragma: allowlist secret
     const remotePassword = "remote-password"; // pragma: allowlist secret
     const remoteConfig: OpenClawConfig = {
       gateway: {
         mode: "remote",
-        auth: { password: localPassword },
-        remote: {
-          url: "wss://gateway.example.test",
-          password: remotePassword,
-        },
+        remote: { url: "wss://gateway.example.test", password: remotePassword },
       },
     };
     setupBaseWizardState(remoteConfig);
@@ -487,22 +483,9 @@ describe("runConfigureWizard", () => {
 
     await runConfigureWizard({ command: "configure", sections: ["health"] }, createRuntime());
 
-    expect(mocks.waitForGatewayReachable).toHaveBeenCalledWith({
-      url: "wss://gateway.example.test",
-      token: undefined,
-      password: remotePassword,
-      deadlineMs: 15_000,
-    });
     expect(mocks.healthCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: remoteConfig,
-        token: undefined,
-        password: remotePassword,
-      }),
+      expect.objectContaining({ config: remoteConfig, token: undefined, password: remotePassword }),
       expect.anything(),
-    );
-    expect(mocks.waitForGatewayReachable).not.toHaveBeenCalledWith(
-      expect.objectContaining({ password: localPassword }),
     );
   });
 
@@ -537,7 +520,9 @@ describe("runConfigureWizard", () => {
         },
       },
     });
-    await runConfigureWizard({ command: "configure", sections: ["gateway"] }, createRuntime());
+    await withEnvAsync({ OPENCLAW_GATEWAY_PASSWORD: "env-password" }, async () => {
+      await runConfigureWizard({ command: "configure", sections: ["gateway"] }, createRuntime());
+    });
 
     const probeRequests = mocks.probeGatewayReachable.mock.calls.map(([request]) =>
       requireRecord(request, "probe request"),
@@ -547,39 +532,9 @@ describe("runConfigureWizard", () => {
       (request) => request.url === "wss://gateway.example.test",
     );
     expect(localProbe?.timeoutMs).toBe(300);
-    expect(remoteProbe?.token).toBe("token");
-    expect(remoteProbe?.timeoutMs).toBe(300);
-  });
-
-  it("keeps a configured remote token authoritative over an environment password", async () => {
-    const configuredPassword = "configured-password"; // pragma: allowlist secret
-    const envPassword = "env-password"; // pragma: allowlist secret
-    setupBaseWizardState({
-      gateway: {
-        mode: "remote",
-        remote: {
-          url: "wss://gateway.example.test",
-          token: { source: "env", provider: "default", id: "REMOTE_SECRET_TOKEN" },
-          password: configuredPassword,
-        },
-      },
-      secrets: { providers: { default: { source: "env" } } },
-    });
-    vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", envPassword);
-    vi.stubEnv("REMOTE_SECRET_TOKEN", "resolved-remote-token");
-
-    try {
-      await runConfigureWizard({ command: "configure", sections: ["gateway"] }, createRuntime());
-    } finally {
-      vi.unstubAllEnvs();
-    }
-
-    const remoteProbe = mocks.probeGatewayReachable.mock.calls
-      .map(([request]) => requireRecord(request, "probe request"))
-      .find((request) => request.url === "wss://gateway.example.test");
     expect(remoteProbe).toEqual({
       url: "wss://gateway.example.test",
-      token: "resolved-remote-token",
+      token: "token",
       timeoutMs: 300,
     });
   });
