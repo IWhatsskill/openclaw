@@ -236,6 +236,32 @@ describe("resolveGatewayProbeAuthSafeWithSecretInputs", () => {
     });
   });
 
+  it("keeps a configured remote password authoritative over environment auth", async () => {
+    const result = await resolveGatewayProbeAuthSafeWithSecretInputs({
+      cfg: {
+        gateway: {
+          mode: "remote",
+          remote: {
+            url: "wss://gateway.example",
+            password: "remote-password", // pragma: allowlist secret
+          },
+        },
+      },
+      mode: "remote",
+      env: {
+        OPENCLAW_GATEWAY_TOKEN: "env-token",
+        OPENCLAW_GATEWAY_PASSWORD: "env-password", // pragma: allowlist secret
+      } as NodeJS.ProcessEnv,
+    });
+
+    expect(result).toEqual({
+      auth: {
+        token: undefined,
+        password: "remote-password", // pragma: allowlist secret
+      },
+    });
+  });
+
   it("blocks ambient password fallback when a configured remote token ref fails", async () => {
     const result = await resolveGatewayProbeAuthSafeWithSecretInputs({
       cfg: configWithDefaultEnvProvider({
