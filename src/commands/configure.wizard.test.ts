@@ -39,6 +39,7 @@ const mocks = vi.hoisted(() => {
     resolveLocalControlUiProbeLinks: vi.fn(),
     inspectWindowsGatewayFirewall: vi.fn(),
     summarizeExistingConfig: vi.fn(),
+    healthCommand: vi.fn(),
     promptAuthConfig: vi.fn(),
     promptGatewayConfig: vi.fn(),
     promptRemoteGatewayConfig: vi.fn(async (cfg: OpenClawConfig) => ({
@@ -157,7 +158,7 @@ vi.mock("./onboard-helpers.js", () => ({
 }));
 
 vi.mock("./health.js", () => ({
-  healthCommand: vi.fn(),
+  healthCommand: mocks.healthCommand,
 }));
 
 vi.mock("./health-format.js", () => ({
@@ -463,6 +464,44 @@ describe("runConfigureWizard", () => {
     expect(events).toEqual(["gateway", "commit", "daemon"]);
     expect(maybeInstallDaemon).toHaveBeenCalledWith(expect.objectContaining({ port: 18991 }));
     expect(mocks.clackText).not.toHaveBeenCalled();
+  });
+
+  it("runs a selected remote health check with remote password auth", async () => {
+    const localPassword = "local-password"; // pragma: allowlist secret
+    const remotePassword = "remote-password"; // pragma: allowlist secret
+    const remoteConfig: OpenClawConfig = {
+      gateway: {
+        mode: "remote",
+        auth: { password: localPassword },
+        remote: {
+          url: "wss://gateway.example.test",
+          password: remotePassword,
+        },
+      },
+    };
+    setupBaseWizardState(remoteConfig);
+    queueWizardPrompts({ select: ["remote"], confirm: [] });
+    mocks.promptRemoteGatewayConfig.mockResolvedValueOnce(remoteConfig);
+
+    await runConfigureWizard({ command: "configure", sections: ["health"] }, createRuntime());
+
+    expect(mocks.waitForGatewayReachable).toHaveBeenCalledWith({
+      url: "wss://gateway.example.test",
+      token: undefined,
+      password: remotePassword,
+      deadlineMs: 15_000,
+    });
+    expect(mocks.healthCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: remoteConfig,
+        token: undefined,
+        password: remotePassword,
+      }),
+      expect.anything(),
+    );
+    expect(mocks.waitForGatewayReachable).not.toHaveBeenCalledWith(
+      expect.objectContaining({ password: localPassword }),
+    );
   });
 
   it("persists gateway.mode=local when only the run mode is selected", async () => {

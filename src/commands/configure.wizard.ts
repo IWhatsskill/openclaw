@@ -110,20 +110,35 @@ async function runGatewayHealthCheck(params: {
     tlsEnabled: params.cfg.gateway?.tls?.enabled === true,
   });
   const remoteUrl = params.cfg.gateway?.remote?.url?.trim();
-  const wsUrl = params.cfg.gateway?.mode === "remote" && remoteUrl ? remoteUrl : localLinks.wsUrl;
-  const configuredToken = await resolveGatewaySecretInputForWizard({
-    cfg: params.cfg,
-    value: params.cfg.gateway?.auth?.token,
-    path: "gateway.auth.token",
-  });
-  const configuredPassword = await resolveGatewaySecretInputForWizard({
-    cfg: params.cfg,
-    value: params.cfg.gateway?.auth?.password,
-    path: "gateway.auth.password",
-  });
-  const token = normalizeOptionalString(process.env.OPENCLAW_GATEWAY_TOKEN) ?? configuredToken;
-  const password =
-    normalizeOptionalString(process.env.OPENCLAW_GATEWAY_PASSWORD) ?? configuredPassword;
+  const probeMode = params.cfg.gateway?.mode === "remote" && remoteUrl ? "remote" : "local";
+  const wsUrl = probeMode === "remote" ? remoteUrl : localLinks.wsUrl;
+  let token: string | undefined;
+  let password: string | undefined;
+  // Remote and local probe credentials belong to different trust surfaces.
+  // Keep their resolution separate so one target never receives the other's secrets.
+  if (probeMode === "remote") {
+    const remoteProbeAuth = await resolveGatewayProbeAuthSafeWithSecretInputs({
+      cfg: params.cfg,
+      env: process.env,
+      mode: "remote",
+    });
+    ({ token, password } = remoteProbeAuth.auth);
+  } else {
+    const [configuredToken, configuredPassword] = await Promise.all([
+      resolveGatewaySecretInputForWizard({
+        cfg: params.cfg,
+        value: params.cfg.gateway?.auth?.token,
+        path: "gateway.auth.token",
+      }),
+      resolveGatewaySecretInputForWizard({
+        cfg: params.cfg,
+        value: params.cfg.gateway?.auth?.password,
+        path: "gateway.auth.password",
+      }),
+    ]);
+    token = normalizeOptionalString(process.env.OPENCLAW_GATEWAY_TOKEN) ?? configuredToken;
+    password = normalizeOptionalString(process.env.OPENCLAW_GATEWAY_PASSWORD) ?? configuredPassword;
+  }
 
   await waitForGatewayReachable({
     url: wsUrl,
@@ -133,7 +148,17 @@ async function runGatewayHealthCheck(params: {
   });
 
   try {
-    await healthCommand({ json: false, timeoutMs: 10_000 }, params.runtime);
+    await healthCommand(
+      {
+        json: false,
+        timeoutMs: 10_000,
+        config: params.cfg,
+        token,
+        password,
+        ...(probeMode === "local" ? { localPortOverride: params.port } : {}),
+      },
+      params.runtime,
+    );
   } catch (err) {
     params.runtime.error(formatHealthCheckFailure(err));
     note(
@@ -520,7 +545,16 @@ export async function runConfigureWizard(
       });
       remoteConfig = committed.config;
       logConfigUpdated(runtime);
-      outro("Remote gateway configured.");
+      if (selectedSections?.includes("health")) {
+        await runGatewayHealthCheck({
+          cfg: remoteConfig,
+          runtime,
+          port: resolveGatewayPort(remoteConfig),
+        });
+        outro("Remote gateway configured and health check completed.");
+      } else {
+        outro("Remote gateway configured.");
+      }
       return;
     }
 
