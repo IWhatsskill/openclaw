@@ -1043,7 +1043,7 @@ describe("runSetupWizard", () => {
     });
   });
 
-  it("resolves a remote token ref alongside an environment password", async () => {
+  it("keeps a configured remote token authoritative over an environment password", async () => {
     readConfigFileSnapshot.mockResolvedValueOnce(
       configSnapshot({
         gateway: {
@@ -1072,11 +1072,10 @@ describe("runSetupWizard", () => {
     expect(probeGatewayReachable).toHaveBeenCalledWith({
       url: "wss://gateway.example.test",
       token: "resolved-remote-token",
-      password: "env-password", // pragma: allowlist secret
     });
   });
 
-  it("does not use an ambient gateway token for the setup remote probe", async () => {
+  it("uses an ambient gateway token as the shared remote fallback", async () => {
     readConfigFileSnapshot.mockResolvedValueOnce(
       configSnapshot({
         gateway: {
@@ -1106,7 +1105,7 @@ describe("runSetupWizard", () => {
 
     expect(probeGatewayReachable).toHaveBeenCalledWith({
       url: "wss://gateway.example.test",
-      token: undefined,
+      token: "ambient-token",
     });
   });
 

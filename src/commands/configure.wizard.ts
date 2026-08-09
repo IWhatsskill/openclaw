@@ -110,8 +110,9 @@ async function runGatewayHealthCheck(params: {
     tlsEnabled: params.cfg.gateway?.tls?.enabled === true,
   });
   const remoteUrl = params.cfg.gateway?.remote?.url?.trim();
-  const probeMode = params.cfg.gateway?.mode === "remote" && remoteUrl ? "remote" : "local";
-  const wsUrl = probeMode === "remote" ? remoteUrl : localLinks.wsUrl;
+  const remoteWsUrl = params.cfg.gateway?.mode === "remote" ? remoteUrl : undefined;
+  const probeMode = remoteWsUrl ? "remote" : "local";
+  const wsUrl = remoteWsUrl ?? localLinks.wsUrl;
   let token: string | undefined;
   let password: string | undefined;
   // Remote and local probe credentials belong to different trust surfaces.

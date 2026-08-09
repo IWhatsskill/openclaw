@@ -212,7 +212,7 @@ describe("resolveGatewayProbeAuthSafeWithSecretInputs", () => {
     expect(result.warning).toContain("unresolved");
   });
 
-  it("resolves a remote token SecretRef alongside an environment password", async () => {
+  it("keeps a configured remote token authoritative over an environment password", async () => {
     const result = await resolveGatewayProbeAuthSafeWithSecretInputs({
       cfg: configWithDefaultEnvProvider({
         mode: "remote",
@@ -231,7 +231,7 @@ describe("resolveGatewayProbeAuthSafeWithSecretInputs", () => {
     expect(result).toEqual({
       auth: {
         token: "resolved-remote-token",
-        password: "env-password", // pragma: allowlist secret
+        password: undefined,
       },
     });
   });

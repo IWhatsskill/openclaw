@@ -2,6 +2,7 @@
 // Adapts gateway credential precedence for local/remote reachability checks.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveGatewayProbeSurfaceAuth } from "./auth-surface-resolution.js";
 import { resolveGatewayCredentialsWithSecretInputs } from "./credentials-secret-inputs.js";
 import {
   type ExplicitGatewayAuth,
@@ -98,6 +99,48 @@ export function resolveGatewayProbeAuth(params: {
   return resolveGatewayProbeCredentialsFromConfig(policy);
 }
 
+async function resolveGatewayProbeAuthResolutionWithSecretInputs(params: {
+  cfg: OpenClawConfig;
+  mode: "local" | "remote";
+  env?: NodeJS.ProcessEnv;
+  explicitAuth?: ExplicitGatewayAuth;
+  urlOverride?: string;
+  urlOverrideSource?: "cli" | "env";
+}): Promise<{
+  auth: { token?: string; password?: string };
+  warning?: string;
+}> {
+  const policy = buildGatewayProbeCredentialPolicy(params);
+  const explicitAuth = resolveExplicitProbeAuth(params.explicitAuth);
+  if (
+    params.mode === "remote" &&
+    !hasExplicitProbeAuth(explicitAuth) &&
+    !normalizeOptionalString(params.urlOverride)
+  ) {
+    // Remote startup, status, and wizard probes must share one precedence owner.
+    // Otherwise one entry point can forward an ambient secret that its siblings omit.
+    const resolved = await resolveGatewayProbeSurfaceAuth({
+      config: policy.config,
+      env: policy.env,
+      surface: "remote",
+    });
+    return {
+      auth: { token: resolved.token, password: resolved.password },
+      ...(resolved.diagnostics?.length ? { warning: resolved.diagnostics.join("\n") } : {}),
+    };
+  }
+  const auth = await resolveGatewayCredentialsWithSecretInputs({
+    config: policy.config,
+    env: policy.env,
+    explicitAuth: policy.explicitAuth,
+    urlOverride: policy.urlOverride,
+    urlOverrideSource: policy.urlOverrideSource,
+    modeOverride: policy.modeOverride,
+    remoteTokenFallback: policy.remoteTokenFallback,
+  });
+  return { auth };
+}
+
 /** Resolves probe auth with async SecretRef support. */
 export async function resolveGatewayProbeAuthWithSecretInputs(params: {
   cfg: OpenClawConfig;
@@ -107,17 +150,7 @@ export async function resolveGatewayProbeAuthWithSecretInputs(params: {
   urlOverride?: string;
   urlOverrideSource?: "cli" | "env";
 }): Promise<{ token?: string; password?: string }> {
-  const policy = buildGatewayProbeCredentialPolicy(params);
-  return await resolveGatewayCredentialsWithSecretInputs({
-    config: policy.config,
-    env: policy.env,
-    explicitAuth: policy.explicitAuth,
-    urlOverride: policy.urlOverride,
-    urlOverrideSource: policy.urlOverrideSource,
-    modeOverride: policy.modeOverride,
-    remoteTokenFallback: policy.remoteTokenFallback,
-    remoteCredentialTypesIndependent: true,
-  });
+  return (await resolveGatewayProbeAuthResolutionWithSecretInputs(params)).auth;
 }
 
 /** Resolves probe auth without throwing for unavailable SecretRefs, returning a warning. */
@@ -140,8 +173,7 @@ export async function resolveGatewayProbeAuthSafeWithSecretInputs(params: {
   }
 
   try {
-    const auth = await resolveGatewayProbeAuthWithSecretInputs(params);
-    return { auth };
+    return await resolveGatewayProbeAuthResolutionWithSecretInputs(params);
   } catch (error) {
     return {
       auth: {},

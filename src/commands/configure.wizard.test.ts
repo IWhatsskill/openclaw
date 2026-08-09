@@ -42,10 +42,12 @@ const mocks = vi.hoisted(() => {
     healthCommand: vi.fn(),
     promptAuthConfig: vi.fn(),
     promptGatewayConfig: vi.fn(),
-    promptRemoteGatewayConfig: vi.fn(async (cfg: OpenClawConfig) => ({
-      ...cfg,
-      gateway: { mode: "remote", remote: { url: "wss://gateway.example.test" } },
-    })),
+    promptRemoteGatewayConfig: vi.fn(
+      async (cfg: OpenClawConfig): Promise<OpenClawConfig> => ({
+        ...cfg,
+        gateway: { mode: "remote", remote: { url: "wss://gateway.example.test" } },
+      }),
+    ),
     isCodexNativeWebSearchRelevant: vi.fn(({ config }: { config: OpenClawConfig }) =>
       Boolean(config.auth?.profiles?.["openai:default"]),
     ),
@@ -549,7 +551,7 @@ describe("runConfigureWizard", () => {
     expect(remoteProbe?.timeoutMs).toBe(300);
   });
 
-  it("resolves a remote token ref while the environment password wins", async () => {
+  it("keeps a configured remote token authoritative over an environment password", async () => {
     const configuredPassword = "configured-password"; // pragma: allowlist secret
     const envPassword = "env-password"; // pragma: allowlist secret
     setupBaseWizardState({
@@ -575,9 +577,9 @@ describe("runConfigureWizard", () => {
     const remoteProbe = mocks.probeGatewayReachable.mock.calls
       .map(([request]) => requireRecord(request, "probe request"))
       .find((request) => request.url === "wss://gateway.example.test");
-    expect(remoteProbe).toMatchObject({
+    expect(remoteProbe).toEqual({
+      url: "wss://gateway.example.test",
       token: "resolved-remote-token",
-      password: envPassword,
       timeoutMs: 300,
     });
   });
