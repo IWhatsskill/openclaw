@@ -101,7 +101,7 @@ async function runGatewayHealthCheck(params: {
   cfg: OpenClawConfig;
   runtime: RuntimeEnv;
   port: number;
-}): Promise<void> {
+}): Promise<boolean> {
   const localLinks = resolveLocalControlUiProbeLinks({
     bind: params.cfg.gateway?.bind ?? "loopback",
     port: params.port,
@@ -128,9 +128,12 @@ async function runGatewayHealthCheck(params: {
         [
           "Could not resolve remote gateway SecretRef for health check.",
           remoteProbeAuth.warning,
+          "Health check skipped to avoid falling back to ambient credentials.",
+          `Fix the SecretRef, then run \`${formatCliCommand("openclaw health")}\` again.`,
         ].join("\n"),
         "Gateway auth",
       );
+      return false;
     }
     ({ token, password } = remoteProbeAuth.auth);
   } else {
@@ -180,6 +183,7 @@ async function runGatewayHealthCheck(params: {
       "Health check help",
     );
   }
+  return true;
 }
 
 async function promptConfigureSection(
@@ -556,12 +560,16 @@ export async function runConfigureWizard(
       remoteConfig = committed.config;
       logConfigUpdated(runtime);
       if (selectedSections?.includes("health")) {
-        await runGatewayHealthCheck({
+        const healthCheckAttempted = await runGatewayHealthCheck({
           cfg: remoteConfig,
           runtime,
           port: resolveGatewayPort(remoteConfig),
         });
-        outro("Remote gateway configured and health check completed.");
+        outro(
+          healthCheckAttempted
+            ? "Remote gateway configured and health check completed."
+            : "Remote gateway configured; health check skipped.",
+        );
       } else {
         outro("Remote gateway configured.");
       }

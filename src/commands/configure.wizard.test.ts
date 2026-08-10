@@ -464,7 +464,9 @@ describe("runConfigureWizard", () => {
       expect.objectContaining({ config: remoteConfig, token: undefined, password: remotePassword }),
       expect.anything(),
     );
+  });
 
+  it("skips remote health when a configured SecretRef is unresolved", async () => {
     const unresolvedConfig: OpenClawConfig = {
       gateway: {
         mode: "remote",
@@ -482,13 +484,12 @@ describe("runConfigureWizard", () => {
       await runConfigureWizard({ command: "configure", sections: ["health"] }, createRuntime());
     });
 
-    expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining("gateway.remote.token SecretRef is unresolved"),
-      "Gateway auth",
-    );
-    expect(mocks.healthCommand).toHaveBeenLastCalledWith(
-      expect.objectContaining({ token: undefined, password: undefined }),
-      expect.anything(),
+    const authNote = mocks.note.mock.calls.find(([, title]) => title === "Gateway auth")?.[0];
+    expect(authNote).toContain("gateway.remote.token SecretRef is unresolved");
+    expect(authNote).toContain("Health check skipped");
+    expect(mocks.healthCommand).not.toHaveBeenCalled();
+    expect(mocks.clackOutro).toHaveBeenCalledWith(
+      "Remote gateway configured; health check skipped.",
     );
   });
 
