@@ -276,6 +276,24 @@ describe("resolveGatewayProbeAuthSafeWithSecretInputs", () => {
     expect(result.warning).toContain("gateway.remote.token SecretRef is unresolved");
   });
 
+  it("preserves a configured remote password when the token ref fails", async () => {
+    const result = await resolveGatewayProbeAuthSafeWithSecretInputs({
+      cfg: configWithDefaultEnvProvider({
+        mode: "remote",
+        remote: {
+          url: "wss://gateway.example",
+          token: envSecretRef("MISSING_REMOTE_TOKEN"),
+          password: "remote-password", // pragma: allowlist secret
+        },
+      }),
+      mode: "remote",
+      env: { OPENCLAW_GATEWAY_PASSWORD: "ambient-password" } as NodeJS.ProcessEnv, // pragma: allowlist secret
+    });
+
+    expect(result.auth).toEqual({ token: undefined, password: "remote-password" }); // pragma: allowlist secret
+    expect(result.warning).toContain("gateway.remote.token SecretRef is unresolved");
+  });
+
   it("blocks ambient token fallback when a configured remote password ref fails", async () => {
     const result = await resolveGatewayProbeAuthSafeWithSecretInputs({
       cfg: configWithDefaultEnvProvider({

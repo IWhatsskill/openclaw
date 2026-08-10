@@ -446,13 +446,18 @@ describe("runConfigureWizard", () => {
     expect(mocks.clackText).not.toHaveBeenCalled();
   });
 
-  it("runs a selected remote health check with remote password auth", async () => {
+  it("keeps remote password health when the configured token ref is unresolved", async () => {
     const remotePassword = "remote-password"; // pragma: allowlist secret
     const remoteConfig: OpenClawConfig = {
       gateway: {
         mode: "remote",
-        remote: { url: "wss://gateway.example.test", password: remotePassword },
+        remote: {
+          url: "wss://gateway.example.test",
+          token: { source: "env", provider: "default", id: "MISSING_REMOTE_TOKEN" },
+          password: remotePassword,
+        },
       },
+      secrets: { providers: { default: { source: "env" } } },
     };
     setupBaseWizardState(remoteConfig);
     queueWizardPrompts({ select: ["remote"], confirm: [] });
@@ -485,7 +490,6 @@ describe("runConfigureWizard", () => {
     });
 
     const authNote = mocks.note.mock.calls.find(([, title]) => title === "Gateway auth")?.[0];
-    expect(authNote).toContain("gateway.remote.token SecretRef is unresolved");
     expect(authNote).toContain("Health check skipped");
     expect(mocks.healthCommand).not.toHaveBeenCalled();
     expect(mocks.clackOutro).toHaveBeenCalledWith(

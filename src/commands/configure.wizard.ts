@@ -124,16 +124,27 @@ async function runGatewayHealthCheck(params: {
       mode: "remote",
     });
     if (remoteProbeAuth.warning) {
+      const hasResolvedRemoteAuth = Boolean(
+        remoteProbeAuth.auth.token || remoteProbeAuth.auth.password,
+      );
       note(
         [
           "Could not resolve remote gateway SecretRef for health check.",
           remoteProbeAuth.warning,
-          "Health check skipped to avoid falling back to ambient credentials.",
-          `Fix the SecretRef, then run \`${formatCliCommand("openclaw health")}\` again.`,
+          ...(hasResolvedRemoteAuth
+            ? ["Continuing with the other configured remote credential."]
+            : [
+                "Health check skipped to avoid falling back to ambient credentials.",
+                `Fix the SecretRef, then run \`${formatCliCommand("openclaw health")}\` again.`,
+              ]),
         ].join("\n"),
         "Gateway auth",
       );
-      return false;
+      // A failed ref does not invalidate a resolved sibling config credential.
+      // Skip only when generic health auth could otherwise recover ambient auth.
+      if (!hasResolvedRemoteAuth) {
+        return false;
+      }
     }
     ({ token, password } = remoteProbeAuth.auth);
   } else {
