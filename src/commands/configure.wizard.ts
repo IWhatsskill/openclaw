@@ -179,7 +179,9 @@ async function runGatewayHealthCheck(params: {
         config: params.cfg,
         token,
         password,
-        ...(probeMode === "local" ? { localPortOverride: params.port } : {}),
+        ...(probeMode === "local"
+          ? { localPortOverride: params.port }
+          : { ignoreEnvUrlOverride: true }),
       },
       params.runtime,
     );

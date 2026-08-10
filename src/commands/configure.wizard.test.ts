@@ -7,6 +7,10 @@ import { withEnvAsync } from "../test-utils/env.js";
 import {
   createEnabledWebSearchConfig,
   createSearchProviderOption,
+  createWizardTestRuntime,
+  EMPTY_CONFIG_SNAPSHOT,
+  queueWizardTestPrompts,
+  setupBaseWizardTestState,
 } from "./configure.wizard-test-helpers.js";
 
 const mocks = vi.hoisted(() => {
@@ -226,55 +230,10 @@ import { WizardCancelledError } from "../wizard/prompts.js";
 import { maybeInstallDaemon } from "./configure.daemon.js";
 import { runConfigureWizard } from "./configure.wizard.js";
 
-const EMPTY_CONFIG_SNAPSHOT = {
-  exists: false,
-  valid: true,
-  config: {},
-  issues: [],
-};
-
-function createRuntime() {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  };
-}
+const createRuntime = createWizardTestRuntime;
 
 function setupBaseWizardState(config: OpenClawConfig = {}) {
-  mocks.readConfigFileSnapshot.mockResolvedValue({
-    ...EMPTY_CONFIG_SNAPSHOT,
-    config,
-  });
-  mocks.resolveGatewayPort.mockReturnValue(18789);
-  mocks.probeGatewayReachable.mockResolvedValue({ ok: false });
-  mocks.resolveControlUiLinks.mockReturnValue({ wsUrl: "ws://127.0.0.1:18789" });
-  mocks.resolveLocalControlUiProbeLinks.mockReturnValue({
-    httpUrl: "http://127.0.0.1:18789/",
-    wsUrl: "ws://127.0.0.1:18789",
-  });
-  mocks.resolveAdvertisedControlUiLinks.mockResolvedValue({
-    httpUrl: "http://127.0.0.1:18789/",
-    wsUrl: "ws://127.0.0.1:18789",
-  });
-  mocks.inspectWindowsGatewayFirewall.mockResolvedValue({
-    applies: false,
-    severity: "info",
-    code: "windows_firewall_not_applicable",
-    message: "Windows LAN firewall diagnostics do not apply.",
-    details: [],
-  });
-  mocks.summarizeExistingConfig.mockReturnValue("");
-  mocks.createClackPrompter.mockReturnValue({
-    intro: vi.fn(async () => {}),
-    outro: vi.fn(async () => {}),
-    note: vi.fn(async () => {}),
-    select: vi.fn(async () => "firecrawl"),
-    multiselect: vi.fn(async () => []),
-    text: vi.fn(async () => ""),
-    confirm: vi.fn(async () => true),
-    progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
-  });
+  setupBaseWizardTestState(mocks, config);
 }
 
 const requireRecord = createRequireRecord("object", "expected-label");
@@ -315,13 +274,7 @@ function getPluginEntry(config: Record<string, unknown>, pluginId: string) {
 }
 
 function queueWizardPrompts(params: { select: string[]; confirm: boolean[]; text?: string }) {
-  const selectQueue = [...params.select];
-  const confirmQueue = [...params.confirm];
-  mocks.clackSelect.mockImplementation(async () => selectQueue.shift());
-  mocks.clackConfirm.mockImplementation(async () => confirmQueue.shift());
-  mocks.clackText.mockResolvedValue(params.text ?? "");
-  mocks.clackIntro.mockResolvedValue(undefined);
-  mocks.clackOutro.mockResolvedValue(undefined);
+  queueWizardTestPrompts(mocks, params);
 }
 
 async function runWebConfigureWizard() {
@@ -466,7 +419,12 @@ describe("runConfigureWizard", () => {
     await runConfigureWizard({ command: "configure", sections: ["health"] }, createRuntime());
 
     expect(mocks.healthCommand).toHaveBeenCalledWith(
-      expect.objectContaining({ config: remoteConfig, token: undefined, password: remotePassword }),
+      expect.objectContaining({
+        config: remoteConfig,
+        token: undefined,
+        password: remotePassword,
+        ignoreEnvUrlOverride: true,
+      }),
       expect.anything(),
     );
   });
