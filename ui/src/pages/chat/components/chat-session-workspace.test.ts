@@ -475,6 +475,9 @@ describe("session workspace file activity", () => {
 
     createSessionWorkspaceProps(state).onOpenFile("src/racing.ts", "session");
     await vi.waitFor(() => expect(state.handleOpenSidebar).toHaveBeenCalledOnce());
+    expect(createSessionWorkspaceProps(state).list?.files[0]?.activityRevision).toBe(9);
+    expect(createSessionWorkspaceProps(state).fileActivity.newCount).toBe(0);
+
     createSessionWorkspaceProps(state).onRefresh();
     await vi.waitFor(() =>
       expect(createSessionWorkspaceProps(state).list?.files[0]?.activityRevision).toBe(9),

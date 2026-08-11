@@ -670,6 +670,20 @@ function openFile(
       if (activityFile?.kind !== "modified") {
         return;
       }
+      if (hasModernFileActivity(result.file) && workspace.list?.sessionKey === result.sessionKey) {
+        const listedIndex = workspace.list.files.findIndex(
+          (file) => file.activityId === result.file.activityId,
+        );
+        if (listedIndex >= 0) {
+          const files = [...workspace.list.files];
+          files[listedIndex] = {
+            ...files[listedIndex],
+            activityId: result.file.activityId,
+            activityRevision: result.file.activityRevision,
+          };
+          workspace.list = { ...workspace.list, files };
+        }
+      }
       markSessionFileRead(
         workspaceFileActivityContext(state, workspace, result.activityScope ?? opts.activityScope),
         activityFile,
