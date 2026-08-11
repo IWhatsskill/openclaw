@@ -78,12 +78,23 @@
   height: 14px;
   padding: 0 3px;
   border-radius: var(--radius-full);
-  background: var(--primary);
-  color: var(--primary-foreground);
+  box-sizing: border-box;
   font-size: 9px;
   font-weight: 650;
   line-height: 14px;
   text-align: center;
+}
+
+.chat-workspace-toggle__badge {
+  border: 1px solid color-mix(in srgb, var(--info) 45%, transparent);
+  background: var(--info-subtle);
+  color: var(--info);
+}
+
+.chat-tasks-toggle__badge {
+  border: 1px solid var(--border-strong);
+  background: var(--secondary);
+  color: var(--secondary-foreground);
 }
 
 /* Drop zones shown while dragging the rail's grip; the hovered edge wins. */
@@ -621,6 +632,62 @@ openclaw-chat-sidebar-region,
   line-height: 1.2;
 }
 
+.chat-workspace-rail__activity-toolbar {
+  display: flex;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 0 12px 8px;
+}
+
+.chat-workspace-rail__activity-filters {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+
+.chat-workspace-rail__activity-filters button,
+.chat-workspace-rail__mark-read {
+  min-height: 26px;
+  padding: 3px 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: var(--bg-elevated);
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.chat-workspace-rail__activity-filters button[aria-pressed="true"] {
+  border-color: color-mix(in srgb, var(--info) 45%, var(--border));
+  background: var(--info-subtle);
+  color: var(--info);
+}
+
+.chat-workspace-rail__mark-read {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.chat-workspace-rail__mark-read svg {
+  width: 13px;
+  height: 13px;
+}
+
+.chat-workspace-rail__activity-filters button:hover,
+.chat-workspace-rail__activity-filters button:focus-visible,
+.chat-workspace-rail__mark-read:hover,
+.chat-workspace-rail__mark-read:focus-visible {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.chat-workspace-rail__mark-read:disabled {
+  opacity: 0.45;
+}
+
 .chat-workspace-rail__file {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
@@ -695,13 +762,38 @@ openclaw-chat-sidebar-region,
   line-height: 1.1;
 }
 
+.chat-workspace-rail__row-badges {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 3px;
+}
+
 .chat-workspace-rail__file-badge {
   padding: 2px 6px;
   border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--danger) 12%, transparent);
-  color: var(--danger);
-  font-size: var(--control-ui-text-sm); /* was 10px */
+  background: var(--secondary);
+  color: var(--secondary-foreground);
+  font-size: var(--control-ui-text-xs);
   line-height: 1.2;
+}
+
+.chat-workspace-rail__file-badge--new,
+.chat-workspace-rail__file-badge--modified {
+  background: var(--info-subtle);
+  color: var(--info);
+}
+
+.chat-workspace-rail__file-badge--read,
+.chat-workspace-rail__file-badge--mixed,
+.chat-workspace-rail__file-badge--resolved {
+  background: color-mix(in srgb, var(--muted) 12%, transparent);
+  color: var(--muted);
+}
+
+.chat-workspace-rail__file-badge--missing {
+  background: var(--danger-subtle);
+  color: var(--danger);
 }
 
 .chat-workspace-rail__row-actions {

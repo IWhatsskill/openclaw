@@ -151,6 +151,108 @@ describe("session workspace artifacts", () => {
   });
 });
 
+describe("session workspace file activity", () => {
+  it("acknowledges, resolves, restores, and reopens modified files", async () => {
+    localStorage.clear();
+    let revision = 3;
+    const listFiles = vi.fn().mockImplementation(async () => ({
+      sessionKey: "agent:main:current",
+      activityScope: "a".repeat(64),
+      root: "/workspace",
+      files: [
+        {
+          path: "src/app.ts",
+          workspacePath: "src/app.ts",
+          name: "app.ts",
+          kind: "modified",
+          missing: false,
+          activityId: "b".repeat(64),
+          activityRevision: revision,
+        },
+      ],
+    }));
+    const getFile = vi.fn().mockResolvedValue({
+      sessionKey: "agent:main:current",
+      root: "/workspace",
+      file: {
+        path: "src/app.ts",
+        workspacePath: "src/app.ts",
+        name: "app.ts",
+        kind: "modified",
+        missing: false,
+        content: "export {};\n",
+      },
+    });
+    const state = {
+      client: { request: vi.fn().mockResolvedValue({ artifacts: [] }) },
+      connected: true,
+      handleOpenSidebar: vi.fn(),
+      hello: gatewayHello([]),
+      requestUpdate: vi.fn(),
+      sessionKey: "agent:main:current",
+      sessions: { getFile, listFiles },
+      settings: { gatewayUrl: "wss://gateway-a.example" },
+    } as unknown as SessionWorkspaceHost;
+
+    toggleSessionWorkspace(state);
+    await vi.waitFor(() => expect(listFiles).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(createSessionWorkspaceProps(state).list).not.toBeNull());
+
+    let props = createSessionWorkspaceProps(state);
+    expect(props.fileActivity).toMatchObject({
+      newCount: 1,
+      openCount: 1,
+      resolvedCount: 0,
+    });
+
+    props.onOpenFile("src/app.ts", "session");
+    props = createSessionWorkspaceProps(state);
+    expect(props.fileActivity.newCount).toBe(0);
+    await vi.waitFor(() => expect(getFile).toHaveBeenCalledOnce());
+
+    const file = props.list?.files[0];
+    expect(file).toBeDefined();
+    props.onSetFileResolved(file!, true);
+    props = createSessionWorkspaceProps(state);
+    expect(props.fileActivity).toMatchObject({
+      newCount: 0,
+      openCount: 0,
+      resolvedCount: 1,
+    });
+
+    let container = document.createElement("div");
+    render(renderSessionWorkspaceRail(props), container);
+    expect(container.querySelector(".chat-workspace-rail__file-badge--resolved")).toBeNull();
+
+    props.onSetFileFilter("all");
+    props = createSessionWorkspaceProps(state);
+    container = document.createElement("div");
+    render(renderSessionWorkspaceRail(props), container);
+    expect(container.querySelector(".chat-workspace-rail__file-badge--resolved")).not.toBeNull();
+
+    props.onSetFileResolved(file!, false);
+    props = createSessionWorkspaceProps(state);
+    expect(props.fileActivity).toMatchObject({
+      newCount: 0,
+      openCount: 1,
+      resolvedCount: 0,
+    });
+
+    props.onSetFileResolved(file!, true);
+    revision = 8;
+    props.onRefresh();
+    await vi.waitFor(() => expect(listFiles).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() =>
+      expect(createSessionWorkspaceProps(state).list?.files[0]?.activityRevision).toBe(8),
+    );
+    expect(createSessionWorkspaceProps(state).fileActivity).toMatchObject({
+      newCount: 1,
+      openCount: 1,
+      resolvedCount: 0,
+    });
+  });
+});
+
 describe("openSessionWorkspaceFile", () => {
   it("opens Markdown with a canonical Gateway- and pane-scoped draft identity", async () => {
     const handleOpenSidebar = vi.fn();

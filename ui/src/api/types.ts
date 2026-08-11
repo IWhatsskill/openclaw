@@ -321,11 +321,13 @@ export type AgentsFilesSetResult = {
   file: AgentFileEntry;
 };
 
-type SessionWorkspaceFileEntry = {
+export type SessionWorkspaceFileEntry = {
   path: string;
   workspacePath?: string;
   name: string;
   kind: "modified" | "read";
+  activityId?: string;
+  activityRevision?: number;
   missing: boolean;
   size?: number;
   updatedAtMs?: number;
@@ -368,6 +370,7 @@ type SessionWorkspaceArtifactEntry = {
 
 export type SessionWorkspaceListResult = {
   sessionKey: string;
+  activityScope?: string;
   root?: string;
   gitCheckout?: boolean;
   files: SessionWorkspaceFileEntry[];

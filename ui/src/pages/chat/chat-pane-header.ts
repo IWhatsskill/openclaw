@@ -45,6 +45,7 @@ import { renderChatSessionSharing } from "./components/chat-session-sharing.ts";
 import {
   renderSessionDiffToggle,
   renderSessionWorkspaceToggle,
+  sessionWorkspaceNewFileCount,
   type SessionWorkspaceProps,
 } from "./components/chat-session-workspace.ts";
 import { renderChatTerminalButton } from "./components/chat-terminal-button.ts";
@@ -255,7 +256,7 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
       ),
       icon: icons.fileText,
       active: !sessionWorkspace.collapsed,
-      badge: sessionWorkspace.list?.files.filter((file) => file.kind === "modified").length ?? 0,
+      badge: sessionWorkspaceNewFileCount(sessionWorkspace),
       onActivate: sessionWorkspace.onToggleCollapsed,
     });
     panelMenuActions.push({

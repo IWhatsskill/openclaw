@@ -154,6 +154,79 @@ describe("sessions.files touched-file folds", () => {
     });
   });
 
+  it("advances modified-file activity only when the transcript writes that file again", async () => {
+    useSqliteSession(hoisted.loadSessionEntry, workspaceRoot, "sess-touched-activity");
+    hoisted.readSessionTranscriptVisibleMessageDeltaCore.mockImplementation((_scope, limits) => {
+      if (limits.cursor === undefined) {
+        return {
+          kind: "page",
+          cursor: "activity-1",
+          events: [visibleMessageEvent(assistantToolCall("edit", { path: "ui/chat.ts" }), 4)],
+          hasMore: false,
+          serializedBytes: 100,
+        };
+      }
+      if (limits.cursor === "activity-1") {
+        return {
+          kind: "page",
+          cursor: "activity-2",
+          events: [visibleMessageEvent(assistantToolCall("edit", { path: "ui/chat.ts" }), 9)],
+          hasMore: false,
+          serializedBytes: 100,
+        };
+      }
+      if (limits.cursor === "activity-2") {
+        return {
+          kind: "page",
+          cursor: "activity-3",
+          events: [visibleMessageEvent(assistantToolCall("read", { path: "ui/chat.ts" }), 12)],
+          hasMore: false,
+          serializedBytes: 100,
+        };
+      }
+      throw new Error("unexpected cursor: " + String(limits.cursor));
+    });
+
+    const first = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.list", {
+        sessionKey: "agent:main:main",
+      }),
+    );
+    const second = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.list", {
+        sessionKey: "agent:main:main",
+      }),
+    );
+    const afterRead = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.list", {
+        sessionKey: "agent:main:main",
+      }),
+    );
+
+    expect(first.activityScope).toMatch(/^[a-f0-9]{64}$/);
+    expect(second.activityScope).toBe(first.activityScope);
+    expect(first.files).toEqual([
+      expect.objectContaining({
+        path: "ui/chat.ts",
+        kind: "modified",
+        activityId: expect.stringMatching(/^[a-f0-9]{64}$/),
+        activityRevision: 4,
+      }),
+    ]);
+    expect(second.files).toEqual([
+      expect.objectContaining({
+        activityId: first.files[0]?.activityId,
+        activityRevision: 9,
+      }),
+    ]);
+    expect(afterRead.files).toEqual([
+      expect.objectContaining({
+        activityId: first.files[0]?.activityId,
+        activityRevision: 9,
+      }),
+    ]);
+  });
+
   it("yields between SQLite pages and shares one concurrent fold per session", async () => {
     useSqliteSession(hoisted.loadSessionEntry, workspaceRoot, "sess-touched-singleflight");
     let otherWorkRan = false;

@@ -7,6 +7,7 @@ import {
 } from "../../../api/gateway.ts";
 import type {
   ArtifactDownloadResult,
+  SessionWorkspaceFileEntry,
   SessionWorkspaceGetResult,
   SessionWorkspaceListResult,
 } from "../../../api/types.ts";
@@ -35,10 +36,22 @@ import {
   type SessionScopeHostWithKey,
 } from "../../../lib/sessions/index.ts";
 import {
+  canonicalUiSessionKeyForPersistence,
   resolveAgentIdFromSessionKey,
   normalizeAgentId,
 } from "../../../lib/sessions/session-key.ts";
 import { normalizeOptionalString } from "../../../lib/string-coerce.ts";
+import {
+  markAllSessionFilesRead,
+  markSessionFileRead,
+  readSessionFileActivity,
+  sessionFileActivityStatus,
+  sessionFileMatchesActivityFilter,
+  setSessionFileResolved,
+  type SessionFileActivityContext,
+  type SessionFileActivityFilter,
+  type SessionFileActivitySnapshot,
+} from "../session-file-activity.ts";
 import { hasUniformLineEndings, type SidebarContent } from "./chat-sidebar.ts";
 
 export type SessionWorkspaceProps = {
@@ -49,6 +62,8 @@ export type SessionWorkspaceProps = {
   error: string | null;
   activeId: string | null;
   dock: ChatWorkspaceDock;
+  fileFilter: SessionFileActivityFilter;
+  fileActivity: SessionFileActivitySnapshot;
   /** Pane too narrow for a side rail: presentation forces the bottom dock
    * (the persisted dock preference still applies once the pane widens). */
   narrowLayout: boolean;
@@ -60,6 +75,9 @@ export type SessionWorkspaceProps = {
   onRefresh: () => void;
   onBrowsePath: (path: string) => void;
   onCopyPath: (path: string) => void;
+  onSetFileFilter: (filter: SessionFileActivityFilter) => void;
+  onMarkAllFilesRead: () => void;
+  onSetFileResolved: (file: SessionWorkspaceFileEntry, resolved: boolean) => void;
   onOpenFile: (path: string, origin: "session" | "workspace") => void;
   onSearch: (search: string) => void;
   onOpenArtifact: (artifactId: string) => void;
@@ -81,6 +99,7 @@ type SessionWorkspaceState = {
   dockDragging: boolean;
   dockDragZone: ChatWorkspaceDock | null;
   error: string | null;
+  fileFilter: SessionFileActivityFilter;
   list: SessionWorkspaceListResult | null;
   loading: boolean;
   pendingReload: boolean;
@@ -165,6 +184,7 @@ function getWorkspaceState(state: SessionWorkspaceHost): SessionWorkspaceState {
     dockDragging: false,
     dockDragZone: null,
     error: null,
+    fileFilter: "open",
     list: null,
     loading: false,
     pendingReload: false,
@@ -348,6 +368,7 @@ function loadWorkspace(
       const browserItems = files?.browser?.entries ?? [];
       current.list = {
         sessionKey,
+        ...(files?.activityScope ? { activityScope: files.activityScope } : {}),
         ...(files?.root ? { root: files.root } : {}),
         ...(typeof files?.gitCheckout === "boolean" ? { gitCheckout: files.gitCheckout } : {}),
         files: fileItems,
@@ -749,12 +770,28 @@ function openArtifact(
   );
 }
 
+function workspaceFileActivityContext(
+  state: SessionWorkspaceHost,
+  workspace: SessionWorkspaceState,
+): SessionFileActivityContext {
+  return {
+    gatewayUrl: state.settings?.gatewayUrl,
+    agentId: workspace.agentId,
+    sessionKey:
+      canonicalUiSessionKeyForPersistence(state, workspace.sessionKey) || workspace.sessionKey,
+    ...(workspace.list?.activityScope ? { activityScope: workspace.list.activityScope } : {}),
+  };
+}
+
 export function createSessionWorkspaceProps(
   state: SessionWorkspaceHost,
   options?: { narrowLayout?: boolean; draftScope?: string },
 ): SessionWorkspaceProps {
   state.sessionWorkspaceDraftScope = options?.draftScope;
   const workspace = getWorkspaceState(state);
+  const list = workspace.list?.sessionKey === state.sessionKey ? workspace.list : null;
+  const activityContext = workspaceFileActivityContext(state, workspace);
+  const fileActivity = readSessionFileActivity(activityContext, list?.files ?? []);
   if (
     // The collapsed header still renders the diff action, so load its checkout
     // capability eagerly instead of waiting for the file rail to open.
@@ -775,11 +812,13 @@ export function createSessionWorkspaceProps(
   return {
     collapsed: workspace.collapsed,
     sessionKey: state.sessionKey,
-    list: workspace.list?.sessionKey === state.sessionKey ? workspace.list : null,
+    list,
     loading: workspace.loading,
     error: workspace.error,
     activeId: workspace.activeId,
     dock: workspace.dock,
+    fileFilter: workspace.fileFilter,
+    fileActivity,
     narrowLayout: options?.narrowLayout === true,
     dockDragging: workspace.dockDragging,
     dockDragZone: workspace.dockDragZone,
@@ -796,7 +835,26 @@ export function createSessionWorkspaceProps(
     onCopyPath: (path) => {
       void copyToClipboard(path);
     },
+    onSetFileFilter: (filter) => {
+      workspace.fileFilter = filter;
+      requestUpdate(state);
+    },
+    onMarkAllFilesRead: () => {
+      markAllSessionFilesRead(activityContext, list?.files ?? []);
+      requestUpdate(state);
+    },
+    onSetFileResolved: (file, resolved) => {
+      setSessionFileResolved(activityContext, file, resolved);
+      requestUpdate(state);
+    },
     onOpenFile: (path, origin) => {
+      const activityFile = list?.files.find((file) =>
+        origin === "session" ? file.path === path : file.workspacePath === path,
+      );
+      if (activityFile?.kind === "modified") {
+        markSessionFileRead(activityContext, activityFile);
+        requestUpdate(state);
+      }
       // Session paths are cwd-relative; browser rows are workspace-root-relative.
       // Keep the origin explicit so a nested cwd cannot shadow the selected browser file.
       const opts =
@@ -887,12 +945,11 @@ function renderWorkspaceRailSection(
   `;
 }
 
-/** Changed-file count shown on the collapsed-rail toggles (pane header /
- * floating opener); 0 until the workspace list has loaded. */
-function sessionWorkspaceModifiedCount(
+/** New file-activity count shown on collapsed rail toggles and compact menus. */
+export function sessionWorkspaceNewFileCount(
   sessionWorkspace: SessionWorkspaceProps | undefined,
 ): number {
-  return sessionWorkspace?.list?.files.filter((file) => file.kind === "modified").length ?? 0;
+  return sessionWorkspace?.fileActivity.newCount ?? 0;
 }
 
 /** Toggle used wherever the rail itself is not visible: the split pane header
@@ -906,7 +963,7 @@ export function renderSessionWorkspaceToggle(
   }
   const expanded = !sessionWorkspace.collapsed;
   const label = expanded ? t("chat.workspaceFiles.collapse") : t("chat.workspaceFiles.showFiles");
-  const modifiedCount = sessionWorkspaceModifiedCount(sessionWorkspace);
+  const newCount = sessionWorkspaceNewFileCount(sessionWorkspace);
   return html`
     <openclaw-tooltip .content=${`${label} (⇧⌘B)`}>
       <button
@@ -918,10 +975,8 @@ export function renderSessionWorkspaceToggle(
         @click=${sessionWorkspace.onToggleCollapsed}
       >
         ${icons.fileText}
-        ${!expanded && modifiedCount > 0
-          ? html`<span class="chat-workspace-toggle__badge" aria-hidden="true"
-              >${modifiedCount}</span
-            >`
+        ${!expanded && newCount > 0
+          ? html`<span class="chat-workspace-toggle__badge" aria-hidden="true">${newCount}</span>`
           : nothing}
       </button>
     </openclaw-tooltip>
@@ -1019,46 +1074,84 @@ export function renderSessionWorkspaceRail(
     : nothing;
   const files = sessionWorkspace.list?.files ?? [];
   const modifiedFiles = files.filter((file) => file.kind === "modified");
+  const modifiedFilesByFilter = modifiedFiles.filter((file) =>
+    sessionFileMatchesActivityFilter(
+      sessionFileActivityStatus(sessionWorkspace.fileActivity, file),
+      sessionWorkspace.fileFilter,
+    ),
+  );
   const readFiles = files.filter((file) => file.kind === "read");
   const artifacts = sessionWorkspace.list?.artifacts ?? [];
   const browser = sessionWorkspace.list?.browser ?? null;
   const hasSessionItems = files.length > 0 || artifacts.length > 0;
   const hasBrowserItems = (browser?.entries.length ?? 0) > 0;
   const hasItems = hasSessionItems || hasBrowserItems;
-  const renderPathActions = (path: string, origin: "session" | "workspace"): TemplateResult => html`
-    <span
-      class="chat-workspace-rail__row-actions"
-      role="group"
-      aria-label=${t("chat.workspaceFiles.actions")}
-    >
-      <openclaw-tooltip .content=${t("chat.workspaceFiles.preview")}>
-        <button
-          class="chat-workspace-rail__row-action"
-          type="button"
-          aria-label=${t("chat.workspaceFiles.preview")}
-          @click=${(event: Event) => {
-            event.stopPropagation();
-            sessionWorkspace.onOpenFile(path, origin);
-          }}
-        >
-          ${icons.eye}
-        </button>
-      </openclaw-tooltip>
-      <openclaw-tooltip .content=${t("chat.workspaceFiles.copyPath")}>
-        <button
-          class="chat-workspace-rail__row-action"
-          type="button"
-          aria-label=${t("chat.workspaceFiles.copyPath")}
-          @click=${(event: Event) => {
-            event.stopPropagation();
-            sessionWorkspace.onCopyPath(path);
-          }}
-        >
-          ${icons.copy}
-        </button>
-      </openclaw-tooltip>
-    </span>
-  `;
+  const renderPathActions = (
+    path: string,
+    origin: "session" | "workspace",
+    activityFile?: SessionWorkspaceFileEntry,
+  ): TemplateResult => {
+    const activityStatus = activityFile
+      ? sessionFileActivityStatus(sessionWorkspace.fileActivity, activityFile)
+      : undefined;
+    return html`
+      <span
+        class="chat-workspace-rail__row-actions"
+        role="group"
+        aria-label=${t("chat.workspaceFiles.actions")}
+      >
+        <openclaw-tooltip .content=${t("chat.workspaceFiles.preview")}>
+          <button
+            class="chat-workspace-rail__row-action"
+            type="button"
+            aria-label=${t("chat.workspaceFiles.preview")}
+            @click=${(event: Event) => {
+              event.stopPropagation();
+              sessionWorkspace.onOpenFile(path, origin);
+            }}
+          >
+            ${icons.eye}
+          </button>
+        </openclaw-tooltip>
+        <openclaw-tooltip .content=${t("chat.workspaceFiles.copyPath")}>
+          <button
+            class="chat-workspace-rail__row-action"
+            type="button"
+            aria-label=${t("chat.workspaceFiles.copyPath")}
+            @click=${(event: Event) => {
+              event.stopPropagation();
+              sessionWorkspace.onCopyPath(path);
+            }}
+          >
+            ${icons.copy}
+          </button>
+        </openclaw-tooltip>
+        ${activityFile?.kind === "modified"
+          ? html`
+              <openclaw-tooltip
+                .content=${activityStatus === "resolved"
+                  ? t("chat.workspaceFiles.reopen")
+                  : t("chat.workspaceFiles.markResolved")}
+              >
+                <button
+                  class="chat-workspace-rail__row-action"
+                  type="button"
+                  aria-label=${activityStatus === "resolved"
+                    ? t("chat.workspaceFiles.reopen")
+                    : t("chat.workspaceFiles.markResolved")}
+                  @click=${(event: Event) => {
+                    event.stopPropagation();
+                    sessionWorkspace.onSetFileResolved(activityFile, activityStatus !== "resolved");
+                  }}
+                >
+                  ${activityStatus === "resolved" ? icons.archiveRestore : icons.archive}
+                </button>
+              </openclaw-tooltip>
+            `
+          : nothing}
+      </span>
+    `;
+  };
   const renderSessionSummary = (): TemplateResult | typeof nothing => {
     if (!sessionWorkspace.list) {
       return nothing;
@@ -1067,7 +1160,19 @@ export function renderSessionWorkspaceRail(
     return html`
       <div class="chat-workspace-rail__summary" aria-label=${t("chat.workspaceFiles.summary")}>
         <span
-          >${t("chat.workspaceFiles.changedCount", { count: String(modifiedFiles.length) })}</span
+          >${t("chat.workspaceFiles.newCount", {
+            count: String(sessionWorkspace.fileActivity.newCount),
+          })}</span
+        >
+        <span
+          >${t("chat.workspaceFiles.openCount", {
+            count: String(sessionWorkspace.fileActivity.openCount),
+          })}</span
+        >
+        <span
+          >${t("chat.workspaceFiles.resolvedCount", {
+            count: String(sessionWorkspace.fileActivity.resolvedCount),
+          })}</span
         >
         <span>${t("chat.workspaceFiles.readCount", { count: String(readFiles.length) })}</span>
         <span>${t("chat.workspaceFiles.artifactCount", { count: String(artifacts.length) })}</span>
@@ -1083,6 +1188,7 @@ export function renderSessionWorkspaceRail(
             ${rows.map((file) => {
               const size = formatWorkspaceFileSize(file);
               const itemId = `file:${file.path}`;
+              const activityStatus = sessionFileActivityStatus(sessionWorkspace.fileActivity, file);
               const isActive = itemId === sessionWorkspace.activeId;
               return html`
                 <div
@@ -1108,12 +1214,25 @@ export function renderSessionWorkspaceRail(
                         : nothing}
                     </span>
                   </button>
-                  ${file.missing
-                    ? html`<span class="chat-workspace-rail__file-badge"
-                        >${t("chat.workspaceFiles.missing")}</span
-                      >`
-                    : nothing}
-                  ${renderPathActions(file.path, "session")}
+                  <span class="chat-workspace-rail__row-badges">
+                    ${file.kind === "modified"
+                      ? html`<span
+                          class="chat-workspace-rail__file-badge chat-workspace-rail__file-badge--${activityStatus}"
+                          >${activityStatus === "new"
+                            ? t("chat.workspaceFiles.activityNew")
+                            : activityStatus === "read"
+                              ? t("chat.workspaceFiles.activityRead")
+                              : t("chat.workspaceFiles.activityResolved")}</span
+                        >`
+                      : nothing}
+                    ${file.missing
+                      ? html`<span
+                          class="chat-workspace-rail__file-badge chat-workspace-rail__file-badge--missing"
+                          >${t("chat.workspaceFiles.missing")}</span
+                        >`
+                      : nothing}
+                  </span>
+                  ${renderPathActions(file.path, "session", file)}
                 </div>
               `;
             })}
@@ -1131,7 +1250,10 @@ export function renderSessionWorkspaceRail(
         : sessionKind === "read"
           ? t("chat.workspaceFiles.read")
           : t("chat.workspaceFiles.session");
-    return html`<span class="chat-workspace-rail__file-badge">${label}</span>`;
+    return html`<span
+      class="chat-workspace-rail__file-badge chat-workspace-rail__file-badge--${sessionKind}"
+      >${label}</span
+    >`;
   };
   const renderBrowserRows = (): TemplateResult => {
     const entries = browser?.entries ?? [];
@@ -1290,6 +1412,55 @@ export function renderSessionWorkspaceRail(
             })}
           </div>
         `;
+  const activityFilters: Array<{ id: SessionFileActivityFilter; label: string; count: number }> = [
+    {
+      id: "new",
+      label: t("chat.workspaceFiles.filterNew"),
+      count: sessionWorkspace.fileActivity.newCount,
+    },
+    {
+      id: "open",
+      label: t("chat.workspaceFiles.filterOpen"),
+      count: sessionWorkspace.fileActivity.openCount,
+    },
+    {
+      id: "resolved",
+      label: t("chat.workspaceFiles.filterResolved"),
+      count: sessionWorkspace.fileActivity.resolvedCount,
+    },
+    { id: "all", label: t("chat.workspaceFiles.filterAll"), count: modifiedFiles.length },
+  ];
+  const activityToolbar = modifiedFiles.length
+    ? html`
+        <div class="chat-workspace-rail__activity-toolbar">
+          <div
+            class="chat-workspace-rail__activity-filters"
+            role="group"
+            aria-label=${t("chat.workspaceFiles.filterLabel")}
+          >
+            ${activityFilters.map(
+              (filter) => html`
+                <button
+                  type="button"
+                  aria-pressed=${String(sessionWorkspace.fileFilter === filter.id)}
+                  @click=${() => sessionWorkspace.onSetFileFilter(filter.id)}
+                >
+                  ${filter.label} ${filter.count}
+                </button>
+              `,
+            )}
+          </div>
+          <button
+            class="chat-workspace-rail__mark-read"
+            type="button"
+            ?disabled=${sessionWorkspace.fileActivity.newCount === 0}
+            @click=${sessionWorkspace.onMarkAllFilesRead}
+          >
+            ${icons.check} ${t("chat.workspaceFiles.markAllRead")}
+          </button>
+        </div>
+      `
+    : nothing;
   return html`
     <aside class="chat-workspace-rail" aria-label=${t("chat.workspaceFiles.label")}>
       <div class="chat-workspace-rail__header">
@@ -1362,7 +1533,7 @@ export function renderSessionWorkspaceRail(
             </openclaw-tooltip>
           `
         : nothing}
-      ${renderSessionSummary()}
+      ${renderSessionSummary()} ${activityToolbar}
       ${sessionWorkspace.error
         ? html`<div class="chat-workspace-rail__state chat-workspace-rail__state--error">
             ${sessionWorkspace.error}
@@ -1376,10 +1547,16 @@ export function renderSessionWorkspaceRail(
                       ${t("chat.workspaceFiles.empty")}
                     </div>`
                   : html`
-                      ${renderWorkspaceRailSection(
-                        t("chat.workspaceFiles.changed"),
-                        renderFileRows(modifiedFiles),
-                      )}
+                      ${modifiedFiles.length
+                        ? renderWorkspaceRailSection(
+                            t("chat.workspaceFiles.activity"),
+                            modifiedFilesByFilter.length
+                              ? renderFileRows(modifiedFilesByFilter)
+                              : html`<div class="chat-workspace-rail__state">
+                                  ${t("chat.workspaceFiles.noActivityInFilter")}
+                                </div>`,
+                          )
+                        : nothing}
                       ${renderWorkspaceRailSection(
                         t("chat.workspaceFiles.read"),
                         renderFileRows(readFiles),

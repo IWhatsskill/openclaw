@@ -197,7 +197,7 @@ export const SessionFilePreviewKindSchema = Type.Union([
   Type.Literal("unsupported"),
 ]);
 
-const SessionFileHashSchema = Type.String({
+const Sha256HexSchema = Type.String({
   minLength: 64,
   maxLength: 64,
   pattern: "^[a-f0-9]{64}$",
@@ -209,11 +209,13 @@ export const SessionFileEntrySchema = closedObject({
   workspacePath: Type.Optional(NonEmptyString),
   name: NonEmptyString,
   kind: SessionFileKindSchema,
+  activityId: Type.Optional(Sha256HexSchema),
+  activityRevision: Type.Optional(Type.Integer({ minimum: 0 })),
   missing: Type.Boolean(),
   size: Type.Optional(Type.Integer({ minimum: 0 })),
   updatedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
   content: Type.Optional(Type.String()),
-  hash: Type.Optional(SessionFileHashSchema),
+  hash: Type.Optional(Sha256HexSchema),
   mimeType: Type.Optional(NonEmptyString),
   contentEncoding: Type.Optional(SessionFileContentEncodingSchema),
   previewKind: Type.Optional(SessionFilePreviewKindSchema),
@@ -249,6 +251,7 @@ export const SessionsFilesListParamsSchema = closedObject({
 /** File references visible in one session workspace. */
 export const SessionsFilesListResultSchema = closedObject({
   sessionKey: NonEmptyString,
+  activityScope: Type.Optional(Sha256HexSchema),
   root: Type.Optional(NonEmptyString),
   /** Whether the session workspace directory is inside a git checkout; absent when the workspace root is unknown or the gateway predates the field. */
   gitCheckout: Type.Optional(Type.Boolean()),
@@ -276,7 +279,7 @@ export const SessionsFilesSetParamsSchema = closedObject({
   path: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
   content: Type.String(),
-  expectedHash: SessionFileHashSchema,
+  expectedHash: Sha256HexSchema,
 });
 
 /** Result for overwriting one session workspace file. */

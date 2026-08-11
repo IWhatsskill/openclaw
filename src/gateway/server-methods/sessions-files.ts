@@ -64,9 +64,11 @@ type FileKind = "modified" | "read";
 type TouchedFile = {
   path: string;
   kind: FileKind;
+  activityRevision?: number;
 };
 
 type LoadedSessionFiles = {
+  activityScope?: string;
   root?: string;
   fileRoot?: string;
   diffCwd?: string;
@@ -165,50 +167,78 @@ function addTouchedFile(
   files: Map<string, TouchedFile>,
   filePath: string | undefined,
   kind: FileKind,
+  activityRevision?: number,
 ) {
   if (!filePath) {
     return;
   }
   const existing = files.get(filePath);
-  if (existing?.kind === "modified" || (existing && kind === "read")) {
+  if (existing?.kind === "modified") {
+    if (
+      kind === "modified" &&
+      activityRevision !== undefined &&
+      activityRevision > (existing.activityRevision ?? -1)
+    ) {
+      files.set(filePath, { ...existing, activityRevision });
+    }
     return;
   }
-  files.set(filePath, { path: filePath, kind });
+  if (existing && kind === "read") {
+    return;
+  }
+  files.set(filePath, {
+    path: filePath,
+    kind,
+    ...(kind === "modified" && activityRevision !== undefined ? { activityRevision } : {}),
+  });
 }
 
-function addRawPatchFiles(files: Map<string, TouchedFile>, input: unknown) {
+function addRawPatchFiles(
+  files: Map<string, TouchedFile>,
+  input: unknown,
+  activityRevision: number,
+) {
   if (typeof input !== "string") {
     return;
   }
   const fileLinePattern = /^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm;
   for (const match of input.matchAll(fileLinePattern)) {
-    addTouchedFile(files, match[1]?.trim(), "modified");
+    addTouchedFile(files, match[1]?.trim(), "modified", activityRevision);
   }
   const moveLinePattern = /^\*\*\* Move to: (.+)$/gm;
   for (const match of input.matchAll(moveLinePattern)) {
-    addTouchedFile(files, match[1]?.trim(), "modified");
+    addTouchedFile(files, match[1]?.trim(), "modified", activityRevision);
   }
 }
 
-function addStructuredPatchFiles(files: Map<string, TouchedFile>, changes: unknown) {
+function addStructuredPatchFiles(
+  files: Map<string, TouchedFile>,
+  changes: unknown,
+  activityRevision: number,
+) {
   if (!Array.isArray(changes)) {
     return;
   }
   for (const changeValue of changes) {
     const change = asOptionalObjectRecord(changeValue);
-    addTouchedFile(files, normalizePathValue(change?.path), "modified");
+    addTouchedFile(files, normalizePathValue(change?.path), "modified", activityRevision);
     const kind = asOptionalObjectRecord(change?.kind);
     addTouchedFile(
       files,
       normalizePathValue(kind?.move_path) ?? normalizePathValue(kind?.movePath),
       "modified",
+      activityRevision,
     );
   }
 }
 
-function addPatchFiles(files: Map<string, TouchedFile>, args: Record<string, unknown>) {
-  addRawPatchFiles(files, args.input);
-  addStructuredPatchFiles(files, args.changes);
+function addPatchFiles(
+  files: Map<string, TouchedFile>,
+  args: Record<string, unknown>,
+  activityRevision: number,
+) {
+  addRawPatchFiles(files, args.input, activityRevision);
+  addStructuredPatchFiles(files, args.changes, activityRevision);
 }
 
 function isToolCallBlockType(value: unknown): boolean {
@@ -219,7 +249,11 @@ function isToolCallBlockType(value: unknown): boolean {
   return normalized === "toolcall" || normalized === "tooluse";
 }
 
-function collectTouchedFilesFromMessage(message: unknown, files: Map<string, TouchedFile>) {
+function collectTouchedFilesFromMessage(
+  message: unknown,
+  files: Map<string, TouchedFile>,
+  activityRevision: number,
+) {
   const record = asOptionalObjectRecord(message);
   if (record?.role !== "assistant" || !Array.isArray(record.content)) {
     return;
@@ -240,9 +274,9 @@ function collectTouchedFilesFromMessage(message: unknown, files: Map<string, Tou
     if (toolName === "read") {
       addTouchedFile(files, readPathArg(args), "read");
     } else if (toolName === "write" || toolName === "edit") {
-      addTouchedFile(files, readPathArg(args), "modified");
+      addTouchedFile(files, readPathArg(args), "modified", activityRevision);
     } else if (toolName === "apply_patch") {
-      addPatchFiles(files, args);
+      addPatchFiles(files, args, activityRevision);
     }
   }
 }
@@ -276,7 +310,7 @@ async function foldSqliteTouchedFiles(
     for (const event of delta.events) {
       const message = sqliteMessageEventWithSeq(event);
       if (message !== undefined) {
-        collectTouchedFilesFromMessage(message, files);
+        collectTouchedFilesFromMessage(message, files, event.seq);
       }
     }
     cached = { cursor: delta.cursor, files };
@@ -472,14 +506,24 @@ async function toSessionFileEntry(
   touched: TouchedFile,
   root: string | undefined,
   fileRoot: string | undefined,
-  opts: { includeContent?: boolean } = {},
+  opts: { activityScope?: string; includeContent?: boolean } = {},
 ): Promise<SessionFileEntry> {
   const resolved = resolveTouchedFilePath({ root, fileRoot, filePath: touched.path });
   const base = {
     path: touched.path,
     name: displayNameForPath(touched.path),
     kind: touched.kind,
-  } satisfies Pick<SessionFileEntry, "path" | "name" | "kind">;
+    ...(touched.kind === "modified" && opts.activityScope
+      ? {
+          activityId: createHash("sha256")
+            .update(`${opts.activityScope}\0${touched.path}`)
+            .digest("hex"),
+        }
+      : {}),
+    ...(touched.kind === "modified" && touched.activityRevision !== undefined
+      ? { activityRevision: touched.activityRevision }
+      : {}),
+  } satisfies Omit<SessionFileEntry, "missing">;
   if (!resolved) {
     return { ...base, missing: true };
   }
@@ -733,13 +777,12 @@ async function loadSessionFiles(params: {
     storePath,
   } satisfies SessionTranscriptReadScope;
   const target = resolveTranscriptReadTarget(scope);
+  const cacheKey = `${agentId}\0${entry.sessionId}\0${target.storePath ?? ""}`;
   // Entry-scoped reads without an explicit sessionFile always resolve to a canonical SQLite marker.
   // Legacy transcript files are doctor-owned migration debt, not a runtime read path.
-  const files = await loadSqliteTouchedFiles(
-    toTranscriptReadScope(target),
-    `${agentId}\0${entry.sessionId}\0${target.storePath ?? ""}`,
-  );
+  const files = await loadSqliteTouchedFiles(toTranscriptReadScope(target), cacheKey);
   return {
+    activityScope: createHash("sha256").update(cacheKey).digest("hex"),
     root: loaded.root,
     fileRoot: loaded.fileRoot,
     diffCwd: loaded.diffCwd,
@@ -758,6 +801,7 @@ async function buildListResult(params: {
   path?: string;
   search?: string;
 }): Promise<{
+  activityScope?: string;
   root?: string;
   gitCheckout?: boolean;
   files: SessionFileEntry[];
@@ -780,7 +824,11 @@ async function buildListResult(params: {
       )
     : loaded.files;
   const files = await Promise.all(
-    workspaceFiles.map((file) => toSessionFileEntry(file, loaded.root, loaded.fileRoot)),
+    workspaceFiles.map((file) =>
+      toSessionFileEntry(file, loaded.root, loaded.fileRoot, {
+        activityScope: loaded.activityScope,
+      }),
+    ),
   );
   const browser = await buildBrowserResult({
     root,
@@ -790,6 +838,7 @@ async function buildListResult(params: {
     files: workspaceFiles,
   });
   return {
+    ...(loaded.activityScope ? { activityScope: loaded.activityScope } : {}),
     ...(root ? { root } : {}),
     ...(gitCheckout === undefined ? {} : { gitCheckout }),
     files,
@@ -806,6 +855,7 @@ async function findSessionFile(
     return {
       ...(loaded.root ? { root: loaded.root } : {}),
       file: await toSessionFileEntry(exactTouched, loaded.root, loaded.fileRoot, {
+        activityScope: loaded.activityScope,
         includeContent: true,
       }),
     };
@@ -832,6 +882,7 @@ async function findSessionFile(
       kind: sessionKind === "modified" ? "modified" : "read",
     };
     const file = await toSessionFileEntry(touched, loaded.root, loaded.root, {
+      activityScope: loaded.activityScope,
       includeContent: true,
     });
     if (!file.missing) {
