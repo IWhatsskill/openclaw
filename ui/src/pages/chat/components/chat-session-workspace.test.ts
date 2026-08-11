@@ -388,6 +388,198 @@ describe("session workspace file activity", () => {
     });
   });
 
+  it("acknowledges a direct legacy open before the workspace list loads", async () => {
+    localStorage.clear();
+    const legacyFile = {
+      path: "src/direct-legacy.ts",
+      workspacePath: "src/direct-legacy.ts",
+      name: "direct-legacy.ts",
+      kind: "modified" as const,
+      missing: false,
+      updatedAtMs: 17,
+    };
+    const getFile = vi.fn().mockResolvedValue({
+      sessionKey: "agent:main:current",
+      root: "/workspace",
+      file: { ...legacyFile, content: "export {};\n" },
+    });
+    const listFiles = vi.fn().mockResolvedValue({
+      sessionKey: "agent:main:current",
+      root: "/workspace",
+      files: [legacyFile],
+    });
+    const state = {
+      client: { request: vi.fn().mockResolvedValue({ artifacts: [] }) },
+      connected: true,
+      handleOpenSidebar: vi.fn(),
+      hello: gatewayHello([]),
+      requestUpdate: vi.fn(),
+      sessionKey: "agent:main:current",
+      sessions: { getFile, listFiles },
+      settings: { gatewayUrl: "wss://gateway-a.example" },
+    } as unknown as SessionWorkspaceHost;
+
+    openSessionWorkspaceFile(state, { path: "src/direct-legacy.ts" });
+    await vi.waitFor(() => expect(state.handleOpenSidebar).toHaveBeenCalledOnce());
+    expect(listFiles).not.toHaveBeenCalled();
+
+    toggleSessionWorkspace(state);
+    await vi.waitFor(() => expect(createSessionWorkspaceProps(state).list).not.toBeNull());
+    expect(createSessionWorkspaceProps(state).fileActivity.newCount).toBe(0);
+  });
+
+  it("acknowledges the revision returned by get when the list changes during an open", async () => {
+    localStorage.clear();
+    const activityScope = "6".repeat(64);
+    const activityId = "7".repeat(64);
+    const listedFile = {
+      path: "src/racing.ts",
+      workspacePath: "src/racing.ts",
+      name: "racing.ts",
+      kind: "modified" as const,
+      missing: false,
+      activityId,
+      activityRevision: 5,
+    };
+    const openedFile = { ...listedFile, activityRevision: 9 };
+    const listFiles = vi
+      .fn()
+      .mockResolvedValueOnce({
+        sessionKey: "agent:main:current",
+        activityScope,
+        files: [listedFile],
+      })
+      .mockResolvedValueOnce({
+        sessionKey: "agent:main:current",
+        activityScope,
+        files: [openedFile],
+      });
+    const getFile = vi.fn().mockResolvedValue({
+      sessionKey: "agent:main:current",
+      activityScope,
+      file: { ...openedFile, content: "export {};\n" },
+    });
+    const state = {
+      client: { request: vi.fn().mockResolvedValue({ artifacts: [] }) },
+      connected: true,
+      handleOpenSidebar: vi.fn(),
+      hello: gatewayHello([]),
+      requestUpdate: vi.fn(),
+      sessionKey: "agent:main:current",
+      sessions: { getFile, listFiles },
+      settings: { gatewayUrl: "wss://gateway-a.example" },
+    } as unknown as SessionWorkspaceHost;
+
+    toggleSessionWorkspace(state);
+    await vi.waitFor(() => expect(createSessionWorkspaceProps(state).list).not.toBeNull());
+
+    createSessionWorkspaceProps(state).onOpenFile("src/racing.ts", "session");
+    await vi.waitFor(() => expect(state.handleOpenSidebar).toHaveBeenCalledOnce());
+    createSessionWorkspaceProps(state).onRefresh();
+    await vi.waitFor(() =>
+      expect(createSessionWorkspaceProps(state).list?.files[0]?.activityRevision).toBe(9),
+    );
+
+    expect(createSessionWorkspaceProps(state).fileActivity.newCount).toBe(0);
+  });
+
+  it("acknowledges the strongest modified alias returned by a browser open", async () => {
+    localStorage.clear();
+    const activityScope = "8".repeat(64);
+    const olderAlias = {
+      path: "./src/alias.ts",
+      workspacePath: "src/alias.ts",
+      name: "alias.ts",
+      kind: "modified" as const,
+      missing: false,
+      activityId: "9".repeat(64),
+      activityRevision: 5,
+    };
+    const latestAlias = {
+      ...olderAlias,
+      path: "src/alias.ts",
+      activityId: "a".repeat(64),
+      activityRevision: 11,
+    };
+    const listFiles = vi.fn().mockResolvedValue({
+      sessionKey: "agent:main:current",
+      activityScope,
+      root: "/workspace",
+      files: [olderAlias, latestAlias],
+    });
+    const getFile = vi.fn().mockResolvedValue({
+      sessionKey: "agent:main:current",
+      activityScope,
+      root: "/workspace",
+      file: { ...latestAlias, content: "export {};\n" },
+    });
+    const state = {
+      client: { request: vi.fn().mockResolvedValue({ artifacts: [] }) },
+      connected: true,
+      handleOpenSidebar: vi.fn(),
+      hello: gatewayHello([]),
+      requestUpdate: vi.fn(),
+      sessionKey: "agent:main:current",
+      sessions: { getFile, listFiles },
+      settings: { gatewayUrl: "wss://gateway-a.example" },
+    } as unknown as SessionWorkspaceHost;
+
+    toggleSessionWorkspace(state);
+    await vi.waitFor(() => expect(createSessionWorkspaceProps(state).list).not.toBeNull());
+
+    createSessionWorkspaceProps(state).onOpenFile("src/alias.ts", "workspace");
+    await vi.waitFor(() => expect(state.handleOpenSidebar).toHaveBeenCalledOnce());
+
+    const activity = createSessionWorkspaceProps(state).fileActivity;
+    expect(activity.statusByFile.get(`id:${olderAlias.activityId}`)).toBe("new");
+    expect(activity.statusByFile.get(`id:${latestAlias.activityId}`)).toBe("read");
+    expect(activity.newCount).toBe(1);
+  });
+
+  it("uses list metadata when an older Gateway omits activity fields from get", async () => {
+    localStorage.clear();
+    const activityScope = "b".repeat(64);
+    const listedFile = {
+      path: "src/legacy-get.ts",
+      name: "legacy-get.ts",
+      kind: "modified" as const,
+      missing: false,
+      activityId: "c".repeat(64),
+      activityRevision: 3,
+    };
+    const listFiles = vi.fn().mockResolvedValue({
+      sessionKey: "agent:main:current",
+      activityScope,
+      files: [listedFile],
+    });
+    const getFile = vi.fn().mockResolvedValue({
+      sessionKey: "agent:main:current",
+      file: {
+        ...listedFile,
+        activityId: undefined,
+        activityRevision: undefined,
+        content: "x\n",
+      },
+    });
+    const state = {
+      client: { request: vi.fn().mockResolvedValue({ artifacts: [] }) },
+      connected: true,
+      handleOpenSidebar: vi.fn(),
+      hello: gatewayHello([]),
+      requestUpdate: vi.fn(),
+      sessionKey: "agent:main:current",
+      sessions: { getFile, listFiles },
+      settings: { gatewayUrl: "wss://gateway-a.example" },
+    } as unknown as SessionWorkspaceHost;
+
+    toggleSessionWorkspace(state);
+    await vi.waitFor(() => expect(createSessionWorkspaceProps(state).list).not.toBeNull());
+    createSessionWorkspaceProps(state).onOpenFile("src/legacy-get.ts", "session");
+    await vi.waitFor(() => expect(state.handleOpenSidebar).toHaveBeenCalledOnce());
+
+    expect(createSessionWorkspaceProps(state).fileActivity.newCount).toBe(0);
+  });
+
   it("does not acknowledge a stale list item after the transcript scope changes", async () => {
     localStorage.clear();
     const oldScope = "2".repeat(64);

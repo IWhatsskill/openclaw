@@ -138,18 +138,26 @@ function readActivityStore(key: string): PersistedActivityStore {
   if (!storage) {
     return memoryStores.get(key) ?? emptyActivityStore();
   }
+  let raw: string | null;
   try {
-    const raw = storage.getItem(key);
-    if (!raw) {
-      memoryStores.delete(key);
-      return emptyActivityStore();
-    }
+    raw = storage.getItem(key);
+  } catch {
+    // Storage access can be rejected while the current tab's in-memory state
+    // remains valid, so preserve that fallback only for this failure class.
+    return memoryStores.get(key) ?? emptyActivityStore();
+  }
+  if (!raw) {
+    memoryStores.delete(key);
+    return emptyActivityStore();
+  }
+  try {
     const parsed = normalizeActivityStore(JSON.parse(raw) as unknown);
     memoryStores.set(key, parsed);
     return parsed;
   } catch {
-    // Browser storage is optional; the in-memory copy still keeps this tab coherent.
-    return memoryStores.get(key) ?? emptyActivityStore();
+    // Persisted corruption must not revive stale Read or Resolved markers.
+    memoryStores.delete(key);
+    return emptyActivityStore();
   }
 }
 

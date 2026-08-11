@@ -492,6 +492,19 @@ function openWorkspaceItem<T>(
   })();
 }
 
+function hasModernFileActivity(
+  file: SessionWorkspaceFileEntry | undefined,
+): file is SessionWorkspaceFileEntry & { activityId: string; activityRevision: number } {
+  return (
+    file?.kind === "modified" &&
+    typeof file.activityId === "string" &&
+    file.activityId.trim().length > 0 &&
+    typeof file.activityRevision === "number" &&
+    Number.isSafeInteger(file.activityRevision) &&
+    file.activityRevision >= 0
+  );
+}
+
 function openFile(
   state: SessionWorkspaceHost,
   workspace: SessionWorkspaceState,
@@ -649,7 +662,11 @@ function openFile(
       ) {
         return;
       }
-      const activityFile = opts.activityFile ?? result.file;
+      // The opened response owns the revision that was actually previewed. Keep
+      // the list-time entry only as a compatibility fallback for older Gateways.
+      const activityFile = hasModernFileActivity(result.file)
+        ? result.file
+        : (opts.activityFile ?? result.file);
       if (activityFile?.kind !== "modified") {
         return;
       }

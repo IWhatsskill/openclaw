@@ -283,6 +283,67 @@ describe("sessions.files touched-file folds", () => {
     ]);
   });
 
+  it("uses raw event revisions when an active branch reuses a visible ordinal", async () => {
+    useSqliteSession(hoisted.loadSessionEntry, workspaceRoot, "sess-touched-branch-change");
+    hoisted.readSessionTranscriptVisibleMessageDeltaCore.mockImplementation((_scope, limits) => {
+      if (limits.cursor === undefined) {
+        return {
+          kind: "page",
+          cursor: "same-generation-first",
+          events: [
+            {
+              ...visibleMessageEvent(assistantToolCall("edit", { path: "ui/chat.ts" }), 4),
+              eventSeq: 7,
+            },
+          ],
+          hasMore: false,
+          serializedBytes: 100,
+        };
+      }
+      if (limits.cursor === "same-generation-first") {
+        return {
+          kind: "reset",
+          cursor: "same-generation-bootstrap",
+          reason: "anchor_moved",
+        };
+      }
+      if (limits.cursor === "same-generation-bootstrap") {
+        return {
+          kind: "page",
+          cursor: "same-generation-second",
+          events: [
+            {
+              ...visibleMessageEvent(assistantToolCall("edit", { path: "ui/chat.ts" }), 4),
+              eventSeq: 12,
+            },
+          ],
+          hasMore: false,
+          serializedBytes: 100,
+        };
+      }
+      throw new Error("unexpected cursor: " + String(limits.cursor));
+    });
+
+    const first = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.list", {
+        sessionKey: "agent:main:main",
+      }),
+    );
+    const changedBranch = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.list", {
+        sessionKey: "agent:main:main",
+      }),
+    );
+
+    expect(changedBranch.activityScope).toBe(first.activityScope);
+    expect(changedBranch.files[0]).toMatchObject({
+      activityId: first.files[0]?.activityId,
+      activityRevision: 12,
+      path: "ui/chat.ts",
+    });
+    expect(first.files[0]).toMatchObject({ activityRevision: 7, path: "ui/chat.ts" });
+  });
+
   it("rotates activity identity when a transcript replacement reuses a message ordinal", async () => {
     useSqliteSession(hoisted.loadSessionEntry, workspaceRoot, "sess-touched-replacement");
     hoisted.parseSessionTranscriptVisibleMessageCursorGeneration.mockImplementation((cursor) =>

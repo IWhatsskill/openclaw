@@ -133,6 +133,32 @@ describe("session file activity", () => {
     expect(status(context, file).status).toBe("new");
   });
 
+  it("treats malformed persisted state as unread instead of reviving cached markers", () => {
+    const file = modifiedFile(3);
+    markSessionFileRead(context, file);
+    expect(status(context, file).status).toBe("read");
+
+    const key = localStorage.key(0);
+    expect(key).not.toBeNull();
+    localStorage.setItem(key!, "{not-json");
+
+    expect(status(context, file).status).toBe("new");
+  });
+
+  it("keeps the current tab coherent when browser storage rejects a read", () => {
+    const file = modifiedFile(3);
+    markSessionFileRead(context, file);
+    expect(status(context, file).status).toBe("read");
+    const getItem = vi.spyOn(localStorage, "getItem").mockImplementation(() => {
+      throw new DOMException("access denied", "SecurityError");
+    });
+
+    expect(status(context, file).status).toBe("read");
+
+    expect(getItem).toHaveBeenCalled();
+    getItem.mockRestore();
+  });
+
   it("keeps the current tab coherent when browser storage rejects a write", () => {
     const file = modifiedFile(3);
     const setItem = vi.spyOn(localStorage, "setItem").mockImplementationOnce(() => {

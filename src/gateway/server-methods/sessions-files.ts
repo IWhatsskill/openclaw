@@ -316,7 +316,7 @@ async function foldSqliteTouchedFiles(
     for (const event of delta.events) {
       const message = sqliteMessageEventWithSeq(event);
       if (message !== undefined) {
-        collectTouchedFilesFromMessage(message, files, event.seq);
+        collectTouchedFilesFromMessage(message, files, event.eventSeq);
       }
     }
     cached = { cursor: delta.cursor, files };
