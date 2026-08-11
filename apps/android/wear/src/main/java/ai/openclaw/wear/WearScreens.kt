@@ -97,6 +97,13 @@ internal enum class WearHomePage {
   Pulse,
 }
 
+internal fun wearHomePages(agentPulseSupported: Boolean): List<WearHomePage> =
+  if (agentPulseSupported) {
+    WearHomePage.entries
+  } else {
+    WearHomePage.entries.filterNot { it == WearHomePage.Pulse }
+  }
+
 private const val VOICE_MODE_COUNT = 2
 private const val VOICE_HOME_MODE = 0
 private const val VOICE_THREAD_MODE = 1
@@ -171,10 +178,13 @@ internal fun OpenClawWearScreens(
   onStopSpeaking: () -> Unit,
 ) {
   val lifecycleOwner = LocalLifecycleOwner.current
+  val agentPulseSupported = snapshot?.agentPulseSupported == true
+  val homePages = remember(agentPulseSupported) { wearHomePages(agentPulseSupported) }
+  val initialPageIndex = homePages.indexOf(initialPage).takeIf { it >= 0 } ?: 0
   val pagerState =
     rememberPagerState(
-      initialPage = initialPage.ordinal,
-      pageCount = { WearHomePage.entries.size },
+      initialPage = initialPageIndex,
+      pageCount = { homePages.size },
     )
   var lifecycleResumed by remember(lifecycleOwner) {
     mutableStateOf(
@@ -197,8 +207,13 @@ internal fun OpenClawWearScreens(
       onAgentPulseVisibilityChanged(false)
     }
   }
-  LaunchedEffect(pagerState, lifecycleResumed, snapshot != null) {
-    snapshotFlow { pagerState.currentPage == WearHomePage.Pulse.ordinal }
+  LaunchedEffect(homePages) {
+    if (homePages.getOrNull(pagerState.currentPage) == null) {
+      pagerState.scrollToPage(homePages.indexOf(WearHomePage.Chat))
+    }
+  }
+  LaunchedEffect(pagerState, lifecycleResumed, snapshot != null, homePages) {
+    snapshotFlow { homePages.getOrNull(pagerState.currentPage) == WearHomePage.Pulse }
       .collect { selected ->
         onAgentPulseVisibilityChanged(snapshot != null && lifecycleResumed && selected)
       }
@@ -222,11 +237,12 @@ internal fun OpenClawWearScreens(
   LaunchedEffect(navigationRequest?.id) {
     val request = navigationRequest ?: return@LaunchedEffect
     val destination = wearLaunchPage(request.target, realtimeActive)
-    pagerState.scrollToPage(destination.ordinal)
+    val destinationIndex = homePages.indexOf(destination).takeIf { it >= 0 } ?: 0
+    pagerState.scrollToPage(destinationIndex)
     onNavigationRequestHandled(request.id)
   }
   LaunchedEffect(pagerState.currentPage, showVoiceSwipeHint) {
-    if (pagerState.currentPage == WearHomePage.Voice.ordinal && showVoiceSwipeHint) {
+    if (homePages.getOrNull(pagerState.currentPage) == WearHomePage.Voice && showVoiceSwipeHint) {
       delay(1_800L)
       showVoiceSwipeHint = false
     }
@@ -247,9 +263,9 @@ internal fun OpenClawWearScreens(
       delay(250L)
     }
   }
-  BackHandler(enabled = pagerState.currentPage == WearHomePage.Voice.ordinal) {
+  BackHandler(enabled = homePages.getOrNull(pagerState.currentPage) == WearHomePage.Voice) {
     pagerScope.launch {
-      pagerState.animateScrollToPage(WearHomePage.Chat.ordinal)
+      pagerState.animateScrollToPage(homePages.indexOf(WearHomePage.Chat))
     }
   }
   HorizontalPagerScaffold(
@@ -264,12 +280,12 @@ internal fun OpenClawWearScreens(
       modifier = Modifier.fillMaxSize(),
       rotaryScrollableBehavior = null,
       userScrollEnabled =
-        pagerState.currentPage != WearHomePage.Voice.ordinal ||
+        homePages.getOrNull(pagerState.currentPage) != WearHomePage.Voice ||
           voicePagerState.currentPage == VOICE_HOME_MODE ||
           voicePagerState.currentPage == VOICE_THREAD_MODE,
     ) { page ->
-      when (page) {
-        WearHomePage.Chat.ordinal ->
+      when (homePages.getOrNull(page)) {
+        WearHomePage.Chat ->
           ChatPage(
             snapshot = snapshot,
             interaction = interaction,
@@ -286,10 +302,10 @@ internal fun OpenClawWearScreens(
             onSpeakLatest = onSpeakLatest,
             onStopSpeaking = onStopSpeaking,
           )
-        WearHomePage.Voice.ordinal ->
+        WearHomePage.Voice ->
           VoicePage(
             voicePagerState = voicePagerState,
-            showSwipeHint = showVoiceSwipeHint && pagerState.currentPage == WearHomePage.Voice.ordinal,
+            showSwipeHint = showVoiceSwipeHint && homePages.getOrNull(pagerState.currentPage) == WearHomePage.Voice,
             realtimeTalk = snapshot.realtimeTalk,
             speaking = speaking,
             realtimeCapturing = realtimeCapturing,
@@ -305,7 +321,7 @@ internal fun OpenClawWearScreens(
             onRealtimeTalk = onRealtimeTalk,
             onStopSpeaking = onStopSpeaking,
           )
-        WearHomePage.Controls.ordinal ->
+        WearHomePage.Controls ->
           ControlsPage(
             snapshot = snapshot,
             themeMode = themeMode,
@@ -320,7 +336,7 @@ internal fun OpenClawWearScreens(
             onRefresh = onRefresh,
             onGatewayEnabledChange = onGatewayEnabledChange,
           )
-        WearHomePage.Pulse.ordinal ->
+        WearHomePage.Pulse ->
           AgentPulsePage(
             snapshot = snapshot,
             onRefresh = {

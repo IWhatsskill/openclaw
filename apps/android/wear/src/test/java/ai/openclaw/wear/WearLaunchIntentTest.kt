@@ -35,14 +35,22 @@ class WearLaunchIntentTest {
   }
 
   @Test
-  fun pulseAppendsWithoutChangingExistingHomePageOrdinals() {
+  fun olderPhoneKeepsOriginalHomePages() {
+    assertEquals(
+      listOf(WearHomePage.Chat, WearHomePage.Voice, WearHomePage.Controls),
+      wearHomePages(agentPulseSupported = false),
+    )
+  }
+
+  @Test
+  fun capablePhoneAppendsPulseWithoutChangingExistingHomePageOrdinals() {
     assertEquals(0, WearHomePage.Chat.ordinal)
     assertEquals(1, WearHomePage.Voice.ordinal)
     assertEquals(2, WearHomePage.Controls.ordinal)
     assertEquals(3, WearHomePage.Pulse.ordinal)
     assertEquals(
       listOf(WearHomePage.Chat, WearHomePage.Voice, WearHomePage.Controls, WearHomePage.Pulse),
-      WearHomePage.entries.toList(),
+      wearHomePages(agentPulseSupported = true),
     )
   }
 
