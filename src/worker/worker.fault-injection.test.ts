@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import {
@@ -15,6 +16,7 @@ import type {
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { runWorkerProviderReplayRoundTrip } from "../../test/helpers/worker-provider-replay-roundtrip.js";
+import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import {
   resolveSessionTranscriptRuntimeTarget,
@@ -49,7 +51,6 @@ import {
   clearAgentRunContext,
   getAgentRunContext,
 } from "../infra/agent-run-registry.js";
-import { rawDataToString } from "../infra/ws.js";
 import type { WorkerProvider, WorkerSshEndpoint } from "../plugins/types.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -332,7 +333,10 @@ class ComposedGatewayHarness {
         handshake: HANDSHAKE,
       },
       assignment: {
+        agentId: "worker-agent",
         runId: params.runId ?? RUN_ID,
+        operationalRunInstance: createOperationalRunInstanceRef(params.runId ?? RUN_ID),
+        agentRuntimeIdentityToken: "test-agent-runtime-token",
         turnId: "fault-turn",
         prompt: "fault injection",
         workspaceDir: this.root,

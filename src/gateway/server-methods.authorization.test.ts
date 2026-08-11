@@ -4,7 +4,7 @@ import {
   patchSessionEntry,
   upsertSessionEntry,
 } from "../config/sessions/session-accessor.js";
-import { applySqliteSessionEntryCanonicalReplacements } from "../config/sessions/session-accessor.sqlite-replacement-projection.js";
+import { applySessionEntryCanonicalReplacements } from "../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -591,7 +591,7 @@ describe("sessions.patchMany orchestration", () => {
       }).storePath;
       const writerStarted = createDeferred();
       const insertConflictingAlias = createDeferred();
-      const writer = applySqliteSessionEntryCanonicalReplacements({
+      const writer = applySessionEntryCanonicalReplacements({
         agentId: "main",
         sessionKeys: [conflictingAlias],
         storePath,
@@ -666,6 +666,89 @@ describe("sessions.patchMany orchestration", () => {
       for (const sessionKey of siblingKeys) {
         expect(loadSessionEntry({ agentId: "main", sessionKey })).toHaveProperty("lastReadAt");
       }
+    });
+  });
+
+  it("rejects an alias inserted after single-patch preflight while waiting for the writer", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg = {
+        session: { mainKey: "work" },
+        agents: { list: [{ id: "main", default: true }] },
+      } satisfies OpenClawConfig;
+      const canonicalKey = "agent:main:work";
+      const conflictingAlias = "agent:main:main";
+      await upsertSessionEntry(
+        { agentId: "main", sessionKey: canonicalKey },
+        { sessionId: "session-single-alias-race-canonical", updatedAt: 1 },
+      );
+
+      const storePath = resolveGatewaySessionStoreTargetWithStore({
+        cfg,
+        key: conflictingAlias,
+      }).storePath;
+      const writerStarted = createDeferred();
+      const insertConflictingAlias = createDeferred();
+      const writer = applySessionEntryCanonicalReplacements({
+        agentId: "main",
+        sessionKeys: [conflictingAlias],
+        storePath,
+        update: async () => {
+          writerStarted.resolve();
+          await insertConflictingAlias.promise;
+          return {
+            replacements: [
+              {
+                entry: { sessionId: "session-single-alias-race-conflict", updatedAt: 2 },
+                previousSessionKeys: [],
+                sessionKey: conflictingAlias,
+              },
+            ],
+            result: undefined,
+          };
+        },
+      });
+      await writerStarted.promise;
+
+      const preflightCompleted = createDeferred();
+      const respond = vi.fn();
+      const request = sessionMutationHandlers["sessions.patch"]!({
+        params: { key: conflictingAlias, pinned: true },
+        respond,
+        context: context({
+          getRuntimeConfig: () => cfg,
+          workerSessionPlacementService: {
+            getMany: (sessionIds: string[]) => {
+              if (sessionIds.includes("session-single-alias-race-canonical")) {
+                preflightCompleted.resolve();
+              }
+              return new Map();
+            },
+          },
+        }),
+      } as never);
+
+      await preflightCompleted.promise;
+      insertConflictingAlias.resolve();
+      await writer;
+      await request;
+
+      expect(respond).toHaveBeenCalledWith(false, undefined, {
+        code: "UNAVAILABLE",
+        message: "Session patch failed unexpectedly. Retry the request.",
+        retryable: true,
+      });
+      expect(loadSessionEntry({ agentId: "main", sessionKey: canonicalKey })).toMatchObject({
+        sessionId: "session-single-alias-race-canonical",
+      });
+      expect(loadSessionEntry({ agentId: "main", sessionKey: canonicalKey })).not.toHaveProperty(
+        "pinnedAt",
+      );
+      expect(loadSessionEntry({ agentId: "main", sessionKey: conflictingAlias })).toMatchObject({
+        sessionId: "session-single-alias-race-conflict",
+      });
+      expect(
+        loadSessionEntry({ agentId: "main", sessionKey: conflictingAlias }),
+      ).not.toHaveProperty("pinnedAt");
     });
   });
 

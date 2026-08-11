@@ -9,7 +9,7 @@ import {
 import type { SessionEntry } from "../../config/sessions.js";
 import { isInternalSessionEffectsKey } from "../../config/sessions/internal-session-key.js";
 import {
-  applySqliteSessionEntryCanonicalReplacements,
+  applySessionEntryCanonicalReplacements,
   type SessionEntryCanonicalReplacement,
 } from "../../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import { SessionLabelOwnerIndex } from "../../config/sessions/session-entry-selection.js";
@@ -314,8 +314,17 @@ async function executeSessionPatchMutations(params: {
             [...groups.values()].map(async (group) => {
               const first = group[0]!;
               try {
-                const groupOutcomes = await applySqliteSessionEntryCanonicalReplacements({
+                // Labels need store-wide uniqueness. Other single patches retain every resolver
+                // candidate so writer-queued legacy aliases remain visible to revalidation.
+                const selectedSessionKeys =
+                  group.length === 1 && first.fullPatch.label === undefined
+                    ? Array.from(
+                        new Set([first.key, first.canonicalKey, ...first.initialStoreKeys]),
+                      )
+                    : undefined;
+                const groupOutcomes = await applySessionEntryCanonicalReplacements({
                   agentId: first.targetAgentId,
+                  ...(selectedSessionKeys ? { sessionKeys: selectedSessionKeys } : {}),
                   storePath: first.storePath,
                   skipMaintenance: true,
                   update: async (entries) => {
