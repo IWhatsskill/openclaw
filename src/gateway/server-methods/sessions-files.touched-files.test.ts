@@ -13,6 +13,7 @@ import {
   expectOkPayload,
   useSqliteSession,
   visibleMessageEvent,
+  writeWorkspaceFile,
 } from "./sessions-files.test-support.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -112,6 +113,56 @@ describe("sessions.files touched-file folds", () => {
       await invokeSessionFilesHandler("sessions.files.list", { sessionKey: "agent:main:main" }),
     );
     expect(gitPayload.gitCheckout).toBe(true);
+  });
+
+  it("keeps modified activity when browser aliases resolve to the same file", async () => {
+    const nestedCwd = path.join(workspaceRoot, "packages/app");
+    fs.mkdirSync(path.join(nestedCwd, "src"), { recursive: true });
+    writeWorkspaceFile(workspaceRoot, "packages/app/src/readme.md", "# Nested read me\n");
+    hoisted.loadSessionEntry.mockReturnValue({
+      canonicalKey: "agent:main:main",
+      cfg: {},
+      storePath: path.join(workspaceRoot, ".sessions.json"),
+      entry: {
+        sessionId: "sess-alias-activity",
+        sessionFile: "sess-alias-activity.jsonl",
+        spawnedCwd: nestedCwd,
+        spawnedWorkspaceDir: workspaceRoot,
+      },
+    });
+    mockVisibleMessages([
+      assistantToolCall("edit", { path: "./src/readme.md" }),
+      assistantToolCall("read", { path: "src/readme.md" }),
+    ]);
+
+    const listed = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.list", {
+        sessionKey: "agent:main:main",
+      }),
+    );
+    const modified = listed.files.find(
+      (file: Record<string, unknown>) => file.path === "./src/readme.md",
+    );
+    expect(modified).toMatchObject({
+      kind: "modified",
+      activityId: expect.stringMatching(/^[a-f0-9]{64}$/),
+      activityRevision: expect.any(Number),
+    });
+
+    const browserPreview = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.get", {
+        sessionKey: "agent:main:main",
+        path: "packages/app/src/readme.md",
+      }),
+    );
+
+    expect(browserPreview.activityScope).toBe(listed.activityScope);
+    expect(browserPreview.file).toMatchObject({
+      kind: "modified",
+      activityId: modified?.activityId,
+      activityRevision: modified?.activityRevision,
+      workspacePath: "packages/app/src/readme.md",
+    });
   });
 
   it("folds only appended SQLite messages after the cached cursor", async () => {

@@ -901,7 +901,20 @@ async function findSessionFile(
       filePath: touched.path,
     });
     if (resolved) {
-      touchedByBrowserPath.set(toDisplayPath(loaded.root, resolved), touched);
+      const browserPath = toDisplayPath(loaded.root, resolved);
+      const existing = touchedByBrowserPath.get(browserPath);
+      if (
+        !existing ||
+        (existing.kind === "read" && touched.kind === "modified") ||
+        (existing.kind === "modified" &&
+          touched.kind === "modified" &&
+          (touched.activityRevision ?? -1) > (existing.activityRevision ?? -1))
+      ) {
+        // Multiple raw tool paths can resolve to the same workspace file. Keep
+        // the strongest/latest activity identity so a read alias cannot hide
+        // the modified revision when that file is opened from the browser.
+        touchedByBrowserPath.set(browserPath, touched);
+      }
     }
   }
   for (const candidate of candidates) {
