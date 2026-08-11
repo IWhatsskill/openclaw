@@ -206,6 +206,8 @@ describe("session workspace file activity", () => {
     });
 
     props.onOpenFile("src/app.ts", "session");
+    expect(createSessionWorkspaceProps(state).fileActivity.newCount).toBe(1);
+    await vi.waitFor(() => expect(state.handleOpenSidebar).toHaveBeenCalledOnce());
     props = createSessionWorkspaceProps(state);
     expect(props.fileActivity.newCount).toBe(0);
     await vi.waitFor(() => expect(getFile).toHaveBeenCalledOnce());
@@ -250,6 +252,204 @@ describe("session workspace file activity", () => {
       openCount: 1,
       resolvedCount: 0,
     });
+
+    props = createSessionWorkspaceProps(state);
+    props.onOpenFile("src/app.ts", "workspace");
+    await vi.waitFor(() => expect(state.handleOpenSidebar).toHaveBeenCalledTimes(2));
+    expect(createSessionWorkspaceProps(state).fileActivity.newCount).toBe(0);
+
+    revision = 9;
+    props.onRefresh();
+    await vi.waitFor(() => expect(listFiles).toHaveBeenCalledTimes(3));
+    await vi.waitFor(() =>
+      expect(createSessionWorkspaceProps(state).list?.files[0]?.activityRevision).toBe(9),
+    );
+    expect(createSessionWorkspaceProps(state).fileActivity.newCount).toBe(1);
+
+    openSessionWorkspaceFile(state, { path: "src/app.ts" });
+    await vi.waitFor(() => expect(state.handleOpenSidebar).toHaveBeenCalledTimes(3));
+    expect(createSessionWorkspaceProps(state).fileActivity).toMatchObject({
+      newCount: 0,
+      openCount: 1,
+      resolvedCount: 0,
+    });
+  });
+
+  it("keeps a modified file New while disconnected or when its preview cannot be opened", async () => {
+    localStorage.clear();
+    const listFiles = vi.fn().mockResolvedValue({
+      sessionKey: "agent:main:current",
+      activityScope: "d".repeat(64),
+      files: [
+        {
+          path: "src/missing.ts",
+          name: "missing.ts",
+          kind: "modified",
+          missing: false,
+          activityId: "e".repeat(64),
+          activityRevision: 5,
+        },
+      ],
+    });
+    const getFile = vi.fn().mockResolvedValue({
+      sessionKey: "agent:main:current",
+      file: {
+        path: "src/missing.ts",
+        name: "missing.ts",
+        kind: "modified",
+        missing: false,
+      },
+    });
+    const state = {
+      client: { request: vi.fn().mockResolvedValue({ artifacts: [] }) },
+      connected: true,
+      handleOpenSidebar: vi.fn(),
+      hello: gatewayHello([]),
+      requestUpdate: vi.fn(),
+      sessionKey: "agent:main:current",
+      sessions: {
+        getFile,
+        listFiles,
+      },
+      settings: { gatewayUrl: "wss://gateway-a.example" },
+    } as unknown as SessionWorkspaceHost;
+
+    toggleSessionWorkspace(state);
+    await vi.waitFor(() => expect(createSessionWorkspaceProps(state).list).not.toBeNull());
+
+    state.connected = false;
+    createSessionWorkspaceProps(state).onOpenFile("src/missing.ts", "session");
+    expect(getFile).not.toHaveBeenCalled();
+    expect(createSessionWorkspaceProps(state).fileActivity.newCount).toBe(1);
+
+    state.connected = true;
+    createSessionWorkspaceProps(state).onOpenFile("src/missing.ts", "session");
+    await vi.waitFor(() => expect(createSessionWorkspaceProps(state).error).toBeTruthy());
+
+    expect(state.handleOpenSidebar).not.toHaveBeenCalled();
+    expect(createSessionWorkspaceProps(state).fileActivity).toMatchObject({
+      newCount: 1,
+      openCount: 1,
+      resolvedCount: 0,
+    });
+  });
+
+  it("acknowledges a direct file open before the workspace list loads", async () => {
+    localStorage.clear();
+    const activityScope = "f".repeat(64);
+    const activityFile = {
+      path: "src/direct.ts",
+      workspacePath: "src/direct.ts",
+      name: "direct.ts",
+      kind: "modified" as const,
+      missing: false,
+      activityId: "1".repeat(64),
+      activityRevision: 7,
+    };
+    const getFile = vi.fn().mockResolvedValue({
+      sessionKey: "agent:main:current",
+      activityScope,
+      root: "/workspace",
+      file: {
+        ...activityFile,
+        content: "export {};\n",
+      },
+    });
+    const listFiles = vi.fn().mockResolvedValue({
+      sessionKey: "agent:main:current",
+      activityScope,
+      root: "/workspace",
+      files: [activityFile],
+    });
+    const state = {
+      client: { request: vi.fn().mockResolvedValue({ artifacts: [] }) },
+      connected: true,
+      handleOpenSidebar: vi.fn(),
+      hello: gatewayHello([]),
+      requestUpdate: vi.fn(),
+      sessionKey: "agent:main:current",
+      sessions: { getFile, listFiles },
+      settings: { gatewayUrl: "wss://gateway-a.example" },
+    } as unknown as SessionWorkspaceHost;
+
+    openSessionWorkspaceFile(state, { path: "src/direct.ts" });
+
+    await vi.waitFor(() => expect(state.handleOpenSidebar).toHaveBeenCalledOnce());
+    expect(listFiles).not.toHaveBeenCalled();
+
+    toggleSessionWorkspace(state);
+    await vi.waitFor(() => expect(listFiles).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(createSessionWorkspaceProps(state).list).not.toBeNull());
+
+    expect(createSessionWorkspaceProps(state).fileActivity).toMatchObject({
+      newCount: 0,
+      openCount: 1,
+      resolvedCount: 0,
+    });
+  });
+
+  it("does not acknowledge a stale list item after the transcript scope changes", async () => {
+    localStorage.clear();
+    const oldScope = "2".repeat(64);
+    const newScope = "3".repeat(64);
+    const oldFile = {
+      path: "src/replaced.ts",
+      name: "replaced.ts",
+      kind: "modified" as const,
+      missing: false,
+      activityId: "4".repeat(64),
+      activityRevision: 5,
+    };
+    const newFile = {
+      ...oldFile,
+      activityId: "5".repeat(64),
+    };
+    const listFiles = vi
+      .fn()
+      .mockResolvedValueOnce({
+        sessionKey: "agent:main:current",
+        activityScope: oldScope,
+        files: [oldFile],
+      })
+      .mockResolvedValueOnce({
+        sessionKey: "agent:main:current",
+        activityScope: newScope,
+        files: [newFile],
+      });
+    const getFile = vi.fn().mockResolvedValue({
+      sessionKey: "agent:main:current",
+      activityScope: newScope,
+      file: {
+        ...newFile,
+        content: "export {};\n",
+      },
+    });
+    const state = {
+      client: { request: vi.fn().mockResolvedValue({ artifacts: [] }) },
+      connected: true,
+      handleOpenSidebar: vi.fn(),
+      hello: gatewayHello([]),
+      requestUpdate: vi.fn(),
+      sessionKey: "agent:main:current",
+      sessions: { getFile, listFiles },
+      settings: { gatewayUrl: "wss://gateway-a.example" },
+    } as unknown as SessionWorkspaceHost;
+
+    toggleSessionWorkspace(state);
+    await vi.waitFor(() => expect(createSessionWorkspaceProps(state).list).not.toBeNull());
+
+    let props = createSessionWorkspaceProps(state);
+    expect(props.fileActivity.newCount).toBe(1);
+    props.onOpenFile("src/replaced.ts", "session");
+    await vi.waitFor(() => expect(state.handleOpenSidebar).toHaveBeenCalledOnce());
+    expect(createSessionWorkspaceProps(state).fileActivity.newCount).toBe(1);
+
+    props = createSessionWorkspaceProps(state);
+    props.onRefresh();
+    await vi.waitFor(() =>
+      expect(createSessionWorkspaceProps(state).list?.activityScope).toBe(newScope),
+    );
+    expect(createSessionWorkspaceProps(state).fileActivity.newCount).toBe(1);
   });
 });
 

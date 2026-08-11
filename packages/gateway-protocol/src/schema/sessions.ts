@@ -269,6 +269,7 @@ export const SessionsFilesGetParamsSchema = closedObject({
 /** Result for reading one session-referenced file. */
 export const SessionsFilesGetResultSchema = closedObject({
   sessionKey: NonEmptyString,
+  activityScope: Type.Optional(Sha256HexSchema),
   root: Type.Optional(NonEmptyString),
   file: SessionFileEntrySchema,
 });

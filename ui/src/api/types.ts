@@ -380,6 +380,7 @@ export type SessionWorkspaceListResult = {
 
 export type SessionWorkspaceGetResult = {
   sessionKey: string;
+  activityScope?: string;
   root?: string;
   file: SessionWorkspaceFileEntry;
 };

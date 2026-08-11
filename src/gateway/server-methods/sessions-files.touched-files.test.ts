@@ -19,6 +19,7 @@ const hoisted = vi.hoisted(() => ({
   loadSessionEntry: vi.fn(),
   resolveAgentWorkspaceDir: vi.fn(),
   resolveDefaultAgentId: vi.fn(),
+  parseSessionTranscriptVisibleMessageCursorGeneration: vi.fn(),
   readSessionTranscriptVisibleMessageDeltaCore: vi.fn(),
 }));
 
@@ -42,6 +43,8 @@ vi.mock("../session-transcript-readers.js", async () => {
   );
   return {
     ...actual,
+    parseSessionTranscriptVisibleMessageCursorGeneration:
+      hoisted.parseSessionTranscriptVisibleMessageCursorGeneration,
     readSessionTranscriptVisibleMessageDeltaCore:
       hoisted.readSessionTranscriptVisibleMessageDeltaCore,
   };
@@ -57,6 +60,8 @@ describe("sessions.files touched-file folds", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    hoisted.parseSessionTranscriptVisibleMessageCursorGeneration.mockReset();
+    hoisted.parseSessionTranscriptVisibleMessageCursorGeneration.mockReturnValue("test-generation");
     hoisted.readSessionTranscriptVisibleMessageDeltaCore.mockReset();
     workspaceRoot = createWorkspaceFixture("openclaw-session-touched-files-test-");
     hoisted.resolveDefaultAgentId.mockReturnValue("main");
@@ -225,6 +230,57 @@ describe("sessions.files touched-file folds", () => {
         activityRevision: 9,
       }),
     ]);
+  });
+
+  it("rotates activity identity when a transcript replacement reuses a message ordinal", async () => {
+    useSqliteSession(hoisted.loadSessionEntry, workspaceRoot, "sess-touched-replacement");
+    hoisted.parseSessionTranscriptVisibleMessageCursorGeneration.mockImplementation((cursor) =>
+      String(cursor).startsWith("generation-one") ? "generation-one" : "generation-two",
+    );
+    hoisted.readSessionTranscriptVisibleMessageDeltaCore.mockImplementation((_scope, limits) => {
+      if (limits.cursor === undefined) {
+        return {
+          kind: "page",
+          cursor: "generation-one-cursor",
+          events: [visibleMessageEvent(assistantToolCall("edit", { path: "ui/chat.ts" }), 4)],
+          hasMore: false,
+          serializedBytes: 100,
+        };
+      }
+      if (limits.cursor === "generation-one-cursor") {
+        return {
+          kind: "reset",
+          cursor: "generation-two-bootstrap",
+          reason: "generation_mismatch",
+        };
+      }
+      if (limits.cursor === "generation-two-bootstrap") {
+        return {
+          kind: "page",
+          cursor: "generation-two-cursor",
+          events: [visibleMessageEvent(assistantToolCall("edit", { path: "ui/chat.ts" }), 4)],
+          hasMore: false,
+          serializedBytes: 100,
+        };
+      }
+      throw new Error("unexpected cursor: " + String(limits.cursor));
+    });
+
+    const first = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.list", {
+        sessionKey: "agent:main:main",
+      }),
+    );
+    const replacement = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.list", {
+        sessionKey: "agent:main:main",
+      }),
+    );
+
+    expect(first.files[0]).toMatchObject({ activityRevision: 4, path: "ui/chat.ts" });
+    expect(replacement.files[0]).toMatchObject({ activityRevision: 4, path: "ui/chat.ts" });
+    expect(replacement.activityScope).not.toBe(first.activityScope);
+    expect(replacement.files[0]?.activityId).not.toBe(first.files[0]?.activityId);
   });
 
   it("yields between SQLite pages and shares one concurrent fold per session", async () => {

@@ -25,6 +25,7 @@ import { FsSafeError } from "../../infra/fs-safe.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import {
+  parseSessionTranscriptVisibleMessageCursorGeneration,
   readSessionTranscriptVisibleMessageDeltaCore,
   resolveTranscriptReadTarget,
   sqliteMessageEventWithSeq,
@@ -80,6 +81,11 @@ type TouchedFilesCacheEntry = {
   files: Map<string, TouchedFile>;
 };
 
+type TouchedFilesFoldResult = {
+  files: Map<string, TouchedFile>;
+  generation?: string;
+};
+
 const MAX_PREVIEW_BYTES = WORKSPACE_PREVIEW_MAX_BYTES;
 const MAX_BROWSER_ENTRIES = 250;
 const MAX_SEARCH_ENTRIES = 500;
@@ -120,7 +126,7 @@ const SEARCH_SKIP_DIRS = new Set([
 // fold, while this process-local LRU cap bounds retained session state.
 const touchedFilesCache = new Map<string, TouchedFilesCacheEntry>();
 // Page yields let other requests interleave, so singleflight keeps one cache-mutating fold per key.
-const touchedFilesFolds = new Map<string, Promise<Map<string, TouchedFile>>>();
+const touchedFilesFolds = new Map<string, Promise<TouchedFilesFoldResult>>();
 
 function readTouchedFilesCache(key: string): TouchedFilesCacheEntry | undefined {
   const cached = touchedFilesCache.get(key);
@@ -284,7 +290,7 @@ function collectTouchedFilesFromMessage(
 async function foldSqliteTouchedFiles(
   scope: SessionTranscriptReadScope,
   cacheKey: string,
-): Promise<Map<string, TouchedFile>> {
+): Promise<TouchedFilesFoldResult> {
   let cached = readTouchedFilesCache(cacheKey);
   let cursor = cached?.cursor;
   let files = cached?.files ?? new Map<string, TouchedFile>();
@@ -298,7 +304,7 @@ async function foldSqliteTouchedFiles(
     });
     if (delta.kind === "missing") {
       touchedFilesCache.delete(cacheKey);
-      return new Map();
+      return { files: new Map() };
     }
     if (delta.kind === "reset") {
       cached = { cursor: delta.cursor, files: new Map() };
@@ -317,7 +323,13 @@ async function foldSqliteTouchedFiles(
     cursor = cached.cursor;
     writeTouchedFilesCache(cacheKey, cached);
     if (!delta.hasMore) {
-      return files;
+      const generation = parseSessionTranscriptVisibleMessageCursorGeneration(delta.cursor);
+      if (!generation) {
+        throw new Error(
+          "sessions.files received a visible-message cursor without a transcript generation",
+        );
+      }
+      return { files, generation };
     }
     if (delta.requiredBytes !== undefined) {
       maxBytes = delta.requiredBytes;
@@ -331,7 +343,7 @@ async function foldSqliteTouchedFiles(
 async function loadSqliteTouchedFiles(
   scope: SessionTranscriptReadScope,
   cacheKey: string,
-): Promise<Map<string, TouchedFile>> {
+): Promise<TouchedFilesFoldResult> {
   const inFlight = touchedFilesFolds.get(cacheKey);
   if (inFlight) {
     return inFlight;
@@ -506,7 +518,11 @@ async function toSessionFileEntry(
   touched: TouchedFile,
   root: string | undefined,
   fileRoot: string | undefined,
-  opts: { activityScope?: string; includeContent?: boolean } = {},
+  opts: {
+    activityPath?: string;
+    activityScope?: string;
+    includeContent?: boolean;
+  } = {},
 ): Promise<SessionFileEntry> {
   const resolved = resolveTouchedFilePath({ root, fileRoot, filePath: touched.path });
   const base = {
@@ -516,7 +532,7 @@ async function toSessionFileEntry(
     ...(touched.kind === "modified" && opts.activityScope
       ? {
           activityId: createHash("sha256")
-            .update(`${opts.activityScope}\0${touched.path}`)
+            .update(`${opts.activityScope}\0${opts.activityPath ?? touched.path}`)
             .digest("hex"),
         }
       : {}),
@@ -778,11 +794,14 @@ async function loadSessionFiles(params: {
   } satisfies SessionTranscriptReadScope;
   const target = resolveTranscriptReadTarget(scope);
   const cacheKey = `${agentId}\0${entry.sessionId}\0${target.storePath ?? ""}`;
+  const transcriptScope = toTranscriptReadScope(target);
   // Entry-scoped reads without an explicit sessionFile always resolve to a canonical SQLite marker.
   // Legacy transcript files are doctor-owned migration debt, not a runtime read path.
-  const files = await loadSqliteTouchedFiles(toTranscriptReadScope(target), cacheKey);
+  const { files, generation } = await loadSqliteTouchedFiles(transcriptScope, cacheKey);
   return {
-    activityScope: createHash("sha256").update(cacheKey).digest("hex"),
+    activityScope: createHash("sha256")
+      .update(`${cacheKey}\0${generation ?? "missing"}`)
+      .digest("hex"),
     root: loaded.root,
     fileRoot: loaded.fileRoot,
     diffCwd: loaded.diffCwd,
@@ -848,11 +867,12 @@ async function buildListResult(params: {
 
 async function findSessionFile(
   params: SessionsFilesGetParams,
-): Promise<{ root?: string; file?: SessionFileEntry }> {
+): Promise<{ activityScope?: string; root?: string; file?: SessionFileEntry }> {
   const loaded = await loadSessionFiles(params);
   const exactTouched = loaded.files.find((file) => file.path === params.path);
   if (exactTouched) {
     return {
+      ...(loaded.activityScope ? { activityScope: loaded.activityScope } : {}),
       ...(loaded.root ? { root: loaded.root } : {}),
       file: await toSessionFileEntry(exactTouched, loaded.root, loaded.fileRoot, {
         activityScope: loaded.activityScope,
@@ -873,20 +893,38 @@ async function findSessionFile(
   if (candidates.length === 0) {
     return { root: loaded.root };
   }
-  const relevance = buildSessionRelevanceMap(loaded.files, loaded.root, loaded.fileRoot);
+  const touchedByBrowserPath = new Map<string, TouchedFile>();
+  for (const touched of loaded.files) {
+    const resolved = resolveTouchedFilePath({
+      root: loaded.root,
+      fileRoot: loaded.fileRoot,
+      filePath: touched.path,
+    });
+    if (resolved) {
+      touchedByBrowserPath.set(toDisplayPath(loaded.root, resolved), touched);
+    }
+  }
   for (const candidate of candidates) {
     const browserPath = toDisplayPath(loaded.root, candidate);
-    const sessionKind = relevance.get(browserPath);
+    const sessionTouched = touchedByBrowserPath.get(browserPath);
     const touched: TouchedFile = {
       path: browserPath,
-      kind: sessionKind === "modified" ? "modified" : "read",
+      kind: sessionTouched?.kind === "modified" ? "modified" : "read",
+      ...(sessionTouched?.activityRevision !== undefined
+        ? { activityRevision: sessionTouched.activityRevision }
+        : {}),
     };
     const file = await toSessionFileEntry(touched, loaded.root, loaded.root, {
+      ...(sessionTouched ? { activityPath: sessionTouched.path } : {}),
       activityScope: loaded.activityScope,
       includeContent: true,
     });
     if (!file.missing) {
-      return { root: loaded.root, file };
+      return {
+        ...(loaded.activityScope ? { activityScope: loaded.activityScope } : {}),
+        root: loaded.root,
+        file,
+      };
     }
   }
   return { root: loaded.root };

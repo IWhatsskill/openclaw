@@ -14,6 +14,7 @@ import {
   type SessionTranscriptReadScope,
   type TranscriptEvent,
 } from "../config/sessions/session-accessor.js";
+import { parseVisibleMessageCursor } from "../config/sessions/session-accessor.sqlite-visible-cursor.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { aggregateSqliteUsageSnapshots } from "./session-transcript-derived-readers.js";
 import type {
@@ -32,6 +33,12 @@ import type { SessionPreviewItem } from "./session-utils.types.js";
 export type { ReadSessionMessagesAsyncOptions };
 export { attachOpenClawTranscriptMeta, capArrayByJsonBytes } from "./session-utils.fs.js";
 export { readSessionTranscriptVisibleMessageDeltaCore } from "../config/sessions/session-accessor.js";
+
+export function parseSessionTranscriptVisibleMessageCursorGeneration(
+  cursor: string,
+): string | undefined {
+  return parseVisibleMessageCursor(cursor)?.generation;
+}
 
 export type { SessionTranscriptReadScope };
 

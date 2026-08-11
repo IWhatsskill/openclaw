@@ -24,6 +24,7 @@ const hoisted = vi.hoisted(() => ({
   loadSessionEntry: vi.fn(),
   resolveAgentWorkspaceDir: vi.fn(),
   resolveDefaultAgentId: vi.fn(),
+  parseSessionTranscriptVisibleMessageCursorGeneration: vi.fn(),
   readSessionTranscriptVisibleMessageDeltaCore: vi.fn(),
 }));
 
@@ -52,6 +53,8 @@ vi.mock("../session-transcript-readers.js", async () => {
   );
   return {
     ...actual,
+    parseSessionTranscriptVisibleMessageCursorGeneration:
+      hoisted.parseSessionTranscriptVisibleMessageCursorGeneration,
     readSessionTranscriptVisibleMessageDeltaCore:
       hoisted.readSessionTranscriptVisibleMessageDeltaCore,
   };
@@ -67,6 +70,8 @@ describe("sessions.files RPC handlers", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    hoisted.parseSessionTranscriptVisibleMessageCursorGeneration.mockReset();
+    hoisted.parseSessionTranscriptVisibleMessageCursorGeneration.mockReturnValue("test-generation");
     hoisted.readSessionTranscriptVisibleMessageDeltaCore.mockReset();
     workspaceRoot = createWorkspaceFixture("openclaw-session-files-test-");
     hoisted.resolveDefaultAgentId.mockReturnValue("main");
@@ -224,7 +229,7 @@ describe("sessions.files RPC handlers", () => {
     });
     mockVisibleMessages([
       assistantToolCall("read", { path: "src/readme.md" }),
-      assistantToolCall("read", { path: "../shared/config.ts" }),
+      assistantToolCall("edit", { path: "../shared/config.ts" }),
     ]);
 
     const payload = expectOkPayload(
@@ -251,7 +256,7 @@ describe("sessions.files RPC handlers", () => {
         entry.sessionKind,
       ]),
     ).toEqual([
-      ["packages", "directory", "read"],
+      ["packages", "directory", "mixed"],
       ["src", "directory", undefined],
       ["ui", "directory", undefined],
       ["package.json", "file", undefined],
@@ -263,6 +268,7 @@ describe("sessions.files RPC handlers", () => {
         path: "src/readme.md",
       }),
     );
+    expect(preview.activityScope).toBe(payload.activityScope);
     expect(preview.file.content).toBe("# Nested read me\n");
     expect(preview.file.workspacePath).toBe("packages/app/src/readme.md");
 
@@ -306,6 +312,15 @@ describe("sessions.files RPC handlers", () => {
       }),
     );
     expect(parentRelativeBrowserPreview.file.content).toBe("export const shared = true;\n");
+    expect(parentRelativeBrowserPreview.activityScope).toBe(payload.activityScope);
+    const parentRelativeListFile = payload.files.find(
+      (file: Record<string, unknown>) => file.path === "../shared/config.ts",
+    );
+    expect(parentRelativeBrowserPreview.file).toMatchObject({
+      activityId: parentRelativeListFile?.activityId,
+      activityRevision: parentRelativeListFile?.activityRevision,
+      kind: "modified",
+    });
   });
 
   it("falls back to the configured agent workspace for sessions without spawned metadata", async () => {

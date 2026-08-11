@@ -453,6 +453,7 @@ function openWorkspaceItem<T>(
   load: (request: OpenRequest) => Promise<T | null | undefined>,
   render: (result: T) => SidebarContent | null,
   missingMessage: string,
+  onOpened?: (result: Awaited<T>) => void,
 ) {
   const request = beginOpenRequest(state, workspace, itemId);
   void (async () => {
@@ -462,7 +463,14 @@ function openWorkspaceItem<T>(
     workspace.error = null;
     try {
       const result = await load(request);
-      const content = result == null ? null : render(result);
+      if (result == null) {
+        if (isCurrentOpenRequest(state, request)) {
+          workspace.error = missingMessage;
+          requestUpdate(state);
+        }
+        return;
+      }
+      const content = render(result);
       if (!content) {
         if (isCurrentOpenRequest(state, request)) {
           workspace.error = missingMessage;
@@ -472,6 +480,7 @@ function openWorkspaceItem<T>(
       }
       if (isCurrentOpenRequest(state, request)) {
         state.handleOpenSidebar(content);
+        onOpened?.(result);
       }
     } catch (error) {
       if (isCurrentOpenRequest(state, request)) {
@@ -487,7 +496,12 @@ function openFile(
   state: SessionWorkspaceHost,
   workspace: SessionWorkspaceState,
   path: string,
-  opts: { line?: number | null; requestPath?: string } = {},
+  opts: {
+    activityScope?: string;
+    activityFile?: SessionWorkspaceFileEntry;
+    line?: number | null;
+    requestPath?: string;
+  } = {},
 ) {
   const requestPath = opts.requestPath ?? path;
   openWorkspaceItem(
@@ -627,6 +641,24 @@ function openFile(
       };
     },
     `Failed to load ${path}`,
+    (result) => {
+      if (
+        opts.activityScope &&
+        result.activityScope &&
+        opts.activityScope !== result.activityScope
+      ) {
+        return;
+      }
+      const activityFile = opts.activityFile ?? result.file;
+      if (activityFile?.kind !== "modified") {
+        return;
+      }
+      markSessionFileRead(
+        workspaceFileActivityContext(state, workspace, result.activityScope ?? opts.activityScope),
+        activityFile,
+      );
+      requestUpdate(state);
+    },
   );
 }
 
@@ -634,7 +666,16 @@ export function openSessionWorkspaceFile(
   state: SessionWorkspaceHost,
   target: { path: string; line?: number | null },
 ) {
-  openFile(state, getWorkspaceState(state), target.path, { line: target.line });
+  const workspace = getWorkspaceState(state);
+  const list = workspace.list?.sessionKey === state.sessionKey ? workspace.list : null;
+  const activityFile =
+    list?.files.find((file) => file.path === target.path) ??
+    list?.files.find((file) => file.workspacePath === target.path);
+  openFile(state, workspace, target.path, {
+    ...(list?.activityScope ? { activityScope: list.activityScope } : {}),
+    ...(activityFile ? { activityFile } : {}),
+    line: target.line,
+  });
 }
 
 export function toggleSessionWorkspace(state: SessionWorkspaceHost) {
@@ -773,13 +814,17 @@ function openArtifact(
 function workspaceFileActivityContext(
   state: SessionWorkspaceHost,
   workspace: SessionWorkspaceState,
+  activityScopeOverride?: string,
 ): SessionFileActivityContext {
+  const listActivityScope =
+    workspace.list?.sessionKey === state.sessionKey ? workspace.list.activityScope : undefined;
+  const activityScope = activityScopeOverride ?? listActivityScope;
   return {
     gatewayUrl: state.settings?.gatewayUrl,
     agentId: workspace.agentId,
     sessionKey:
       canonicalUiSessionKeyForPersistence(state, workspace.sessionKey) || workspace.sessionKey,
-    ...(workspace.list?.activityScope ? { activityScope: workspace.list.activityScope } : {}),
+    ...(activityScope ? { activityScope } : {}),
   };
 }
 
@@ -851,16 +896,19 @@ export function createSessionWorkspaceProps(
       const activityFile = list?.files.find((file) =>
         origin === "session" ? file.path === path : file.workspacePath === path,
       );
-      if (activityFile?.kind === "modified") {
-        markSessionFileRead(activityContext, activityFile);
-        requestUpdate(state);
-      }
+      const activityOpts = {
+        ...(list?.activityScope ? { activityScope: list.activityScope } : {}),
+        ...(activityFile ? { activityFile } : {}),
+      };
       // Session paths are cwd-relative; browser rows are workspace-root-relative.
       // Keep the origin explicit so a nested cwd cannot shadow the selected browser file.
       const opts =
         origin === "workspace"
-          ? { requestPath: workspaceBrowserFilePath(workspace.list?.root, path) }
-          : {};
+          ? {
+              ...activityOpts,
+              requestPath: workspaceBrowserFilePath(workspace.list?.root, path),
+            }
+          : activityOpts;
       openFile(state, workspace, path, opts);
     },
     onSearch: (search) => {
