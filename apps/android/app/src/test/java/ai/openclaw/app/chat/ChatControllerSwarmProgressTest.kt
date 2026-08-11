@@ -41,7 +41,7 @@ class ChatControllerSwarmProgressTest {
     }
 
   @Test
-  fun readsWearSelectedSessionWithoutMutatingPhoneSwarmState() =
+  fun readsCrossAgentDirectChildrenForWearWithoutMutatingPhoneSwarmState() =
     runTest {
       val target = "agent:main:wear-b"
       val requests = mutableListOf<Pair<String, String?>>()
@@ -55,15 +55,33 @@ class ChatControllerSwarmProgressTest {
               "chat.metadata" -> """{"commands":[],"models":[],"swarmEnabled":true}"""
               "sessions.list" ->
                 """
-                {
-                  "sessions":[{
-                    "key":"agent:main:child-b",
+                {"sessions":[
+                  {
+                    "key":"agent:codex:subagent:gateway-watch",
                     "parentSessionKey":"$target",
                     "spawnedBy":"$target",
-                    "swarmGroupId":"swarm:$target:turn-1",
-                    "status":"running"
-                  }],
-                  "totalCount":1,
+                    "status":"running",
+                    "subagentRunState":"active",
+                    "hasActiveSubagentRun":true
+                  },
+                  {
+                    "key":"agent:clock:subagent:clock-watch",
+                    "parentSessionKey":"$target",
+                    "spawnedBy":"$target",
+                    "status":"running",
+                    "subagentRunState":"active",
+                    "hasActiveSubagentRun":true
+                  },
+                  {
+                    "key":"agent:load:subagent:load-watch",
+                    "parentSessionKey":"$target",
+                    "spawnedBy":"$target",
+                    "status":"running",
+                    "subagentRunState":"active",
+                    "hasActiveSubagentRun":true
+                  }
+                ],
+                  "totalCount":3,
                   "hasMore":false
                 }
                 """.trimIndent()
@@ -78,16 +96,122 @@ class ChatControllerSwarmProgressTest {
       val snapshot = controller.readSwarmSnapshotFor(target, "main")
 
       assertTrue(snapshot?.isAvailableFor(target) == true)
-      assertEquals(1, snapshot?.groups?.single()?.running)
+      assertEquals(3, snapshot?.groups?.single()?.running)
+      assertTrue(
+        requests.any { (method, params) ->
+          method == "chat.metadata" && params.orEmpty().contains("\"agentId\":\"main\"")
+        },
+      )
       assertTrue(
         requests.any { (method, params) ->
           method == "sessions.list" &&
-            params.orEmpty().contains("\"agentId\":\"main\"") &&
-            params.orEmpty().contains("\"spawnedBy\":\"$target\"")
+            params.orEmpty().contains("\"spawnedBy\":\"$target\"") &&
+            !params.orEmpty().contains("\"agentId\"")
         },
       )
       assertEquals(phoneSessionBefore, controller.sessionKey.value)
       assertEquals(phoneSwarmBefore, controller.currentSwarmSnapshot())
+    }
+
+  @Test
+  fun keepsCollectGroupsSeparateFromDirectWearChildren() =
+    runTest {
+      val target = "agent:main:wear-b"
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, _ ->
+            when (method) {
+              "chat.metadata" -> """{"commands":[],"models":[],"swarmEnabled":true}"""
+              "sessions.list" ->
+                """
+                {"sessions":[
+                  {
+                    "key":"agent:writer:subagent:collect",
+                    "spawnedBy":"$target",
+                    "swarmGroupId":"swarm:$target:turn-1",
+                    "status":"running"
+                  },
+                  {
+                    "key":"agent:clock:subagent:direct",
+                    "spawnedBy":"$target",
+                    "status":"running",
+                    "subagentRunState":"active"
+                  }
+                ],"totalCount":2,"hasMore":false}
+                """.trimIndent()
+              else -> error("unexpected method $method")
+            }
+          },
+          cacheScope = { ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1) },
+        )
+
+      val snapshot = controller.readSwarmSnapshotFor(target, "main")
+
+      assertEquals(2, snapshot?.groups?.size)
+      assertEquals(2, snapshot?.groups?.sumOf { it.running })
+    }
+
+  @Test
+  fun rejectsWearRowsWhoseAuthoritativeParentDiffersFromRequestedSession() =
+    runTest {
+      val target = "agent:main:wear-b"
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, _ ->
+            when (method) {
+              "chat.metadata" -> """{"commands":[],"models":[],"swarmEnabled":true}"""
+              "sessions.list" ->
+                """
+                {"sessions":[{
+                  "key":"agent:codex:subagent:foreign",
+                  "spawnedBy":"agent:main:other",
+                  "parentSessionKey":"$target",
+                  "swarmGroupId":"swarm:$target:turn-1",
+                  "status":"running"
+                }],"totalCount":1,"hasMore":false}
+                """.trimIndent()
+              else -> error("unexpected method $method")
+            }
+          },
+          cacheScope = { ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1) },
+        )
+
+      assertEquals(null, controller.readSwarmSnapshotFor(target, "main"))
+    }
+
+  @Test
+  fun ignoresUngroupedRowsWithoutSubagentProvenance() =
+    runTest {
+      val target = "agent:main:wear-b"
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, _ ->
+            when (method) {
+              "chat.metadata" -> """{"commands":[],"models":[],"swarmEnabled":true}"""
+              "sessions.list" ->
+                """
+                {"sessions":[{
+                  "key":"agent:main:ordinary-session",
+                  "spawnedBy":"$target",
+                  "status":"running"
+                }],"totalCount":1,"hasMore":false}
+                """.trimIndent()
+              else -> error("unexpected method $method")
+            }
+          },
+          cacheScope = { ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1) },
+        )
+
+      val snapshot = controller.readSwarmSnapshotFor(target, "main")
+
+      assertTrue(snapshot?.isAvailableFor(target) == true)
+      assertTrue(snapshot?.groups?.isEmpty() == true)
     }
 
   @Test

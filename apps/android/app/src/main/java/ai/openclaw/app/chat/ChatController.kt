@@ -60,6 +60,7 @@ private val QUESTION_REFRESH_RETRY_DELAYS_MS = longArrayOf(1_000L, 2_000L, 4_000
 private val SWARM_REFRESH_RETRY_DELAYS_MS = longArrayOf(1_000L, 2_000L, 4_000L)
 private const val WEAR_AGENT_PULSE_SWARM_MAX_ROWS = 1_000
 private const val WEAR_AGENT_PULSE_SWARM_FETCH_LIMIT = WEAR_AGENT_PULSE_SWARM_MAX_ROWS + 1
+private const val WEAR_AGENT_PULSE_DIRECT_CHILDREN_GROUP = "__wear_agent_pulse_direct_children__"
 private const val SESSION_EDITOR_MAX_BASE64_CHARS = ((OUTBOX_MAX_COMMAND_ATTACHMENT_BYTES + 2) / 3) * 4
 private val MANAGED_MEDIA_PATH_REGEX =
   Regex("^/api/chat/media/outgoing/[^/]+/([0-9a-fA-F-]{36})/full(?:\\?.*)?$")
@@ -394,12 +395,12 @@ class ChatController internal constructor(
     val requestedAgentId = agentId.trim().takeIf(String::isNotEmpty) ?: return null
     val scopedSessionKey = normalizeRequestedSessionKey(requestedSessionKey)
     val scopedAgentId = resolveAgentIdFromMainSessionKey(scopedSessionKey)
-    if (
-      scopedAgentId != requestedAgentId &&
-      !(requestedSessionKey == "main" && scopedAgentId == null)
-    ) {
-      return null
-    }
+    val restrictToParentAgent =
+      when {
+        scopedAgentId == requestedAgentId -> false
+        requestedSessionKey == "main" && scopedSessionKey == "main" && scopedAgentId == null -> true
+        else -> return null
+      }
     val requestCacheScope = currentCacheScope() ?: return null
     val enabled =
       try {
@@ -436,7 +437,9 @@ class ChatController internal constructor(
             put("includeGlobal", JsonPrimitive(false))
             put("includeUnknown", JsonPrimitive(false))
             put("configuredAgentsOnly", JsonPrimitive(true))
-            put("agentId", JsonPrimitive(requestedAgentId))
+            if (restrictToParentAgent) {
+              put("agentId", JsonPrimitive(requestedAgentId))
+            }
             put("spawnedBy", JsonPrimitive(scopedSessionKey))
             put("limit", JsonPrimitive(WEAR_AGENT_PULSE_SWARM_FETCH_LIMIT))
             put("offset", JsonPrimitive(0))
@@ -466,11 +469,29 @@ class ChatController internal constructor(
       } catch (_: Throwable) {
         return null
       }
+    val lineageMatches =
+      rows.all { row ->
+        val authoritativeParent =
+          row.spawnedBy?.trim()?.takeIf(String::isNotEmpty)
+            ?: row.parentSessionKey?.trim()?.takeIf(String::isNotEmpty)
+        authoritativeParent != null && sameOutboxSession(authoritativeParent, scopedSessionKey)
+      }
+    if (!lineageMatches) return null
+    val projectedRows =
+      rows.map { row ->
+        val hasExplicitGroup = !row.swarmGroupId.isNullOrBlank()
+        val hasSubagentProvenance = row.subagentRunState != null || row.hasActiveSubagentRun != null
+        if (!hasExplicitGroup && hasSubagentProvenance) {
+          row.copy(swarmGroupId = WEAR_AGENT_PULSE_DIRECT_CHILDREN_GROUP)
+        } else {
+          row
+        }
+      }
     if (requestCacheScope != currentCacheScope()) return null
     return ChatSwarmSnapshot(
       sessionKey = requestedSessionKey,
       enabled = true,
-      groups = buildChatSwarmGroups(rows) { candidate -> sameOutboxSession(candidate, scopedSessionKey) },
+      groups = buildChatSwarmGroups(projectedRows) { candidate -> sameOutboxSession(candidate, scopedSessionKey) },
     )
   }
 
