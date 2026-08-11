@@ -675,13 +675,16 @@ function openFile(
           (file) => file.activityId === result.file.activityId,
         );
         if (listedIndex >= 0) {
-          const files = [...workspace.list.files];
-          files[listedIndex] = {
-            ...files[listedIndex],
-            activityId: result.file.activityId,
-            activityRevision: result.file.activityRevision,
-          };
-          workspace.list = { ...workspace.list, files };
+          const listedFile = workspace.list.files[listedIndex];
+          if (listedFile) {
+            const files = [...workspace.list.files];
+            files[listedIndex] = {
+              ...listedFile,
+              activityId: result.file.activityId,
+              activityRevision: result.file.activityRevision,
+            };
+            workspace.list = { ...workspace.list, files };
+          }
         }
       }
       markSessionFileRead(
