@@ -693,7 +693,6 @@ export const en: TranslationMap = {
   newSession: {
     title: "New session",
     hint: "Pick where this session works, then say what to do.",
-    draftRow: "New session",
     agent: "Agent",
     where: "Where",
     gateway: "Gateway · local",
@@ -4770,6 +4769,10 @@ export const en: TranslationMap = {
       description: "The compacted transcript is preserved as a checkpoint.",
       openCheckpoints: "Open checkpoints",
     },
+    sessionReset: {
+      label: "Session reset",
+      description: "The earlier conversation was cleared.",
+    },
     systemNotice: {
       restartRecovery: {
         label: "System · restart recovery",
@@ -4963,7 +4966,6 @@ export const en: TranslationMap = {
       activity: "Activity",
       copySelection: "Copy",
       forkFromHere: "Fork from here",
-      fullContentLoadFailed: "Could not load the full message.",
       reply: "Reply",
       replyToMessage: "Reply to message",
       replyingTo: "Replying to {name}",
