@@ -9624,6 +9624,11 @@
       "translated": "Fel"
     },
     {
+      "id": "native.android.6f790004e204e002",
+      "source": "Ready",
+      "translated": "Redo"
+    },
+    {
       "id": "native.android.40984724c43be3ab",
       "source": "You",
       "translated": "Du"
@@ -9877,136 +9882,6 @@
       "id": "native.android.709aff840be1f167",
       "source": "PHONE PROXY",
       "translated": "TELEFONPROXY"
-    },
-    {
-      "id": "native.android.c2d921039b510784",
-      "source": "Pulse",
-      "translated": "Pulse"
-    },
-    {
-      "id": "native.android.d8ed834d8063e209",
-      "source": "Background tasks",
-      "translated": "Background tasks"
-    },
-    {
-      "id": "native.android.05a6d7c174d87cf4",
-      "source": "Session swarm",
-      "translated": "Session swarm"
-    },
-    {
-      "id": "native.android.77e15364654b7720",
-      "source": "Attention",
-      "translated": "Attention"
-    },
-    {
-      "id": "native.android.c208c4e16cb264eb",
-      "source": "Status: %1$s",
-      "translated": "Status: %1$s"
-    },
-    {
-      "id": "native.android.6f790004e204e002",
-      "source": "Ready",
-      "translated": "Redo"
-    },
-    {
-      "id": "native.android.f8cbe6e1c08614f2",
-      "source": "Refreshing",
-      "translated": "Refreshing"
-    },
-    {
-      "id": "native.android.4852723b3f26254e",
-      "source": "Unavailable",
-      "translated": "Unavailable"
-    },
-    {
-      "id": "native.android.5846aa00a1cf73af",
-      "source": "Loading Pulse",
-      "translated": "Loading Pulse"
-    },
-    {
-      "id": "native.android.218af4ba38fa78c0",
-      "source": "Reading bounded aggregates from the paired phone.",
-      "translated": "Reading bounded aggregates from the paired phone."
-    },
-    {
-      "id": "native.android.6c3bd26eef09f4b5",
-      "source": "Queued",
-      "translated": "Queued"
-    },
-    {
-      "id": "native.android.a50fa396f80a7adc",
-      "source": "Running",
-      "translated": "Running"
-    },
-    {
-      "id": "native.android.32c6b30f5a1c4525",
-      "source": "Completed",
-      "translated": "Completed"
-    },
-    {
-      "id": "native.android.aa0c8ce452c5e1b4",
-      "source": "Done",
-      "translated": "Done"
-    },
-    {
-      "id": "native.android.c62055d018d56128",
-      "source": "Failed",
-      "translated": "Failed"
-    },
-    {
-      "id": "native.android.38832762c1908e84",
-      "source": "Groups",
-      "translated": "Groups"
-    },
-    {
-      "id": "native.android.d1a38fd7dd7b92cc",
-      "source": "Pending requests",
-      "translated": "Pending requests"
-    },
-    {
-      "id": "native.android.5322dafa9e78e573",
-      "source": "Bounded active and recent snapshot",
-      "translated": "Bounded active and recent snapshot"
-    },
-    {
-      "id": "native.android.9d1e806411cbb79c",
-      "source": "Active task list is at its limit",
-      "translated": "Active task list is at its limit"
-    },
-    {
-      "id": "native.android.1caeea75f442c074",
-      "source": "Recent task list is at its limit",
-      "translated": "Recent task list is at its limit"
-    },
-    {
-      "id": "native.android.f0a876dda24dac29",
-      "source": "Active",
-      "translated": "Active"
-    },
-    {
-      "id": "native.android.a5331bca16ee38ea",
-      "source": "Idle",
-      "translated": "Idle"
-    },
-    {
-      "id": "native.android.4137beec90840594",
-      "source": "Phase %1$d",
-      "translated": "Phase %1$d"
-    },
-    {
-      "id": "native.android.7aabf005cf689625",
-      "source": "Queued %1$d, Running %2$d, Done %3$d, Failed %4$d, Hidden %5$d",
-      "translated": "Queued %1$d, Running %2$d, Done %3$d, Failed %4$d, Hidden %5$d"
-    },
-    {
-      "id": "native.android.178d1516c2f18ca8",
-      "source": "More phases not shown",
-      "translated": "More phases not shown"
-    },
-    {
-      "id": "native.android.16ff935a683a605f",
-      "source": "Unknown",
-      "translated": "Unknown"
     },
     {
       "id": "native.apple.093081590556db7f",
