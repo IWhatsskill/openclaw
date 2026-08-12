@@ -54,8 +54,8 @@ async function inventoryFiles(root, relative = "") {
   return files;
 }
 
-function builtAssetRole(relative) {
-  if (relative === "index.html") {
+function builtAssetRole(relative, entrypoints) {
+  if (entrypoints.has(relative)) {
     return "entrypoint";
   }
   if (relative.endsWith(".js")) {
@@ -92,9 +92,30 @@ async function buildControlUi() {
     ].join("\n") + "\n";
   await fs.writeFile(path.join(proofRoot, "web-build.log"), transcript);
   assert(build.status === 0, "exact-head Control UI build failed");
-  await fs.cp(controlUiRoot, webBuildRoot, { recursive: true });
-  const relativeFiles = await inventoryFiles(webBuildRoot);
+  const builtIndex = await fs.readFile(path.join(controlUiRoot, "index.html"), "utf8");
+  const entrypoints = new Set(
+    [...builtIndex.matchAll(/<(?:script|link)\b[^>]+(?:src|href)="([^"]+\.(?:js|css))"/g)].map(
+      (match) => match[1].replace(/^\.\//, ""),
+    ),
+  );
+  assert(entrypoints.size > 0, "exact-head Control UI index declared no JS/CSS entrypoints");
+  const builtFiles = await inventoryFiles(controlUiRoot);
+  const relativeFiles = builtFiles.filter(
+    (relative) => relative.endsWith(".js") || relative.endsWith(".css"),
+  );
   assert(relativeFiles.length > 0, "exact-head Control UI build produced no files");
+  for (const relative of relativeFiles) {
+    const builtFile = path.join(controlUiRoot, relative);
+    const retained = path.join(webBuildRoot, relative);
+    await fs.mkdir(path.dirname(retained), { recursive: true });
+    await fs.copyFile(builtFile, retained);
+  }
+  for (const entrypoint of entrypoints) {
+    assert(
+      relativeFiles.includes(entrypoint),
+      "Control UI entrypoint was not retained: " + entrypoint,
+    );
+  }
   return {
     buildCommand,
     buildTranscriptDigest: crypto.createHash("sha256").update(transcript).digest("hex"),
@@ -103,7 +124,7 @@ async function buildControlUi() {
         relative,
         path: path.posix.join("web-built", relative),
         sha256: await sha256File(path.join(webBuildRoot, relative)),
-        role: builtAssetRole(relative),
+        role: builtAssetRole(relative, entrypoints),
       })),
     ),
   };
@@ -120,7 +141,7 @@ async function captureServedAssets(origin, builtAssets) {
     const fetchCommand = `fetch(${requestUrl}, cache=no-store)`;
     const response = await fetch(requestUrl, {
       cache: "no-store",
-      headers: { "Cache-Control": "no-cache", Pragma: "no-cache" },
+      headers: { "Accept-Encoding": "identity", "Cache-Control": "no-cache", Pragma: "no-cache" },
     });
     const bytes = Buffer.from(await response.arrayBuffer());
     const digest = crypto.createHash("sha256").update(bytes).digest("hex");
