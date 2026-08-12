@@ -154,7 +154,7 @@ class ChatControllerSwarmProgressTest {
     }
 
   @Test
-  fun rejectsWearRowsWhoseAuthoritativeParentDiffersFromRequestedSession() =
+  fun acceptsGatewayFilteredWearRowsWhenNavigationParentOwnsTheChild() =
     runTest {
       val target = "agent:main:wear-b"
       val controller =
@@ -180,7 +180,10 @@ class ChatControllerSwarmProgressTest {
           cacheScope = { ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1) },
         )
 
-      assertEquals(null, controller.readSwarmSnapshotFor(target, "main"))
+      val snapshot = controller.readSwarmSnapshotFor(target, "main")
+
+      assertTrue(snapshot?.isAvailableFor(target) == true)
+      assertEquals(1, snapshot?.groups?.single()?.running)
     }
 
   @Test

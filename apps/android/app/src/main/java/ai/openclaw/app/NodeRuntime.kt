@@ -142,6 +142,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -160,6 +161,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -184,6 +186,39 @@ private const val CRON_JOBS_MAX_COUNT = CRON_JOBS_PAGE_SIZE * CRON_JOBS_MAX_PAGE
 private const val CRON_JOBS_SNAPSHOT_MAX_ATTEMPTS = 3
 private const val OperatorAdminScope = "operator.admin"
 private const val OperatorPairingScope = "operator.pairing"
+
+internal const val WEAR_AGENT_PULSE_PHONE_BUDGET_MILLIS = 8_000L
+
+internal data class WearAgentPulseReads<Tasks, Swarm>(
+  val tasks: Tasks?,
+  val swarm: Swarm?,
+)
+
+internal suspend fun <Tasks, Swarm> readWearAgentPulseConcurrently(
+  readTasks: suspend () -> Tasks,
+  readSwarm: suspend () -> Swarm,
+  budgetMillis: Long = WEAR_AGENT_PULSE_PHONE_BUDGET_MILLIS,
+): WearAgentPulseReads<Tasks, Swarm> =
+  coroutineScope {
+    val tasks = async { readWearAgentPulseComponent(budgetMillis, readTasks) }
+    val swarm = async { readWearAgentPulseComponent(budgetMillis, readSwarm) }
+    WearAgentPulseReads(
+      tasks = tasks.await(),
+      swarm = swarm.await(),
+    )
+  }
+
+private suspend fun <T> readWearAgentPulseComponent(
+  budgetMillis: Long,
+  read: suspend () -> T,
+): T? =
+  try {
+    withTimeoutOrNull(budgetMillis) { read() }
+  } catch (err: CancellationException) {
+    throw err
+  } catch (_: Throwable) {
+    null
+  }
 
 private fun execApprovalOutcomeUnknownMessage(): String = nativeText("Resolution outcome unknown. Actions stay disabled until the Gateway record is verified.").source
 
@@ -1574,24 +1609,21 @@ class NodeRuntime private constructor(
     val gatewayScope = captureGatewayDataScope()
     val agentId = currentWearAgentId()
     val connected = gatewayScope != null && operatorSession.isReady()
-    val tasks =
+    val reads =
       if (connected && agentId != null) {
-        runCatching { listBackgroundTasks(agentId) }.getOrNull()
+        readWearAgentPulseConcurrently(
+          readTasks = { listBackgroundTasks(agentId) },
+          readSwarm = {
+            requestedSessionKey?.let { sessionKey ->
+              chat.readSwarmSnapshotFor(sessionKey, agentId)
+            }
+          },
+        )
       } else {
         null
       }
-    val swarmSnapshot =
-      if (connected && agentId != null && requestedSessionKey != null) {
-        try {
-          chat.readSwarmSnapshotFor(requestedSessionKey, agentId)
-        } catch (err: CancellationException) {
-          throw err
-        } catch (_: Throwable) {
-          null
-        }
-      } else {
-        null
-      }
+    val tasks = reads?.tasks
+    val swarmSnapshot = reads?.swarm
     // Capture every projection input before the final route check so a route
     // change cannot mix a current task result with later-route aggregates.
     val approvals = currentWearAgentPulseApprovals()

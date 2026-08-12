@@ -475,14 +475,6 @@ class ChatController internal constructor(
       } catch (_: Throwable) {
         return null
       }
-    val lineageMatches =
-      rows.all { row ->
-        val authoritativeParent =
-          row.spawnedBy?.trim()?.takeIf(String::isNotEmpty)
-            ?: row.parentSessionKey?.trim()?.takeIf(String::isNotEmpty)
-        authoritativeParent != null && sameOutboxSession(authoritativeParent, scopedSessionKey)
-      }
-    if (!lineageMatches) return null
     val projectedRows =
       rows.map { row ->
         val hasExplicitGroup = !row.swarmGroupId.isNullOrBlank()

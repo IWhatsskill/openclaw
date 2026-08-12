@@ -1,14 +1,22 @@
 package ai.openclaw.app.wear
 
+import ai.openclaw.app.WEAR_AGENT_PULSE_PHONE_BUDGET_MILLIS
 import ai.openclaw.app.chat.BackgroundTask
 import ai.openclaw.app.chat.ChatSwarmDot
 import ai.openclaw.app.chat.ChatSwarmDotStatus
 import ai.openclaw.app.chat.ChatSwarmGroup
 import ai.openclaw.app.chat.ChatSwarmPhase
+import ai.openclaw.app.readWearAgentPulseConcurrently
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.test.currentTime
+import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class WearAgentPulseProjectionTest {
@@ -111,6 +119,50 @@ class WearAgentPulseProjectionTest {
       result,
     )
   }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun concurrentPhoneBudgetKeepsTheCompletedComponentAndBoundsTheSlowOne() =
+    runTest {
+      var tasksStartedAt = -1L
+      var swarmStartedAt = -1L
+
+      val reads =
+        readWearAgentPulseConcurrently(
+          readTasks = {
+            tasksStartedAt = currentTime
+            "tasks"
+          },
+          readSwarm = {
+            swarmStartedAt = currentTime
+            delay(WEAR_AGENT_PULSE_PHONE_BUDGET_MILLIS * 2)
+            "swarm"
+          },
+        )
+
+      assertEquals("tasks", reads.tasks)
+      assertEquals(null, reads.swarm)
+      assertEquals(0L, tasksStartedAt)
+      assertEquals(0L, swarmStartedAt)
+      assertEquals(WEAR_AGENT_PULSE_PHONE_BUDGET_MILLIS, currentTime)
+    }
+
+  @Test
+  fun concurrentPhoneBudgetPreservesCallerCancellation() =
+    runTest {
+      val failure =
+        runCatching {
+          readWearAgentPulseConcurrently(
+            readTasks = { throw CancellationException("request retired") },
+            readSwarm = {
+              delay(WEAR_AGENT_PULSE_PHONE_BUDGET_MILLIS * 2)
+              "swarm"
+            },
+          )
+        }.exceptionOrNull()
+
+      assertTrue(failure is CancellationException)
+    }
 
   private fun task(
     id: String,
