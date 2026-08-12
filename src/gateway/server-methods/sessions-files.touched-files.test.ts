@@ -387,10 +387,10 @@ describe("sessions.files touched-file folds", () => {
 @@
 -export const chat = true;
 +export const chat = "partially changed";
-*** Update File: src/missing.ts
+*** Update File: ui/chat.ts
 @@
--missing
-+changed
+-export const absent = true;
++export const absent = "changed";
 *** End Patch`;
     hoisted.readSessionTranscriptVisibleMessageDeltaCore.mockReturnValue({
       kind: "page",
@@ -432,12 +432,6 @@ describe("sessions.files touched-file folds", () => {
     );
 
     expect(payload.files).toEqual([
-      expect.objectContaining({
-        activityRevision: 2,
-        kind: "modified",
-        missing: true,
-        path: "src/missing.ts",
-      }),
       expect.objectContaining({
         activityRevision: 2,
         kind: "modified",

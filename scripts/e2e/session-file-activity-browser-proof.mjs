@@ -348,10 +348,10 @@ async function main() {
 @@
 -export const app = true;
 +export const app = "partially changed";
-*** Update File: src/missing-for-partial-patch.ts
+*** Update File: src/app.ts
 @@
--missing
-+changed
+-export const absent = true;
++export const absent = "changed";
 *** End Patch`;
     mainManager.appendMessage({
       role: "assistant",
