@@ -68,6 +68,11 @@ type TouchedFile = {
   activityRevision?: number;
 };
 
+type PendingTouchedWrite = {
+  args: Record<string, unknown>;
+  toolName: "write" | "edit" | "apply_patch";
+};
+
 type LoadedSessionFiles = {
   activityScope?: string;
   root?: string;
@@ -79,6 +84,7 @@ type LoadedSessionFiles = {
 type TouchedFilesCacheEntry = {
   cursor: string;
   files: Map<string, TouchedFile>;
+  pendingWrites: Map<string, PendingTouchedWrite>;
 };
 
 type TouchedFilesFoldResult = {
@@ -255,12 +261,39 @@ function isToolCallBlockType(value: unknown): boolean {
   return normalized === "toolcall" || normalized === "tooluse";
 }
 
+function applyTouchedWrite(
+  files: Map<string, TouchedFile>,
+  pending: PendingTouchedWrite,
+  activityRevision: number,
+) {
+  if (pending.toolName === "apply_patch") {
+    addPatchFiles(files, pending.args, activityRevision);
+    return;
+  }
+  addTouchedFile(files, readPathArg(pending.args), "modified", activityRevision);
+}
+
 function collectTouchedFilesFromMessage(
   message: unknown,
   files: Map<string, TouchedFile>,
+  pendingWrites: Map<string, PendingTouchedWrite>,
   activityRevision: number,
 ) {
   const record = asOptionalObjectRecord(message);
+  if (record?.role === "toolResult") {
+    const toolCallId =
+      normalizeOptionalString(record.toolCallId) ?? normalizeOptionalString(record.toolUseId);
+    if (!toolCallId) {
+      return;
+    }
+    const pending = pendingWrites.get(toolCallId);
+    pendingWrites.delete(toolCallId);
+    if (!pending || record.isError !== false) {
+      return;
+    }
+    applyTouchedWrite(files, pending, activityRevision);
+    return;
+  }
   if (record?.role !== "assistant" || !Array.isArray(record.content)) {
     return;
   }
@@ -279,11 +312,25 @@ function collectTouchedFilesFromMessage(
     }
     if (toolName === "read") {
       addTouchedFile(files, readPathArg(args), "read");
-    } else if (toolName === "write" || toolName === "edit") {
-      addTouchedFile(files, readPathArg(args), "modified", activityRevision);
-    } else if (toolName === "apply_patch") {
-      addPatchFiles(files, args, activityRevision);
+      continue;
     }
+    if (toolName !== "write" && toolName !== "edit" && toolName !== "apply_patch") {
+      continue;
+    }
+    const pending = { args, toolName } satisfies PendingTouchedWrite;
+    const toolCallId =
+      normalizeOptionalString(block.id) ??
+      normalizeOptionalString(block.toolCallId) ??
+      normalizeOptionalString(block.toolUseId);
+    if (!toolCallId) {
+      // Older imported transcripts can lack call IDs. Preserve their historical
+      // best-effort behavior; current calls wait for an explicit successful result.
+      applyTouchedWrite(files, pending, activityRevision);
+      continue;
+    }
+    pendingWrites.delete(toolCallId);
+    pendingWrites.set(toolCallId, pending);
+    pruneMapToMaxSize(pendingWrites, TOUCHED_FILES_DELTA_MAX_MESSAGES);
   }
 }
 
@@ -294,6 +341,7 @@ async function foldSqliteTouchedFiles(
   let cached = readTouchedFilesCache(cacheKey);
   let cursor = cached?.cursor;
   let files = cached?.files ?? new Map<string, TouchedFile>();
+  let pendingWrites = cached?.pendingWrites ?? new Map<string, PendingTouchedWrite>();
   let maxBytes = TOUCHED_FILES_DELTA_MAX_BYTES;
 
   while (true) {
@@ -307,19 +355,24 @@ async function foldSqliteTouchedFiles(
       return { files: new Map() };
     }
     if (delta.kind === "reset") {
-      cached = { cursor: delta.cursor, files: new Map() };
+      cached = {
+        cursor: delta.cursor,
+        files: new Map(),
+        pendingWrites: new Map(),
+      };
       cursor = cached.cursor;
       files = cached.files;
+      pendingWrites = cached.pendingWrites;
       writeTouchedFilesCache(cacheKey, cached);
       continue;
     }
     for (const event of delta.events) {
       const message = sqliteMessageEventWithSeq(event);
       if (message !== undefined) {
-        collectTouchedFilesFromMessage(message, files, event.eventSeq);
+        collectTouchedFilesFromMessage(message, files, pendingWrites, event.eventSeq);
       }
     }
-    cached = { cursor: delta.cursor, files };
+    cached = { cursor: delta.cursor, files, pendingWrites };
     cursor = cached.cursor;
     writeTouchedFilesCache(cacheKey, cached);
     if (!delta.hasMore) {
@@ -814,6 +867,44 @@ async function loadSessionFiles(params: {
   };
 }
 
+type WorkspaceTouchedFile = {
+  activityPath?: string;
+  file: TouchedFile;
+};
+
+function isStrongerTouchedFile(current: TouchedFile, candidate: TouchedFile): boolean {
+  if (current.kind !== candidate.kind) {
+    return candidate.kind === "modified";
+  }
+  return (
+    candidate.kind === "modified" &&
+    (candidate.activityRevision ?? -1) > (current.activityRevision ?? -1)
+  );
+}
+
+function canonicalWorkspaceTouchedFiles(loaded: LoadedSessionFiles): WorkspaceTouchedFile[] {
+  if (!loaded.root) {
+    return loaded.files.map((file) => ({ file }));
+  }
+  const byCanonicalPath = new Map<string, TouchedFile>();
+  for (const file of loaded.files) {
+    const resolved = resolveTouchedFilePath({
+      root: loaded.root,
+      fileRoot: loaded.fileRoot,
+      filePath: file.path,
+    });
+    if (!resolved) {
+      continue;
+    }
+    const activityPath = toDisplayPath(loaded.root, resolved);
+    const current = byCanonicalPath.get(activityPath);
+    if (!current || isStrongerTouchedFile(current, file)) {
+      byCanonicalPath.set(activityPath, file);
+    }
+  }
+  return [...byCanonicalPath].map(([activityPath, file]) => ({ activityPath, file }));
+}
+
 async function buildListResult(params: {
   sessionKey: string;
   agentId?: string;
@@ -837,14 +928,12 @@ async function buildListResult(params: {
       gitCheckout = false;
     }
   }
-  const workspaceFiles = root
-    ? loaded.files.filter((file) =>
-        Boolean(resolveTouchedFilePath({ root, fileRoot: loaded.fileRoot, filePath: file.path })),
-      )
-    : loaded.files;
+  const workspaceFileEntries = canonicalWorkspaceTouchedFiles(loaded);
+  const workspaceFiles = workspaceFileEntries.map((entry) => entry.file);
   const files = await Promise.all(
-    workspaceFiles.map((file) =>
-      toSessionFileEntry(file, loaded.root, loaded.fileRoot, {
+    workspaceFileEntries.map((entry) =>
+      toSessionFileEntry(entry.file, loaded.root, loaded.fileRoot, {
+        ...(entry.activityPath ? { activityPath: entry.activityPath } : {}),
         activityScope: loaded.activityScope,
       }),
     ),
@@ -871,10 +960,16 @@ async function findSessionFile(
   const loaded = await loadSessionFiles(params);
   const exactTouched = loaded.files.find((file) => file.path === params.path);
   if (exactTouched) {
+    const resolved = resolveTouchedFilePath({
+      root: loaded.root,
+      fileRoot: loaded.fileRoot,
+      filePath: exactTouched.path,
+    });
     return {
       ...(loaded.activityScope ? { activityScope: loaded.activityScope } : {}),
       ...(loaded.root ? { root: loaded.root } : {}),
       file: await toSessionFileEntry(exactTouched, loaded.root, loaded.fileRoot, {
+        ...(loaded.root && resolved ? { activityPath: toDisplayPath(loaded.root, resolved) } : {}),
         activityScope: loaded.activityScope,
         includeContent: true,
       }),
@@ -928,7 +1023,7 @@ async function findSessionFile(
         : {}),
     };
     const file = await toSessionFileEntry(touched, loaded.root, loaded.root, {
-      ...(sessionTouched ? { activityPath: sessionTouched.path } : {}),
+      activityPath: browserPath,
       activityScope: loaded.activityScope,
       includeContent: true,
     });

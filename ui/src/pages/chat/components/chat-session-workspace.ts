@@ -676,7 +676,10 @@ function openFile(
         );
         if (listedIndex >= 0) {
           const listedFile = workspace.list.files[listedIndex];
-          if (listedFile) {
+          const listedRevision = hasModernFileActivity(listedFile)
+            ? listedFile.activityRevision
+            : -1;
+          if (listedFile && listedRevision <= result.file.activityRevision) {
             const files = [...workspace.list.files];
             files[listedIndex] = {
               ...listedFile,

@@ -486,6 +486,71 @@ describe("session workspace file activity", () => {
     expect(createSessionWorkspaceProps(state).fileActivity.newCount).toBe(0);
   });
 
+  it("keeps a newer refreshed revision New when an older open finishes later", async () => {
+    localStorage.clear();
+    const activityScope = "d".repeat(64);
+    const activityId = "e".repeat(64);
+    const listedFile = {
+      path: "src/racing.ts",
+      workspacePath: "src/racing.ts",
+      name: "racing.ts",
+      kind: "modified" as const,
+      missing: false,
+      activityId,
+      activityRevision: 5,
+    };
+    const openedFile = { ...listedFile, activityRevision: 9 };
+    const refreshedFile = { ...listedFile, activityRevision: 10 };
+    const listFiles = vi
+      .fn()
+      .mockResolvedValueOnce({
+        sessionKey: "agent:main:current",
+        activityScope,
+        files: [listedFile],
+      })
+      .mockResolvedValueOnce({
+        sessionKey: "agent:main:current",
+        activityScope,
+        files: [refreshedFile],
+      });
+    let resolveGet!: (value: unknown) => void;
+    const getFile = vi.fn().mockReturnValue(
+      new Promise((resolve) => {
+        resolveGet = resolve;
+      }),
+    );
+    const state = {
+      client: { request: vi.fn().mockResolvedValue({ artifacts: [] }) },
+      connected: true,
+      handleOpenSidebar: vi.fn(),
+      hello: gatewayHello([]),
+      requestUpdate: vi.fn(),
+      sessionKey: "agent:main:current",
+      sessions: { getFile, listFiles },
+      settings: { gatewayUrl: "wss://gateway-a.example" },
+    } as unknown as SessionWorkspaceHost;
+
+    toggleSessionWorkspace(state);
+    await vi.waitFor(() => expect(createSessionWorkspaceProps(state).list).not.toBeNull());
+
+    createSessionWorkspaceProps(state).onOpenFile("src/racing.ts", "session");
+    await vi.waitFor(() => expect(getFile).toHaveBeenCalledOnce());
+    createSessionWorkspaceProps(state).onRefresh();
+    await vi.waitFor(() =>
+      expect(createSessionWorkspaceProps(state).list?.files[0]?.activityRevision).toBe(10),
+    );
+
+    resolveGet({
+      sessionKey: "agent:main:current",
+      activityScope,
+      file: { ...openedFile, content: "export {};\n" },
+    });
+    await vi.waitFor(() => expect(state.handleOpenSidebar).toHaveBeenCalledOnce());
+
+    expect(createSessionWorkspaceProps(state).list?.files[0]?.activityRevision).toBe(10);
+    expect(createSessionWorkspaceProps(state).fileActivity.newCount).toBe(1);
+  });
+
   it("acknowledges the strongest modified alias returned by a browser open", async () => {
     localStorage.clear();
     const activityScope = "8".repeat(64);

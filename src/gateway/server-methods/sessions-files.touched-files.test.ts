@@ -140,10 +140,10 @@ describe("sessions.files touched-file folds", () => {
         sessionKey: "agent:main:main",
       }),
     );
-    const modified = listed.files.find(
-      (file: Record<string, unknown>) => file.path === "./src/readme.md",
-    );
+    expect(listed.files).toHaveLength(1);
+    const modified = listed.files[0];
     expect(modified).toMatchObject({
+      path: "./src/readme.md",
       kind: "modified",
       activityId: expect.stringMatching(/^[a-f0-9]{64}$/),
       activityRevision: expect.any(Number),
@@ -281,6 +281,91 @@ describe("sessions.files touched-file folds", () => {
         activityRevision: 9,
       }),
     ]);
+  });
+
+  it("does not advance modified activity for a failed tool result", async () => {
+    useSqliteSession(hoisted.loadSessionEntry, workspaceRoot, "sess-touched-failed-write");
+    hoisted.readSessionTranscriptVisibleMessageDeltaCore.mockImplementation((_scope, limits) => {
+      if (limits.cursor === undefined) {
+        return {
+          kind: "page",
+          cursor: "failed-write-success",
+          events: [
+            visibleMessageEvent(
+              {
+                role: "assistant",
+                content: [
+                  {
+                    type: "toolCall",
+                    id: "edit-success",
+                    name: "edit",
+                    arguments: { path: "ui/chat.ts" },
+                  },
+                ],
+              },
+              4,
+            ),
+            visibleMessageEvent(
+              {
+                role: "toolResult",
+                toolCallId: "edit-success",
+                toolName: "edit",
+                content: [{ type: "text", text: "ok" }],
+                isError: false,
+              },
+              5,
+            ),
+          ],
+          hasMore: false,
+          serializedBytes: 100,
+        };
+      }
+      if (limits.cursor === "failed-write-success") {
+        return {
+          kind: "page",
+          cursor: "failed-write-final",
+          events: [
+            visibleMessageEvent(
+              {
+                role: "assistant",
+                content: [
+                  {
+                    type: "toolCall",
+                    id: "edit-failed",
+                    name: "edit",
+                    arguments: { path: "ui/chat.ts" },
+                  },
+                ],
+              },
+              9,
+            ),
+            visibleMessageEvent(
+              {
+                role: "toolResult",
+                toolCallId: "edit-failed",
+                toolName: "edit",
+                content: [{ type: "text", text: "failed" }],
+                isError: true,
+              },
+              10,
+            ),
+          ],
+          hasMore: false,
+          serializedBytes: 100,
+        };
+      }
+      throw new Error("unexpected cursor: " + String(limits.cursor));
+    });
+
+    const first = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.list", { sessionKey: "agent:main:main" }),
+    );
+    const afterFailure = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.list", { sessionKey: "agent:main:main" }),
+    );
+
+    expect(first.files[0]).toMatchObject({ activityRevision: 5, path: "ui/chat.ts" });
+    expect(afterFailure.files[0]).toMatchObject({ activityRevision: 5, path: "ui/chat.ts" });
   });
 
   it("uses raw event revisions when an active branch reuses a visible ordinal", async () => {
