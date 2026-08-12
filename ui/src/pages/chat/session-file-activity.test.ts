@@ -174,6 +174,65 @@ describe("session file activity", () => {
     setItem.mockRestore();
   });
 
+  it("honors cleared or malformed readable storage after a rejected write", () => {
+    const file = modifiedFile(3);
+    markSessionFileRead(context, file);
+    const key = localStorage.key(0);
+    expect(key).not.toBeNull();
+
+    let setItem = vi.spyOn(localStorage, "setItem").mockImplementationOnce(() => {
+      throw new DOMException("quota exceeded", "QuotaExceededError");
+    });
+    setSessionFileResolved(context, file, true);
+    expect(status(context, file).status).toBe("resolved");
+    setItem.mockRestore();
+
+    localStorage.clear();
+    expect(status(context, file).status).toBe("new");
+
+    markSessionFileRead(context, file);
+    setItem = vi.spyOn(localStorage, "setItem").mockImplementationOnce(() => {
+      throw new DOMException("quota exceeded", "QuotaExceededError");
+    });
+    setSessionFileResolved(context, file, true);
+    expect(status(context, file).status).toBe("resolved");
+    setItem.mockRestore();
+
+    localStorage.setItem(key!, "{not-json");
+    expect(status(context, file).status).toBe("new");
+
+    markSessionFileRead(context, file);
+    setItem = vi.spyOn(localStorage, "setItem").mockImplementationOnce(() => {
+      throw new DOMException("quota exceeded", "QuotaExceededError");
+    });
+    setSessionFileResolved(context, file, true);
+    setItem.mockRestore();
+    localStorage.setItem(key!, "{}");
+    expect(status(context, file).status).toBe("new");
+
+    markSessionFileRead(context, file);
+    let getItem = vi.spyOn(localStorage, "getItem").mockImplementation(() => {
+      throw new DOMException("access denied", "SecurityError");
+    });
+    setSessionFileResolved(context, file, true);
+    expect(status(context, file).status).toBe("resolved");
+    getItem.mockRestore();
+
+    localStorage.clear();
+    expect(status(context, file).status).toBe("new");
+
+    markSessionFileRead(context, file);
+    getItem = vi.spyOn(localStorage, "getItem").mockImplementation(() => {
+      throw new DOMException("access denied", "SecurityError");
+    });
+    setSessionFileResolved(context, file, true);
+    expect(status(context, file).status).toBe("resolved");
+    getItem.mockRestore();
+
+    localStorage.setItem(key!, "{still-not-json");
+    expect(status(context, file).status).toBe("new");
+  });
+
   it("uses file timestamps to reopen activity from older Gateways", () => {
     const legacyFile = { ...modifiedFile(3), activityRevision: undefined, updatedAtMs: 10 };
     setSessionFileResolved(context, legacyFile, true);

@@ -39,7 +39,8 @@ export type SessionFileActivitySnapshot = {
 };
 
 const memoryStores = new Map<string, PersistedActivityStore>();
-const volatileStoreKeys = new Set<string>();
+const volatileStoreSnapshots = new Map<string, string | null | undefined>();
+const persistedStoreSnapshots = new Map<string, string | null>();
 
 function emptyActivityStore(): PersistedActivityStore {
   return { version: 1, scopes: {} };
@@ -69,6 +70,11 @@ function normalizeFileActivity(value: unknown): PersistedFileActivity | null {
     ...(readRevision === undefined ? {} : { readRevision }),
     ...(resolvedRevision === undefined ? {} : { resolvedRevision }),
   };
+}
+
+function isActivityStoreEnvelope(value: unknown): boolean {
+  const record = objectRecord(value);
+  return record?.version === 1 && objectRecord(record.scopes) !== null;
 }
 
 function normalizeActivityStore(value: unknown): PersistedActivityStore {
@@ -131,44 +137,85 @@ function fileRevision(file: SessionWorkspaceFileEntry): number {
 }
 
 function readActivityStore(key: string): PersistedActivityStore {
-  if (volatileStoreKeys.has(key)) {
-    return memoryStores.get(key) ?? emptyActivityStore();
-  }
+  const volatileFallback = memoryStores.get(key) ?? emptyActivityStore();
   const storage = getSafeLocalStorage();
   if (!storage) {
-    return memoryStores.get(key) ?? emptyActivityStore();
+    return volatileFallback;
   }
+  const volatile = volatileStoreSnapshots.has(key);
+  const volatileSnapshot = volatileStoreSnapshots.get(key);
   let raw: string | null;
   try {
     raw = storage.getItem(key);
   } catch {
     // Storage access can be rejected while the current tab's in-memory state
     // remains valid, so preserve that fallback only for this failure class.
-    return memoryStores.get(key) ?? emptyActivityStore();
+    return volatileFallback;
+  }
+  if (volatile && volatileSnapshot !== undefined && raw === volatileSnapshot) {
+    persistedStoreSnapshots.set(key, raw);
+    return volatileFallback;
   }
   if (!raw) {
+    if (volatile && volatileSnapshot === undefined) {
+      persistedStoreSnapshots.set(key, raw);
+      volatileStoreSnapshots.set(key, raw);
+      return volatileFallback;
+    }
+    volatileStoreSnapshots.delete(key);
     memoryStores.delete(key);
+    persistedStoreSnapshots.set(key, raw);
     return emptyActivityStore();
   }
   try {
-    const parsed = normalizeActivityStore(JSON.parse(raw) as unknown);
+    const rawStore = JSON.parse(raw) as unknown;
+    if (!isActivityStoreEnvelope(rawStore)) {
+      volatileStoreSnapshots.delete(key);
+      memoryStores.delete(key);
+      persistedStoreSnapshots.set(key, raw);
+      return emptyActivityStore();
+    }
+    const parsed = normalizeActivityStore(rawStore);
+    if (volatile && volatileSnapshot === undefined) {
+      persistedStoreSnapshots.set(key, raw);
+      volatileStoreSnapshots.set(key, raw);
+      return volatileFallback;
+    }
+    volatileStoreSnapshots.delete(key);
     memoryStores.set(key, parsed);
+    persistedStoreSnapshots.set(key, raw);
     return parsed;
   } catch {
     // Persisted corruption must not revive stale Read or Resolved markers.
+    volatileStoreSnapshots.delete(key);
     memoryStores.delete(key);
+    persistedStoreSnapshots.set(key, raw);
     return emptyActivityStore();
   }
 }
 
 function writeActivityStore(key: string, store: PersistedActivityStore): void {
   memoryStores.set(key, store);
+  const serializedStore = JSON.stringify(store);
+  const storedSnapshot = persistedStoreSnapshots.get(key);
+  const storage = getSafeLocalStorage();
+  if (!storage) {
+    volatileStoreSnapshots.set(key, storedSnapshot);
+    return;
+  }
+  let persistedBeforeWrite: string | null | undefined;
   try {
-    getSafeLocalStorage()?.setItem(key, JSON.stringify(store));
-    volatileStoreKeys.delete(key);
+    persistedBeforeWrite = storage.getItem(key);
+    persistedStoreSnapshots.set(key, persistedBeforeWrite);
+    storage.setItem(key, serializedStore);
+    volatileStoreSnapshots.delete(key);
+    persistedStoreSnapshots.set(key, serializedStore);
   } catch {
     // Browser storage is optional; the in-memory copy still keeps this tab coherent.
-    volatileStoreKeys.add(key);
+    volatileStoreSnapshots.set(
+      key,
+      persistedBeforeWrite !== undefined ? persistedBeforeWrite : storedSnapshot,
+    );
   }
 }
 
