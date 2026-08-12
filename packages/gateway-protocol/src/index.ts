@@ -21,6 +21,9 @@ export type {
   GatewayErrorDetails,
   McpAppViewExpiredErrorDetails,
   MissingScopeErrorDetails,
+  UserPrefsLimitExceededErrorDetails,
+  ProjectCloneErrorDetails,
+  ProjectCloneFailureCause,
   WizardNotFoundErrorDetails,
 } from "./schema/error-codes.js";
 export * from "./schema/board.js";
@@ -34,6 +37,7 @@ export {
 } from "./schema/sessions-row.js";
 export * from "./schema/session-classification.js";
 export * from "./schema/sessions-suggestions.js";
+export * from "./schema/projects.js";
 export * from "./migration-api.js";
 export type * from "./public-session-catalog.js";
 export * from "./validator-registry.js";
@@ -72,6 +76,8 @@ export {
   ErrorShapeSchema,
   GatewayErrorDetailsSchema,
   MissingScopeErrorDetailsSchema,
+  UserPrefsLimitExceededErrorDetailsSchema,
+  ProjectCloneErrorDetailsSchema,
   WizardNotFoundErrorDetailsSchema,
   WorkerAdmissionFailureReasonSchema,
   WorkerAdmissionHandshakeSchema,
@@ -344,6 +350,10 @@ export {
   UsersLinkEmailResultSchema,
   UsersListParamsSchema,
   UsersListResultSchema,
+  UsersPrefsGetParamsSchema,
+  UsersPrefsGetResultSchema,
+  UsersPrefsSetParamsSchema,
+  UsersPrefsSetResultSchema,
   UsersSelfParamsSchema,
   UsersSelfResultSchema,
   UsersSetAvatarParamsSchema,
@@ -631,10 +641,16 @@ export {
   TickEventSchema,
   ShutdownEventSchema,
   ProjectRecordSchema,
+  ProjectRecentSchema,
   ProjectsListParamsSchema,
   ProjectsListResultSchema,
   ProjectsRegisterParamsSchema,
   ProjectsRegisterResultSchema,
+  ProjectsAddParamsSchema,
+  ProjectsAddResultSchema,
+  RemoteProjectSchema,
+  ProjectsSearchRemoteParamsSchema,
+  ProjectsSearchRemoteResultSchema,
   ProjectsRemoveParamsSchema,
   ProjectsRemoveResultSchema,
   WorktreeRecordSchema,

@@ -32,7 +32,7 @@ import {
   toTranscriptReadScope,
   type SessionTranscriptReadScope,
 } from "../session-transcript-readers.js";
-import { loadSessionEntryReadOnly } from "../session-utils.js";
+import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import {
   execOpenPath,
   formatOpenPathError,
@@ -158,20 +158,12 @@ function sessionFilesError(type: string, message: string, details?: Record<strin
   });
 }
 
-function normalizePathValue(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed || undefined;
-}
-
 function readPathArg(args: Record<string, unknown>): string | undefined {
   return (
-    normalizePathValue(args.path) ??
-    normalizePathValue(args.file_path) ??
-    normalizePathValue(args.filePath) ??
-    normalizePathValue(args.file)
+    normalizeOptionalString(args.path) ??
+    normalizeOptionalString(args.file_path) ??
+    normalizeOptionalString(args.filePath) ??
+    normalizeOptionalString(args.file)
   );
 }
 
@@ -233,11 +225,11 @@ function addStructuredPatchFiles(
   }
   for (const changeValue of changes) {
     const change = asOptionalObjectRecord(changeValue);
-    addTouchedFile(files, normalizePathValue(change?.path), "modified", activityRevision);
+    addTouchedFile(files, normalizeOptionalString(change?.path), "modified", activityRevision);
     const kind = asOptionalObjectRecord(change?.kind);
     addTouchedFile(
       files,
-      normalizePathValue(kind?.move_path) ?? normalizePathValue(kind?.movePath),
+      normalizeOptionalString(kind?.move_path) ?? normalizeOptionalString(kind?.movePath),
       "modified",
       activityRevision,
     );
@@ -639,7 +631,7 @@ async function toSessionFileEntry(
 }
 
 function loadSessionFileRoot(params: { sessionKey: string; agentId?: string }) {
-  const loaded = loadSessionEntryReadOnly(params.sessionKey, { agentId: params.agentId });
+  const loaded = loadGatewaySessionEntryReadOnly(params.sessionKey, { agentId: params.agentId });
   if (!loaded.entry?.sessionId) {
     return { ...loaded, agentId: undefined, root: undefined, fileRoot: undefined };
   }
@@ -649,12 +641,12 @@ function loadSessionFileRoot(params: { sessionKey: string; agentId?: string }) {
       parseAgentSessionKey(params.sessionKey)?.agentId ??
       resolveDefaultAgentId(loaded.cfg),
   );
-  const spawnedCwd = normalizePathValue(loaded.entry.spawnedCwd);
-  const spawnedWorkspaceDir = normalizePathValue(loaded.entry.spawnedWorkspaceDir);
+  const spawnedCwd = normalizeOptionalString(loaded.entry.spawnedCwd);
+  const spawnedWorkspaceDir = normalizeOptionalString(loaded.entry.spawnedWorkspaceDir);
   const configuredWorkspaceDir =
     spawnedCwd || spawnedWorkspaceDir
       ? undefined
-      : normalizePathValue(resolveAgentWorkspaceDir(loaded.cfg, agentId));
+      : normalizeOptionalString(resolveAgentWorkspaceDir(loaded.cfg, agentId));
   // Keep this cwd precedence aligned with sessions.diff so the advertised
   // checkout state cannot disagree with the panel's fallback result.
   const diffCwd = spawnedCwd ?? spawnedWorkspaceDir ?? configuredWorkspaceDir;
@@ -782,7 +774,7 @@ async function buildBrowserResult(params: {
   if (!params.root) {
     return undefined;
   }
-  const search = normalizePathValue(params.search);
+  const search = normalizeOptionalString(params.search);
   const relevance = buildSessionRelevanceMap(params.files, params.root, params.fileRoot);
   if (search) {
     const result = await searchBrowserEntries({
