@@ -799,6 +799,7 @@ async function main() {
             affected_owners: [
               "SQLite visible transcript touched-file fold and revision owner",
               "SQLite visible-transcript cursor generation owner",
+              "production apply_patch sequential file-mutation owner",
               "sessions.files Gateway protocol and list/get owner",
               "Control UI session file activity persistence and rendering owner",
               "task registry/tasks.list active-count owner",
@@ -807,6 +808,7 @@ async function main() {
             real_affected_owners: [
               "SQLite visible transcript touched-file fold and revision owner",
               "SQLite visible-transcript cursor generation owner",
+              "production apply_patch sequential file-mutation owner",
               "sessions.files Gateway protocol and list/get owner",
               "Control UI session file activity persistence and rendering owner",
               "task registry/tasks.list active-count owner",
