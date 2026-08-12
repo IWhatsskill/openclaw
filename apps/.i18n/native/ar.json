@@ -2174,14 +2174,14 @@
       "translated": "استخدم عنوان IP خاصًا بشبكة LAN للإعداد المحلي، أو فعّل Tailscale Serve / اعرض عنوان URL للبوابة باستخدام wss:// للوصول عن بُعد."
     },
     {
-      "id": "native.android.ff5abe2418979715",
-      "source": "${if (tls) \"https\" else \"http\"}://$displayHost",
-      "translated": "${if (tls) \"https\" else \"http\"}://$displayHost"
+      "id": "native.android.73109af9b97b61eb",
+      "source": "${if (tls) \"https\" else \"http\"}://$displayHost$displayPath",
+      "translated": "${if (tls) \"https\" else \"http\"}://$displayHost$displayPath"
     },
     {
-      "id": "native.android.28e58e1bd98e08ab",
-      "source": "${if (tls) \"https\" else \"http\"}://$displayHost:$port",
-      "translated": "${if (tls) \"https\" else \"http\"}://$displayHost:$port"
+      "id": "native.android.6c4a0216a29d5921",
+      "source": "${if (tls) \"https\" else \"http\"}://$displayHost:$port$displayPath",
+      "translated": "${if (tls) \"https\" else \"http\"}://$displayHost:$port$displayPath"
     },
     {
       "id": "native.android.180483eb1b7a4ff1",
@@ -8274,6 +8274,41 @@
       "translated": "+${toolCalls.size - 4} أخرى"
     },
     {
+      "id": "native.android.f2da5ffc1adaad58",
+      "source": "+${moreWorkingCount} more working",
+      "translated": "+${moreWorkingCount} أخرى قيد العمل"
+    },
+    {
+      "id": "native.android.db391c2712f7340b",
+      "source": "+${diff.added}",
+      "translated": "+${diff.added}"
+    },
+    {
+      "id": "native.android.babb72da2d6270a2",
+      "source": "−${diff.removed}",
+      "translated": "−${diff.removed}"
+    },
+    {
+      "id": "native.android.e58b3c8805c79bd0",
+      "source": "Subagent working",
+      "translated": "الوكيل الفرعي قيد العمل"
+    },
+    {
+      "id": "native.android.bdfea93e16940c82",
+      "source": "Subagent failed",
+      "translated": "فشل الوكيل الفرعي"
+    },
+    {
+      "id": "native.android.9fde542e43b4e73b",
+      "source": "Subagent cancelled",
+      "translated": "تم إلغاء الوكيل الفرعي"
+    },
+    {
+      "id": "native.android.0bba48c12caa076a",
+      "source": "Subagent finished",
+      "translated": "انتهى الوكيل الفرعي"
+    },
+    {
       "id": "native.android.22d747642a3887cd",
       "source": "$completedCount/${steps.size}",
       "translated": "$completedCount/${steps.size}"
@@ -8522,6 +8557,46 @@
       "id": "native.android.d7afc539a21261eb",
       "source": "$count more workers",
       "translated": "$count عامل إضافي"
+    },
+    {
+      "id": "native.android.87d0e02f15fa721a",
+      "source": "Compacted history",
+      "translated": "سجل مضغوط"
+    },
+    {
+      "id": "native.android.9aa434a3c6f7be9e",
+      "source": "saved $count tokens",
+      "translated": "تم توفير $count رمز"
+    },
+    {
+      "id": "native.android.fda9fe610c7334a7",
+      "source": "Session reset",
+      "translated": "إعادة تعيين الجلسة"
+    },
+    {
+      "id": "native.android.34b623e6597690a1",
+      "source": "The earlier conversation was cleared.",
+      "translated": "تم مسح المحادثة السابقة."
+    },
+    {
+      "id": "native.android.f22f983644b07db4",
+      "source": "System · restart recovery",
+      "translated": "النظام · استرداد بعد إعادة التشغيل"
+    },
+    {
+      "id": "native.android.5ff88f5e4fb8dc90",
+      "source": "Turn interrupted by a gateway restart — asked the agent to resume and finish the response.",
+      "translated": "تمت مقاطعة الدور بإعادة تشغيل Gateway — طُلب من الوكيل استئناف الرد وإكماله."
+    },
+    {
+      "id": "native.android.7cd27609193d4cbf",
+      "source": "System · gateway restarted",
+      "translated": "النظام · تمت إعادة تشغيل Gateway"
+    },
+    {
+      "id": "native.android.72b1f80d8de8404c",
+      "source": "System",
+      "translated": "النظام"
     },
     {
       "id": "native.android.c32ff602fa622e4b",
@@ -9549,11 +9624,6 @@
       "translated": "خطأ"
     },
     {
-      "id": "native.android.6f790004e204e002",
-      "source": "Ready",
-      "translated": "جاهز"
-    },
-    {
       "id": "native.android.40984724c43be3ab",
       "source": "You",
       "translated": "أنت"
@@ -9807,6 +9877,136 @@
       "id": "native.android.709aff840be1f167",
       "source": "PHONE PROXY",
       "translated": "وكيل الهاتف"
+    },
+    {
+      "id": "native.android.c2d921039b510784",
+      "source": "Pulse",
+      "translated": "Pulse"
+    },
+    {
+      "id": "native.android.d8ed834d8063e209",
+      "source": "Background tasks",
+      "translated": "Background tasks"
+    },
+    {
+      "id": "native.android.05a6d7c174d87cf4",
+      "source": "Session swarm",
+      "translated": "Session swarm"
+    },
+    {
+      "id": "native.android.77e15364654b7720",
+      "source": "Attention",
+      "translated": "Attention"
+    },
+    {
+      "id": "native.android.c208c4e16cb264eb",
+      "source": "Status: %1$s",
+      "translated": "Status: %1$s"
+    },
+    {
+      "id": "native.android.6f790004e204e002",
+      "source": "Ready",
+      "translated": "جاهز"
+    },
+    {
+      "id": "native.android.f8cbe6e1c08614f2",
+      "source": "Refreshing",
+      "translated": "Refreshing"
+    },
+    {
+      "id": "native.android.4852723b3f26254e",
+      "source": "Unavailable",
+      "translated": "Unavailable"
+    },
+    {
+      "id": "native.android.5846aa00a1cf73af",
+      "source": "Loading Pulse",
+      "translated": "Loading Pulse"
+    },
+    {
+      "id": "native.android.218af4ba38fa78c0",
+      "source": "Reading bounded aggregates from the paired phone.",
+      "translated": "Reading bounded aggregates from the paired phone."
+    },
+    {
+      "id": "native.android.6c3bd26eef09f4b5",
+      "source": "Queued",
+      "translated": "Queued"
+    },
+    {
+      "id": "native.android.a50fa396f80a7adc",
+      "source": "Running",
+      "translated": "Running"
+    },
+    {
+      "id": "native.android.32c6b30f5a1c4525",
+      "source": "Completed",
+      "translated": "Completed"
+    },
+    {
+      "id": "native.android.aa0c8ce452c5e1b4",
+      "source": "Done",
+      "translated": "Done"
+    },
+    {
+      "id": "native.android.c62055d018d56128",
+      "source": "Failed",
+      "translated": "Failed"
+    },
+    {
+      "id": "native.android.38832762c1908e84",
+      "source": "Groups",
+      "translated": "Groups"
+    },
+    {
+      "id": "native.android.d1a38fd7dd7b92cc",
+      "source": "Pending requests",
+      "translated": "Pending requests"
+    },
+    {
+      "id": "native.android.5322dafa9e78e573",
+      "source": "Bounded active and recent snapshot",
+      "translated": "Bounded active and recent snapshot"
+    },
+    {
+      "id": "native.android.9d1e806411cbb79c",
+      "source": "Active task list is at its limit",
+      "translated": "Active task list is at its limit"
+    },
+    {
+      "id": "native.android.1caeea75f442c074",
+      "source": "Recent task list is at its limit",
+      "translated": "Recent task list is at its limit"
+    },
+    {
+      "id": "native.android.f0a876dda24dac29",
+      "source": "Active",
+      "translated": "Active"
+    },
+    {
+      "id": "native.android.a5331bca16ee38ea",
+      "source": "Idle",
+      "translated": "Idle"
+    },
+    {
+      "id": "native.android.4137beec90840594",
+      "source": "Phase %1$d",
+      "translated": "Phase %1$d"
+    },
+    {
+      "id": "native.android.7aabf005cf689625",
+      "source": "Queued %1$d, Running %2$d, Done %3$d, Failed %4$d, Hidden %5$d",
+      "translated": "Queued %1$d, Running %2$d, Done %3$d, Failed %4$d, Hidden %5$d"
+    },
+    {
+      "id": "native.android.178d1516c2f18ca8",
+      "source": "More phases not shown",
+      "translated": "More phases not shown"
+    },
+    {
+      "id": "native.android.16ff935a683a605f",
+      "source": "Unknown",
+      "translated": "Unknown"
     },
     {
       "id": "native.apple.093081590556db7f",
@@ -17759,11 +17959,6 @@
       "translated": "تم رفض إذن %@"
     },
     {
-      "id": "native.apple.944004de80cfc8b7",
-      "source": "[\\(host)]",
-      "translated": "[\\(host)]"
-    },
-    {
       "id": "native.apple.12a4a51d251f65c0",
       "source": "OpenClaw connects this Apple Watch directly to your Gateway on trusted local networks.",
       "translated": "يربط OpenClaw ساعة Apple Watch هذه مباشرةً بـ Gateway الخاص بك على الشبكات المحلية الموثوقة."
@@ -20609,11 +20804,6 @@
       "translated": "انقر على gateway مكتشف لملء هدف SSH."
     },
     {
-      "id": "native.apple.66ad783199ef9729",
-      "source": "Discover OpenClaw gateways on your LAN",
-      "translated": "اكتشف gateways الخاصة بـ OpenClaw على شبكة LAN لديك"
-    },
-    {
       "id": "native.apple.110f6e64e25dcd2e",
       "source": " (local: \\(projectEntrypoint ?? \"unknown\"))",
       "translated": " (local: \\(projectEntrypoint ?? \"unknown\"))"
@@ -21824,6 +22014,21 @@
       "translated": "التالي"
     },
     {
+      "id": "native.apple.77671f1903c73f44",
+      "source": " (\\(command) pid \\(pid))",
+      "translated": " (\\(command) pid \\(pid))"
+    },
+    {
+      "id": "native.apple.69779351bd137b5b",
+      "source": "Existing gateway detected",
+      "translated": "تم اكتشاف gateway موجود"
+    },
+    {
+      "id": "native.apple.ff1e86b4eb896434",
+      "source": "Port \\(port) already in use",
+      "translated": "المنفذ \\(port) قيد الاستخدام بالفعل"
+    },
+    {
       "id": "native.apple.3db546546fbaf38e",
       "source": "OpenClaw is preparing a local model.",
       "translated": "يقوم OpenClaw بإعداد نموذج محلي."
@@ -22272,21 +22477,6 @@
       "id": "native.apple.d54084b48f40aa0a",
       "source": "OK — OpenClaw won’t start anything yet. Pick Local or Remote later in Settings → General.",
       "translated": "حسنًا — لن يبدأ OpenClaw أي شيء بعد. اختر محليًا أو عن بُعد لاحقًا من الإعدادات → عام."
-    },
-    {
-      "id": "native.apple.8d9eb247d41a0ca7",
-      "source": "Existing gateway detected",
-      "translated": "تم اكتشاف gateway موجود"
-    },
-    {
-      "id": "native.apple.335bb6b21095d15a",
-      "source": "Port \\(probe.port) already in use",
-      "translated": "المنفذ \\(probe.port) قيد الاستخدام بالفعل"
-    },
-    {
-      "id": "native.apple.de453cb637c46670",
-      "source": " (\\(probe.command) pid \\(probe.pid))",
-      "translated": " (\\(probe.command) pid \\(probe.pid))"
     },
     {
       "id": "native.apple.9ab228a4cb7d4403",
@@ -25979,6 +26169,11 @@
       "translated": "حذف"
     },
     {
+      "id": "native.apple.d5a544f5ba642c60",
+      "source": "+%1$lld more working",
+      "translated": "+%1$lld أخرى قيد العمل"
+    },
+    {
       "id": "native.apple.946b677d8dbf0f37",
       "source": "Hide talk transcript",
       "translated": "إخفاء نص المحادثة"
@@ -26047,6 +26242,46 @@
       "id": "native.apple.0149100bb5c8b985",
       "source": "Message",
       "translated": "Message"
+    },
+    {
+      "id": "native.apple.041f2ed87f1797a0",
+      "source": "System · restart recovery",
+      "translated": "النظام · استرداد بعد إعادة التشغيل"
+    },
+    {
+      "id": "native.apple.0eaa9e1136018332",
+      "source": "System · gateway restarted",
+      "translated": "النظام · تمت إعادة تشغيل Gateway"
+    },
+    {
+      "id": "native.apple.25ffcf5fcb1645d3",
+      "source": "System",
+      "translated": "النظام"
+    },
+    {
+      "id": "native.apple.55c9f51c550018a9",
+      "source": "Compacted history",
+      "translated": "سجل مضغوط"
+    },
+    {
+      "id": "native.apple.28264f2dcf55651b",
+      "source": "Session reset",
+      "translated": "إعادة تعيين الجلسة"
+    },
+    {
+      "id": "native.apple.6410db19dcb02d59",
+      "source": "saved %@ tokens",
+      "translated": "تم توفير %@ رمز"
+    },
+    {
+      "id": "native.apple.0b97fe0abe7ea144",
+      "source": "The earlier conversation was cleared.",
+      "translated": "تم مسح المحادثة السابقة."
+    },
+    {
+      "id": "native.apple.4efcef39bcaea3d1",
+      "source": "Turn interrupted by a gateway restart — asked the agent to resume and finish the response.",
+      "translated": "تمت مقاطعة الدور بإعادة تشغيل Gateway — طُلب من الوكيل استئناف الرد وإكماله."
     },
     {
       "id": "native.apple.5824df4efbf6c977",
@@ -26797,6 +27032,16 @@
       "id": "native.apple.081a07c7306b223e",
       "source": "gateway connect failed",
       "translated": "gateway connect failed"
+    },
+    {
+      "id": "native.apple.1dba7d27dc80088a",
+      "source": "[\\(self.host)]",
+      "translated": "[\\(self.host)]"
+    },
+    {
+      "id": "native.apple.c25ea221748a03ba",
+      "source": ":\\(self.port)",
+      "translated": ":\\(self.port)"
     },
     {
       "id": "native.apple.2f45f005d2a7c3c2",
