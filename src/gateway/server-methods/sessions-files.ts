@@ -280,7 +280,16 @@ function collectTouchedFilesFromMessage(
     }
     const pending = pendingWrites.get(toolCallId);
     pendingWrites.delete(toolCallId);
-    if (!pending || record.isError !== false) {
+    if (!pending) {
+      return;
+    }
+    if (record.isError !== false) {
+      // apply_patch is non-atomic: an early hunk may mutate a file before a
+      // later hunk fails. Retain its candidate paths conservatively so a
+      // partial write cannot remain hidden behind an old activity marker.
+      if (pending.toolName === "apply_patch") {
+        applyTouchedWrite(files, pending, activityRevision);
+      }
       return;
     }
     applyTouchedWrite(files, pending, activityRevision);

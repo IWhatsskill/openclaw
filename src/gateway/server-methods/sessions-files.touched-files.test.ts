@@ -380,6 +380,73 @@ describe("sessions.files touched-file folds", () => {
     expect(afterFailure.files[0]).toMatchObject({ activityRevision: 5, path: "ui/chat.ts" });
   });
 
+  it("advances apply_patch candidates when a later hunk can fail after an earlier mutation", async () => {
+    useSqliteSession(hoisted.loadSessionEntry, workspaceRoot, "sess-touched-partial-patch");
+    const patchInput = `*** Begin Patch
+*** Update File: ui/chat.ts
+@@
+-export const chat = true;
++export const chat = "partially changed";
+*** Update File: src/missing.ts
+@@
+-missing
++changed
+*** End Patch`;
+    hoisted.readSessionTranscriptVisibleMessageDeltaCore.mockReturnValue({
+      kind: "page",
+      cursor: "partial-apply-patch-final",
+      events: [
+        visibleMessageEvent(
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "partial-apply-patch",
+                name: "apply_patch",
+                arguments: { input: patchInput },
+              },
+            ],
+          },
+          1,
+        ),
+        visibleMessageEvent(
+          {
+            role: "toolResult",
+            toolCallId: "partial-apply-patch",
+            toolName: "apply_patch",
+            content: [{ type: "text", text: "later hunk failed" }],
+            isError: true,
+          },
+          2,
+        ),
+      ],
+      hasMore: false,
+      serializedBytes: 100,
+    });
+
+    const payload = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.list", {
+        sessionKey: "agent:main:main",
+      }),
+    );
+
+    expect(payload.files).toEqual([
+      expect.objectContaining({
+        activityRevision: 2,
+        kind: "modified",
+        missing: true,
+        path: "src/missing.ts",
+      }),
+      expect.objectContaining({
+        activityRevision: 2,
+        kind: "modified",
+        missing: false,
+        path: "ui/chat.ts",
+      }),
+    ]);
+  });
+
   it("uses raw event revisions when an active branch reuses a visible ordinal", async () => {
     useSqliteSession(hoisted.loadSessionEntry, workspaceRoot, "sess-touched-branch-change");
     hoisted.readSessionTranscriptVisibleMessageDeltaCore.mockImplementation((_scope, limits) => {

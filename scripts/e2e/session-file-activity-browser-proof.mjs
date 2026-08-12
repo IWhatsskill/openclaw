@@ -61,6 +61,17 @@ function editResult(id, isError = false) {
   };
 }
 
+function applyPatchResult(id, isError = false) {
+  return {
+    role: "toolResult",
+    toolCallId: id,
+    toolName: "apply_patch",
+    content: [{ type: "text", text: isError ? "apply_patch failed" : "apply_patch applied" }],
+    isError,
+    timestamp: Date.now(),
+  };
+}
+
 function appendEdit(manager, id, filePath, isError = false) {
   const callEntryId = manager.appendMessage(assistantEdit(id, filePath));
   manager.appendMessage(editResult(id, isError));
@@ -134,6 +145,7 @@ async function main() {
       waitForSessionTranscriptProjection,
     },
     { SessionManager },
+    { createApplyPatchTool },
     { createTaskRecord },
     { getFreePort },
     { startGatewayServer },
@@ -142,6 +154,7 @@ async function main() {
     source("src/config/sessions/legacy-sqlite-marker.ts"),
     source("src/config/sessions/session-accessor.ts"),
     source("src/agents/sessions/session-manager.ts"),
+    source("src/agents/apply-patch.ts"),
     source("src/tasks/task-registry-record-api.ts"),
     source("src/test-utils/ports.ts"),
     source("src/gateway/server.ts"),
@@ -325,6 +338,69 @@ async function main() {
     await mainRow.locator(".chat-workspace-rail__file-badge--read").waitFor({
       timeout: 20_000,
     });
+
+    // Production apply_patch is non-atomic. Its first hunk mutates app.ts and
+    // its second hunk fails. The overall error result must still reopen the
+    // potentially changed existing file as New.
+    const partialPatchId = "call-main-partial-patch";
+    const partialPatchInput = `*** Begin Patch
+*** Update File: src/app.ts
+@@
+-export const app = true;
++export const app = "partially changed";
+*** Update File: src/missing-for-partial-patch.ts
+@@
+-missing
++changed
+*** End Patch`;
+    mainManager.appendMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: partialPatchId,
+          name: "apply_patch",
+          arguments: { input: partialPatchInput },
+        },
+      ],
+      api: "openai-responses",
+      provider: "openai",
+      model: "proof-model",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "toolUse",
+      timestamp: Date.now(),
+    });
+    let partialPatchFailed = false;
+    try {
+      await createApplyPatchTool({ cwd: workspaceDir }).execute(
+        partialPatchId,
+        { input: partialPatchInput },
+        undefined,
+      );
+    } catch {
+      partialPatchFailed = true;
+    }
+    assert(partialPatchFailed, "production partial apply_patch did not fail on its later hunk");
+    assert(
+      (await fs.readFile(path.join(workspaceDir, "src", "app.ts"), "utf8")).includes(
+        '"partially changed"',
+      ),
+      "production partial apply_patch did not retain its successful early mutation",
+    );
+    mainManager.appendMessage(applyPatchResult(partialPatchId, true));
+    await waitForSessionTranscriptProjection(mainScope);
+    await page.getByRole("button", { name: "Refresh session workspace", exact: true }).click();
+    mainRow = page.locator(".chat-workspace-rail__file", { hasText: "app.ts" });
+    await mainRow.locator(".chat-workspace-rail__file-badge--new").waitFor({ timeout: 20_000 });
+    await mainRow.locator(".chat-workspace-rail__file-open").click();
+    await mainRow.locator(".chat-workspace-rail__file-badge--read").waitFor({ timeout: 20_000 });
     const beforeFailedWriteState = await page.evaluate(async (expectedSessionKey) => {
       const pane = [...document.querySelectorAll("openclaw-chat-pane")].find(
         (candidate) =>
@@ -661,6 +737,7 @@ async function main() {
       authoritativeOpen: "latest-get-revision-acknowledged",
       stalePreview: "newer-list-revision-preserved",
       failedWrite: "activity-revision-preserved",
+      partialApplyPatch: "failed-result-reopened-successful-early-hunk",
       volatileStorageRecovery: "cleared-storage-reset-to-new",
       pathAliases: "canonicalized-and-deduplicated",
       failedOpen: "preserved-new",
@@ -687,6 +764,7 @@ async function main() {
         "Authoritative open: a write between list and get was acknowledged at the get revision",
         "Stale preview: a newer refreshed list revision remained New after an older get response arrived",
         "Failed write: an error tool result did not advance or reopen file activity",
+        "Partial apply_patch: a failed result after a successful early production hunk reopened the changed file as New",
         "Storage fallback: clearing readable storage after a rejected persistence write reopened the file as New",
         "Path aliases: syntactic aliases resolved to one canonical activity entry",
         "Recovery: reload and thread switch preserve independent state",
@@ -741,12 +819,13 @@ async function main() {
               "production replaceTranscriptEvents reused identical events to rotate the transcript generation",
               "production sessions.files.get returned a newer revision, a delayed older revision, and a missing-file failure",
               "production SessionManager paired successful and failed edit tool results",
+              "production apply_patch performed an early file mutation before a later hunk failed",
               "production Control UI recovered from a rejected localStorage write followed by explicit storage clearing",
               "production task registry record seeded without executing a background model",
               "headless Chromium driving the production Control UI bundle",
             ],
             fault_injection:
-              "write between list/get, delayed older get after newer list, failed edit result, rejected storage write followed by clearing, path aliases, same-generation branch rewind, identical transcript replacement, malformed localStorage JSON, missing-file preview, reload, session switch, and 620px viewport",
+              "write between list/get, delayed older get after newer list, failed edit result, partial production apply_patch failure after an early mutation, rejected storage write followed by clearing, path aliases, same-generation branch rewind, identical transcript replacement, malformed localStorage JSON, missing-file preview, reload, session switch, and 620px viewport",
           },
           transcript_file: transcriptFile,
           transcript_digest: transcriptDigest,
