@@ -662,27 +662,53 @@ function openFile(
       }
       // The opened response owns the revision that was actually previewed. Keep
       // the list-time entry only as a compatibility fallback for older Gateways.
-      const activityFile = hasModernFileActivity(result.file)
-        ? result.file
-        : (opts.activityFile ?? result.file);
+      const modernOpenedActivity = hasModernFileActivity(result.file) ? result.file : null;
+      const listedActivityFile = opts.activityFile;
+      const activityFile = modernOpenedActivity
+        ? modernOpenedActivity
+        : listedActivityFile && typeof result.file.updatedAtMs === "number"
+          ? { ...listedActivityFile, updatedAtMs: result.file.updatedAtMs }
+          : (listedActivityFile ?? result.file);
       if (activityFile?.kind !== "modified") {
         return;
       }
-      if (hasModernFileActivity(result.file) && workspace.list?.sessionKey === result.sessionKey) {
-        const listedIndex = workspace.list.files.findIndex(
-          (file) => file.activityId === result.file.activityId,
-        );
+      if (workspace.list?.sessionKey === result.sessionKey) {
+        const listedIndex = modernOpenedActivity
+          ? workspace.list.files.findIndex(
+              (file) => file.activityId === modernOpenedActivity.activityId,
+            )
+          : listedActivityFile
+            ? workspace.list.files.findIndex(
+                (file) =>
+                  file.path === listedActivityFile.path &&
+                  file.workspacePath === listedActivityFile.workspacePath,
+              )
+            : -1;
         if (listedIndex >= 0) {
           const listedFile = workspace.list.files[listedIndex];
           const listedRevision = hasModernFileActivity(listedFile)
             ? listedFile.activityRevision
             : -1;
-          if (listedFile && listedRevision <= result.file.activityRevision) {
+          const openedUpdatedAtMs = result.file.updatedAtMs;
+          const listedUpdatedAtMs = listedFile?.updatedAtMs ?? -1;
+          const canAdvanceLegacyRevision =
+            !modernOpenedActivity &&
+            typeof openedUpdatedAtMs === "number" &&
+            listedUpdatedAtMs <= openedUpdatedAtMs;
+          if (
+            listedFile &&
+            ((modernOpenedActivity && listedRevision <= modernOpenedActivity.activityRevision) ||
+              canAdvanceLegacyRevision)
+          ) {
             const files = [...workspace.list.files];
             files[listedIndex] = {
               ...listedFile,
-              activityId: result.file.activityId,
-              activityRevision: result.file.activityRevision,
+              ...(modernOpenedActivity
+                ? {
+                    activityId: modernOpenedActivity.activityId,
+                    activityRevision: modernOpenedActivity.activityRevision,
+                  }
+                : { updatedAtMs: openedUpdatedAtMs }),
             };
             workspace.list = { ...workspace.list, files };
           }

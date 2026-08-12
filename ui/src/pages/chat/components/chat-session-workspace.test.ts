@@ -369,9 +369,9 @@ describe("session workspace file activity", () => {
     });
   });
 
-  it("acknowledges a direct legacy open before the workspace list loads", async () => {
+  it("acknowledges the successful legacy get timestamp when the file changes after list", async () => {
     localStorage.clear();
-    const legacyFile = {
+    const listedFile = {
       path: "src/direct-legacy.ts",
       workspacePath: "src/direct-legacy.ts",
       name: "direct-legacy.ts",
@@ -379,16 +379,24 @@ describe("session workspace file activity", () => {
       missing: false,
       updatedAtMs: 17,
     };
+    const openedFile = { ...listedFile, updatedAtMs: 18 };
     const getFile = vi.fn().mockResolvedValue({
       sessionKey: "agent:main:current",
       root: "/workspace",
-      file: { ...legacyFile, content: "export {};\n" },
+      file: { ...openedFile, content: "export {};\n" },
     });
-    const listFiles = vi.fn().mockResolvedValue({
-      sessionKey: "agent:main:current",
-      root: "/workspace",
-      files: [legacyFile],
-    });
+    const listFiles = vi
+      .fn()
+      .mockResolvedValueOnce({
+        sessionKey: "agent:main:current",
+        root: "/workspace",
+        files: [listedFile],
+      })
+      .mockResolvedValueOnce({
+        sessionKey: "agent:main:current",
+        root: "/workspace",
+        files: [openedFile],
+      });
     const state = {
       client: { request: vi.fn().mockResolvedValue({ artifacts: [] }) },
       connected: true,
@@ -400,12 +408,15 @@ describe("session workspace file activity", () => {
       settings: { gatewayUrl: "wss://gateway-a.example" },
     } as unknown as SessionWorkspaceHost;
 
-    openSessionWorkspaceFile(state, { path: "src/direct-legacy.ts" });
-    await vi.waitFor(() => expect(state.handleOpenSidebar).toHaveBeenCalledOnce());
-    expect(listFiles).not.toHaveBeenCalled();
-
     toggleSessionWorkspace(state);
     await vi.waitFor(() => expect(createSessionWorkspaceProps(state).list).not.toBeNull());
+    createSessionWorkspaceProps(state).onOpenFile("src/direct-legacy.ts", "session");
+    await vi.waitFor(() => expect(state.handleOpenSidebar).toHaveBeenCalledOnce());
+    expect(createSessionWorkspaceProps(state).list?.files[0]?.updatedAtMs).toBe(18);
+    expect(createSessionWorkspaceProps(state).fileActivity.newCount).toBe(0);
+
+    createSessionWorkspaceProps(state).onRefresh();
+    await vi.waitFor(() => expect(listFiles).toHaveBeenCalledTimes(2));
     expect(createSessionWorkspaceProps(state).fileActivity.newCount).toBe(0);
   });
 

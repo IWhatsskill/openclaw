@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -15,6 +15,8 @@ const stateDir = path.join(proofRoot, "state");
 const workspaceDir = path.join(proofRoot, "workspace");
 const configPath = path.join(proofRoot, "openclaw.json");
 const controlUiRoot = path.join(repo, "dist", "control-ui");
+const webBuildRoot = path.join(proofRoot, "web-built");
+const webServedRoot = path.join(proofRoot, "web-served");
 const token = crypto.randomBytes(24).toString("hex");
 const harnessSourcePath = fileURLToPath(import.meta.url);
 
@@ -26,6 +28,140 @@ function assert(condition, message) {
   if (!condition) {
     throw new Error(message);
   }
+}
+
+async function sha256File(filePath) {
+  return crypto
+    .createHash("sha256")
+    .update(await fs.readFile(filePath))
+    .digest("hex");
+}
+
+async function inventoryFiles(root, relative = "") {
+  const entries = await fs.readdir(path.join(root, relative), { withFileTypes: true });
+  const files = [];
+  for (const entry of entries.toSorted((left, right) => left.name.localeCompare(right.name))) {
+    const child = relative ? path.posix.join(relative, entry.name) : entry.name;
+    assert(!entry.isSymbolicLink(), "web build output contained a symbolic link: " + child);
+    if (entry.isDirectory()) {
+      files.push(...(await inventoryFiles(root, child)));
+    } else if (entry.isFile()) {
+      files.push(child);
+    } else {
+      throw new Error("web build output contained an unsupported entry: " + child);
+    }
+  }
+  return files;
+}
+
+function builtAssetRole(relative) {
+  if (relative === "index.html") {
+    return "entrypoint";
+  }
+  if (relative.endsWith(".js")) {
+    return "script";
+  }
+  if (relative.endsWith(".css")) {
+    return "style";
+  }
+  return "asset";
+}
+
+async function buildControlUi() {
+  const worktreeStatus = execFileSync("git", ["status", "--porcelain=v1", "--untracked-files=no"], {
+    encoding: "utf8",
+  }).trim();
+  assert(!worktreeStatus, "browser proof requires a clean tracked worktree at exact HEAD");
+  const buildCommand = "pnpm ui:build";
+  const build = spawnSync("pnpm", ["ui:build"], {
+    cwd: repo,
+    encoding: "utf8",
+    env: process.env,
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  const transcript =
+    [
+      "head_sha=" + headSha,
+      "command=" + buildCommand,
+      "exit_code=" + String(build.status ?? -1),
+      "stdout:",
+      build.stdout ?? "",
+      "stderr:",
+      build.stderr ?? "",
+      "build=" + (build.status === 0 ? "pass" : "failed"),
+    ].join("\n") + "\n";
+  await fs.writeFile(path.join(proofRoot, "web-build.log"), transcript);
+  assert(build.status === 0, "exact-head Control UI build failed");
+  await fs.cp(controlUiRoot, webBuildRoot, { recursive: true });
+  const relativeFiles = await inventoryFiles(webBuildRoot);
+  assert(relativeFiles.length > 0, "exact-head Control UI build produced no files");
+  return {
+    buildCommand,
+    buildTranscriptDigest: crypto.createHash("sha256").update(transcript).digest("hex"),
+    assets: await Promise.all(
+      relativeFiles.map(async (relative) => ({
+        relative,
+        path: path.posix.join("web-built", relative),
+        sha256: await sha256File(path.join(webBuildRoot, relative)),
+        role: builtAssetRole(relative),
+      })),
+    ),
+  };
+}
+
+async function captureServedAssets(origin, builtAssets) {
+  const servedAssets = [];
+  for (const [index, built] of builtAssets.entries()) {
+    const requestPath = built.relative
+      .split("/")
+      .map((segment) => encodeURIComponent(segment))
+      .join("/");
+    const requestUrl = new URL(requestPath, origin + "/").href;
+    const fetchCommand = `fetch(${requestUrl}, cache=no-store)`;
+    const response = await fetch(requestUrl, {
+      cache: "no-store",
+      headers: { "Cache-Control": "no-cache", Pragma: "no-cache" },
+    });
+    const bytes = Buffer.from(await response.arrayBuffer());
+    const digest = crypto.createHash("sha256").update(bytes).digest("hex");
+    const servedPath = path.join(webServedRoot, built.relative);
+    await fs.mkdir(path.dirname(servedPath), { recursive: true });
+    await fs.writeFile(servedPath, bytes);
+    const fetchTranscriptRelative = path.posix.join(
+      "web-fetch",
+      String(index + 1).padStart(4, "0") + ".log",
+    );
+    const fetchTranscript =
+      [
+        "head_sha=" + headSha,
+        "command=" + fetchCommand,
+        "request_url=" + requestUrl,
+        "http_status=" + String(response.status),
+        "cache_mode=reload-no-store",
+        "sha256=" + digest,
+      ].join("\n") + "\n";
+    const fetchTranscriptPath = path.join(proofRoot, fetchTranscriptRelative);
+    await fs.mkdir(path.dirname(fetchTranscriptPath), { recursive: true });
+    await fs.writeFile(fetchTranscriptPath, fetchTranscript);
+    assert(response.status === 200, "served Control UI asset returned HTTP " + response.status);
+    assert(
+      digest === built.sha256,
+      "served Control UI asset differs from build: " + built.relative,
+    );
+    servedAssets.push({
+      path: path.posix.join("web-served", built.relative),
+      sha256: digest,
+      source_build_path: built.path,
+      request_url: requestUrl,
+      http_status: response.status,
+      fetch_command: fetchCommand,
+      fetch_transcript: {
+        path: fetchTranscriptRelative,
+        sha256: crypto.createHash("sha256").update(fetchTranscript).digest("hex"),
+      },
+    });
+  }
+  return servedAssets;
 }
 
 assert(baseSha, "OPENCLAW_PROOF_BASE_SHA was not set");
@@ -108,6 +244,7 @@ async function seedSession(params, modules) {
 async function main() {
   await fs.rm(proofRoot, { recursive: true, force: true });
   await fs.mkdir(path.join(workspaceDir, "src"), { recursive: true });
+  const webBuild = await buildControlUi();
   await fs.writeFile(path.join(workspaceDir, "src", "app.ts"), "export const app = true;\n");
   await fs.writeFile(path.join(workspaceDir, "README.md"), "# Proof\n");
   await fs.writeFile(
@@ -233,8 +370,12 @@ async function main() {
     viewport: { width: 1440, height: 900 },
   });
   const page = await context.newPage();
+  await page.setExtraHTTPHeaders({ "Cache-Control": "no-cache", Pragma: "no-cache" });
+  const cdp = await context.newCDPSession(page);
+  await cdp.send("Network.setCacheDisabled", { cacheDisabled: true });
   const origin = "http://127.0.0.1:" + String(port);
   const wsScope = "ws://127.0.0.1:" + String(port);
+  const servedAssets = await captureServedAssets(origin, webBuild.assets);
   await page.addInitScript(({ key, value }) => sessionStorage.setItem(key, value), {
     key: "openclaw.control.token.v1:" + wsScope,
     value: token,
@@ -313,14 +454,35 @@ async function main() {
       if (!(file instanceof HTMLElement) || !(taskBadge instanceof HTMLElement)) {
         throw new Error("header badges not found");
       }
-      return {
-        fileBackground: getComputedStyle(file).backgroundColor,
-        taskBackground: getComputedStyle(taskBadge).backgroundColor,
+      const neutralProbe = document.createElement("span");
+      neutralProbe.style.background = "var(--secondary)";
+      neutralProbe.style.border = "1px solid var(--border-strong)";
+      neutralProbe.style.color = "var(--secondary-foreground)";
+      document.body.append(neutralProbe);
+      const fileStyle = getComputedStyle(file);
+      const taskStyle = getComputedStyle(taskBadge);
+      const neutralStyle = getComputedStyle(neutralProbe);
+      const colors = {
+        fileBackground: fileStyle.backgroundColor,
+        taskBackground: taskStyle.backgroundColor,
+        taskBorder: taskStyle.borderTopColor,
+        taskForeground: taskStyle.color,
+        neutralBackground: neutralStyle.backgroundColor,
+        neutralBorder: neutralStyle.borderTopColor,
+        neutralForeground: neutralStyle.color,
       };
+      neutralProbe.remove();
+      return colors;
     });
     assert(
       badgeColors.fileBackground !== badgeColors.taskBackground,
       "file and task badges use the same semantic color",
+    );
+    assert(
+      badgeColors.taskBackground === badgeColors.neutralBackground &&
+        badgeColors.taskBorder === badgeColors.neutralBorder &&
+        badgeColors.taskForeground === badgeColors.neutralForeground,
+      "task badge does not use the neutral background, border, and foreground tokens",
     );
     await page.screenshot({
       path: path.join(proofRoot, "01-header-new-and-active-task.png"),
@@ -551,13 +713,16 @@ async function main() {
     // Once readable storage is then cleared, that explicit reset must win and
     // reopen the file as New instead of preserving the volatile Resolved marker.
     await page.evaluate(() => {
-      const originalSetItem = Storage.prototype.setItem;
+      const setItemDescriptor = Object.getOwnPropertyDescriptor(Storage.prototype, "setItem");
+      if (!setItemDescriptor || typeof setItemDescriptor.value !== "function") {
+        throw new Error("Storage.setItem descriptor was unavailable");
+      }
       Storage.prototype.setItem = function (key, value) {
         if (key.startsWith("openclaw.control.session-file-activity.v1:")) {
-          Storage.prototype.setItem = originalSetItem;
+          Object.defineProperty(Storage.prototype, "setItem", setItemDescriptor);
           throw new DOMException("quota exceeded", "QuotaExceededError");
         }
-        return originalSetItem.call(this, key, value);
+        return Reflect.apply(setItemDescriptor.value, this, [key, value]);
       };
     });
     await mainRow.getByRole("button", { name: "Mark resolved", exact: true }).click();
@@ -754,12 +919,17 @@ async function main() {
       "pnpm exec tsx scripts/e2e/session-file-activity-browser-proof.mjs";
     const transcript =
       [
+        "head_sha=" + headSha,
+        "command=" + proofCommand,
+        "origin=" + origin,
+        "cache_mode=reload-no-store",
+        "serve=pass",
         "HEAD " + headSha,
         "COMMAND " + proofCommand,
         "RESULT PASS",
         "Gateway: production startGatewayServer with production sessions.files.list/get and tasks.list",
         "Transcript: production SessionManager SQLite writes for two real sessions",
-        "Browser: production Control UI bundle in Chromium",
+        "Browser: exact-head Control UI build served byte-for-byte in cache-disabled Chromium",
         "Behavior: new -> read -> resolved -> hidden from Open -> visible in All",
         "Authoritative open: a write between list and get was acknowledged at the get revision",
         "Stale preview: a newer refreshed list revision remained New after an older get response arrived",
@@ -780,6 +950,27 @@ async function main() {
     const transcriptFile = "direct.log";
     await fs.writeFile(path.join(proofRoot, transcriptFile), transcript);
     const transcriptDigest = crypto.createHash("sha256").update(transcript).digest("hex");
+    const webRuntimeProvenance = {
+      build_head_sha: headSha,
+      build_command: webBuild.buildCommand,
+      build_transcript: {
+        path: "web-build.log",
+        sha256: webBuild.buildTranscriptDigest,
+      },
+      build_output_root: "web-built",
+      built_assets: webBuild.assets.map(({ relative: _relative, ...asset }) => asset),
+      served_head_sha: headSha,
+      served_runtime_command: proofCommand,
+      runtime_transcript: { path: transcriptFile, sha256: transcriptDigest },
+      runtime_origin: origin,
+      cache_mode: "reload-no-store",
+      served_output_root: "web-served",
+      served_assets: servedAssets,
+    };
+    await fs.writeFile(
+      path.join(proofRoot, "web-runtime-provenance.json"),
+      JSON.stringify(webRuntimeProvenance, null, 2) + "\n",
+    );
     await fs.writeFile(
       path.join(proofRoot, "direct-result.json"),
       JSON.stringify(
