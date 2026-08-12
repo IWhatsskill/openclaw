@@ -965,11 +965,16 @@ async function findSessionFile(
       fileRoot: loaded.fileRoot,
       filePath: exactTouched.path,
     });
+    const activityPath = loaded.root && resolved ? toDisplayPath(loaded.root, resolved) : undefined;
+    const strongestTouched = activityPath
+      ? (canonicalWorkspaceTouchedFiles(loaded).find((entry) => entry.activityPath === activityPath)
+          ?.file ?? exactTouched)
+      : exactTouched;
     return {
       ...(loaded.activityScope ? { activityScope: loaded.activityScope } : {}),
       ...(loaded.root ? { root: loaded.root } : {}),
-      file: await toSessionFileEntry(exactTouched, loaded.root, loaded.fileRoot, {
-        ...(loaded.root && resolved ? { activityPath: toDisplayPath(loaded.root, resolved) } : {}),
+      file: await toSessionFileEntry(strongestTouched, loaded.root, loaded.fileRoot, {
+        ...(activityPath ? { activityPath } : {}),
         activityScope: loaded.activityScope,
         includeContent: true,
       }),

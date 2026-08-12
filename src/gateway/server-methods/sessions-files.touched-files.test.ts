@@ -132,7 +132,7 @@ describe("sessions.files touched-file folds", () => {
     });
     mockVisibleMessages([
       assistantToolCall("edit", { path: "./src/readme.md" }),
-      assistantToolCall("read", { path: "src/readme.md" }),
+      assistantToolCall("edit", { path: "src/readme.md" }),
     ]);
 
     const listed = expectOkPayload(
@@ -143,7 +143,7 @@ describe("sessions.files touched-file folds", () => {
     expect(listed.files).toHaveLength(1);
     const modified = listed.files[0];
     expect(modified).toMatchObject({
-      path: "./src/readme.md",
+      path: "src/readme.md",
       kind: "modified",
       activityId: expect.stringMatching(/^[a-f0-9]{64}$/),
       activityRevision: expect.any(Number),
@@ -159,6 +159,18 @@ describe("sessions.files touched-file folds", () => {
     expect(browserPreview.activityScope).toBe(listed.activityScope);
     expect(browserPreview.file).toMatchObject({
       kind: "modified",
+      activityId: modified?.activityId,
+      activityRevision: modified?.activityRevision,
+      workspacePath: "packages/app/src/readme.md",
+    });
+
+    const olderAliasPreview = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.get", {
+        sessionKey: "agent:main:main",
+        path: "./src/readme.md",
+      }),
+    );
+    expect(olderAliasPreview.file).toMatchObject({
       activityId: modified?.activityId,
       activityRevision: modified?.activityRevision,
       workspacePath: "packages/app/src/readme.md",
