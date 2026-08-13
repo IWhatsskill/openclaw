@@ -33,6 +33,7 @@ import {
   closeAgentPicker,
   closeSessionMenus,
   createControllerHost,
+  isPlaceTopologyEvent,
   presenceStateSignature,
   readPresenceEntries,
 } from "./new-session-runtime.ts";
@@ -104,7 +105,6 @@ class NewSessionPage extends OpenClawLightDomElement {
       this.gateway,
       () => ({
         context: this.context,
-        projectId: this.place?.projectId ?? "",
         nodes: this.place?.nodes ?? [],
         folder: this.place?.folder ?? "",
         execNode: this.place?.execNode ?? "",
@@ -114,8 +114,6 @@ class NewSessionPage extends OpenClawLightDomElement {
         requestUpdate: () => this.requestUpdate(),
         onProjectMissing: () => this.place.clearProjectSelection(),
         onSelectProject: (projectId) => this.place.selectProjectId(projectId),
-        onApplyFolder: (folder, execNode, gatewayApproved) =>
-          this.place.applyFolder(folder, execNode, gatewayApproved),
         onApprovedListing: (listing) => this.place.recordGatewayApprovedListing(listing),
         querySelector: (selector) => this.querySelector(selector),
         activeElement: () => this.ownerDocument.activeElement,
@@ -163,13 +161,7 @@ class NewSessionPage extends OpenClawLightDomElement {
             if (this.context?.gateway !== gateway) {
               return;
             }
-            if (
-              event.event === "config.changed" ||
-              event.event === "node.pair.requested" ||
-              event.event === "node.pair.resolved" ||
-              event.event === "device.pair.requested" ||
-              event.event === "device.pair.resolved"
-            ) {
+            if (isPlaceTopologyEvent(event.event)) {
               this.refreshPlaceTopology();
               return;
             }
@@ -389,7 +381,8 @@ class NewSessionPage extends OpenClawLightDomElement {
     const projectState = resolveProjectChip({
       folder: this.place.folder,
       workspace: this.place.workspacePath(),
-      projectId: this.place.projectId,
+      projectId: this.browser.projectId,
+      selectedRemoteProject: this.browser.remoteProject,
       projects,
       recents,
       projectQuery: this.browser.projectQuery,
@@ -412,7 +405,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       onPopoverHide: () => this.browser.onPopoverHide(kind),
       onPopoverAfterHide: () => this.browser.onPopoverAfterHide(kind),
     });
-    const submitting = this.submission.submitting || this.browser.projectCloneBusy;
+    const submitting = this.submission.submitting;
     const pendingCloud = Boolean(this.submission.pendingCloud.sessionKey);
     return html`${renderWhereChip({
       state: whereState,
@@ -448,12 +441,11 @@ class NewSessionPage extends OpenClawLightDomElement {
         "operator.write",
       ),
       remoteProjects: this.browser.projectSearchResult?.projects ?? [],
+      selectedRemoteProject: this.browser.remoteProject,
       projectSearchCredentialMissing: this.browser.projectSearchResult?.credential === "missing",
       projectSearchLoading: this.browser.projectSearchLoading,
       projectSearchError: this.browser.projectSearchError,
-      projectCloneBusy: this.browser.projectCloneBusy,
-      projectCloneError: this.browser.projectCloneError,
-      projectId: this.place.projectId,
+      projectId: this.browser.projectId,
       execNodes,
       gatewayLabel,
       execNode: this.place.execNode,
@@ -470,7 +462,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       registeringProject: this.browser.browserRegistering,
       onSelectProject: (projectId) => this.place.selectProjectId(projectId),
       onProjectQueryInput: (query) => this.browser.changeProjectQuery(query),
-      onCloneProject: (gitUrl) => void this.browser.addRemoteProject(gitUrl),
+      onSelectRemoteProject: (project) => this.place.selectRemoteProject(project),
       onApplyFolder: (folder, execNode) =>
         this.place.applyFolder(
           folder,
