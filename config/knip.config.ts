@@ -211,6 +211,8 @@ const rootEntries = [
 const bundledPluginEntries = [
   "index.ts!",
   "setup-entry.ts!",
+  // Setup APIs may lazy-load this top-level package artifact by string specifier.
+  "setup-surface.ts!",
   // Core resolves these public plugin artifacts by basename rather than by a
   // static import from the plugin entry module.
   "*-api.ts!",
@@ -683,7 +685,6 @@ const config = {
       "browser-control-auth.ts!",
       "browser-config.ts!",
       "browser-doctor.ts!",
-      "browser-host-inspection.ts!",
       "browser-maintenance.ts!",
       "browser-profiles.ts!",
       // Built by tsdown as the native messaging executable; Chrome launches it by path.
