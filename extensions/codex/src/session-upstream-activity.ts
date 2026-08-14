@@ -7,6 +7,7 @@ import type {
 } from "openclaw/plugin-sdk/session-catalog";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CodexAppServerRpcError } from "./app-server/client.js";
+import { buildCodexAppServerConnectionFingerprint } from "./app-server/plugin-app-cache-key.js";
 import type {
   CodexThread,
   CodexThreadTurnsListParams,
@@ -18,6 +19,7 @@ import {
   sessionBindingIdentity,
   type CodexAppServerBindingStore,
 } from "./app-server/session-binding.js";
+import { resolveCodexCatalogHomes, type CodexCatalogHome } from "./session-catalog-homes.js";
 import type { CodexSessionCatalogControl } from "./session-catalog-types.js";
 
 const CODEX_UPSTREAM_TURN_LIMIT = 100;
@@ -38,7 +40,11 @@ function isCodexThreadGoneError(error: unknown): boolean {
 
 type CodexUpstreamControl = {
   connectionFingerprint?: string;
-  withPinnedConnection<T>(run: (control: CodexUpstreamControl) => Promise<T>): Promise<T>;
+  withPinnedConnection<T>(
+    run: (control: CodexUpstreamControl) => Promise<T>,
+    agentId?: string,
+    source?: CodexCatalogHome,
+  ): Promise<T>;
   listTurnPage(params: CodexThreadTurnsListParams): Promise<CodexThreadTurnsListResponse>;
   readThread(threadId: string, includeTurns?: boolean): Promise<CodexThread>;
 };
@@ -154,77 +160,123 @@ async function checkCodexUpstreamActivity(
   control: CodexUpstreamControl,
   resolveThreadId: (probe: SessionUpstreamProbe) => Promise<string> = async (probe) =>
     probe.threadId,
+  pin?: { agentId: string; source: CodexCatalogHome },
 ): Promise<SessionUpstreamActivity[]> {
-  return await control.withPinnedConnection(async (pinned) => {
-    const activities: SessionUpstreamActivity[] = [];
-    for (const probe of probes) {
-      const fingerprint = upstreamConnectionFingerprint(probe);
-      if (
-        probe.upstreamKind !== "codex-app-server" ||
-        !fingerprint ||
-        fingerprint !== pinned.connectionFingerprint
-      ) {
-        continue;
-      }
-      try {
-        const threadId = await resolveThreadId(probe);
-        const page = await pinned.listTurnPage({
-          threadId,
-          limit: CODEX_UPSTREAM_TURN_LIMIT,
-          sortDirection: "desc",
-          itemsView: "full",
-        });
-        const marker = readMarker(probe);
-        if (page.data.length === 0 && marker) {
-          // Deleted threads do NOT reject turns/list: codex-rs load_thread_turns_list_history
-          // swallows ThreadNotFound/no-rollout and returns an empty page, and rollback can
-          // empty a live thread too. thread/read is the existence oracle: it still succeeds
-          // after rollback and rejects "thread not loaded" only once the rollout is gone.
-          try {
-            await pinned.readThread(threadId, false);
-          } catch (error) {
-            if (isCodexThreadGoneError(error)) {
-              activities.push({ kind: "missing", sessionKey: probe.sessionKey });
-            }
-          }
+  return await control.withPinnedConnection(
+    async (pinned) => {
+      const activities: SessionUpstreamActivity[] = [];
+      for (const probe of probes) {
+        const fingerprint = upstreamConnectionFingerprint(probe);
+        if (
+          probe.upstreamKind !== "codex-app-server" ||
+          !fingerprint ||
+          fingerprint !== pinned.connectionFingerprint
+        ) {
           continue;
         }
-        const activity = classifyCodexUpstreamTurns({ probe, turns: page.data });
-        if (activity) {
-          activities.push(activity);
+        try {
+          const threadId = await resolveThreadId(probe);
+          const page = await pinned.listTurnPage({
+            threadId,
+            limit: CODEX_UPSTREAM_TURN_LIMIT,
+            sortDirection: "desc",
+            itemsView: "full",
+          });
+          const marker = readMarker(probe);
+          if (page.data.length === 0 && marker) {
+            // Deleted threads do NOT reject turns/list: codex-rs load_thread_turns_list_history
+            // swallows ThreadNotFound/no-rollout and returns an empty page, and rollback can
+            // empty a live thread too. thread/read is the existence oracle: it still succeeds
+            // after rollback and rejects "thread not loaded" only once the rollout is gone.
+            try {
+              await pinned.readThread(threadId, false);
+            } catch (error) {
+              if (isCodexThreadGoneError(error)) {
+                activities.push({ kind: "missing", sessionKey: probe.sessionKey });
+              }
+            }
+            continue;
+          }
+          const activity = classifyCodexUpstreamTurns({ probe, turns: page.data });
+          if (activity) {
+            activities.push(activity);
+          }
+        } catch {
+          // One transient probe failure must not suppress healthy sessions in the same batch.
         }
-      } catch {
-        // One transient probe failure must not suppress healthy sessions in the same batch.
       }
-    }
-    return activities;
-  });
+      return activities;
+    },
+    pin?.agentId,
+    pin?.source,
+  );
 }
 
 export function createChecker(params: {
   api: OpenClawPluginApi;
   bindingStore: CodexAppServerBindingStore;
   control: CodexSessionCatalogControl;
+  getPluginConfig?: () => unknown;
   getRuntimeConfig: () => OpenClawConfig | undefined;
 }): NonNullable<SessionCatalogProvider["checkUpstreamActivity"]> {
-  return async (probes) =>
-    await checkCodexUpstreamActivity(probes, params.control, async (probe) => {
-      const config = params.getRuntimeConfig();
-      const entry = params.api.runtime.agent.session.getSessionEntry({
-        agentId: probe.agentId,
-        sessionKey: probe.sessionKey,
-        readConsistency: "latest",
-      });
-      const sessionId = entry?.sessionId?.trim();
-      if (!sessionId) {
-        return probe.threadId;
-      }
-      const binding = await params.bindingStore.read(
-        sessionBindingIdentity({ sessionId, sessionKey: probe.sessionKey, config }),
-      );
-      return binding?.connectionScope === "supervision" &&
-        binding.supervisionSourceThreadId === probe.threadId
-        ? binding.threadId
-        : probe.threadId;
+  const resolveThreadId = async (probe: SessionUpstreamProbe) => {
+    const config = params.getRuntimeConfig();
+    const entry = params.api.runtime.agent.session.getSessionEntry({
+      agentId: probe.agentId,
+      sessionKey: probe.sessionKey,
+      readConsistency: "latest",
     });
+    const sessionId = entry?.sessionId?.trim();
+    if (!sessionId) {
+      return probe.threadId;
+    }
+    const binding = await params.bindingStore.read(
+      sessionBindingIdentity({ sessionId, sessionKey: probe.sessionKey, config }),
+    );
+    return binding?.connectionScope === "supervision" &&
+      binding.supervisionSourceThreadId === probe.threadId
+      ? binding.threadId
+      : probe.threadId;
+  };
+  return async (probes) => {
+    const config = params.getRuntimeConfig();
+    const groups = new Map<
+      string,
+      { agentId: string; source?: CodexCatalogHome; probes: SessionUpstreamProbe[] }
+    >();
+    for (const probe of probes) {
+      const fingerprint = upstreamConnectionFingerprint(probe);
+      if (!fingerprint) {
+        continue;
+      }
+      const source = resolveCodexCatalogHomes({
+        config,
+        pluginConfig: params.getPluginConfig?.(),
+        ownerAgentId: probe.agentId,
+      }).find(
+        (home) =>
+          home.hostId === probe.hostId &&
+          buildCodexAppServerConnectionFingerprint(home.appServer, home.agentDir) === fingerprint,
+      );
+      const key = `${probe.agentId}\0${source?.sourceHomeId ?? "legacy"}`;
+      const group = groups.get(key) ?? {
+        agentId: probe.agentId,
+        ...(source ? { source } : {}),
+        probes: [],
+      };
+      group.probes.push(probe);
+      groups.set(key, group);
+    }
+    const batches = await Promise.all(
+      [...groups.values()].map((group) =>
+        checkCodexUpstreamActivity(
+          group.probes,
+          params.control,
+          resolveThreadId,
+          group.source ? { agentId: group.agentId, source: group.source } : undefined,
+        ),
+      ),
+    );
+    return batches.flat();
+  };
 }

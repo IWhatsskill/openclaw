@@ -10,6 +10,7 @@ import { openCatalogSessionInTerminal } from "../../../lib/sessions/catalog-term
 export function renderChatTerminalButton(
   state: { sessionKey: string; terminalAvailable?: boolean } | null | undefined,
   session: SessionCatalogSession | null,
+  agentId: string,
   onToggleTerminal: (() => void) | undefined,
 ) {
   const catalogKey = state ? parseCatalogSessionKey(state.sessionKey) : null;
@@ -27,7 +28,7 @@ export function renderChatTerminalButton(
         type="button"
         aria-label=${label}
         @click=${() =>
-          catalogKey ? openCatalogSessionInTerminal(catalogKey) : onToggleTerminal?.()}
+          catalogKey ? openCatalogSessionInTerminal(catalogKey, agentId) : onToggleTerminal?.()}
       >
         ${icons.terminal}
       </button>

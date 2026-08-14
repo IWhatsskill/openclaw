@@ -7,10 +7,13 @@ import type {
   CodexThreadTurnsListParams,
   CodexThreadTurnsListResponse,
 } from "./app-server/protocol.js";
+import type { CodexCatalogHome } from "./session-catalog-homes.js";
 
 /** Read-only metadata for one Codex app-server thread. */
 export type CodexSessionCatalogSession = {
   threadId: string;
+  /** Opaque connection identity; never exposes the underlying Codex home path. */
+  sourceHomeId?: string;
   sessionId?: string;
   name?: string | null;
   /** Display-only fallback kept separate so title search never scans prompt previews. */
@@ -37,6 +40,9 @@ export type CodexSessionCatalogPage = {
 };
 
 export type CodexSessionCatalogPageParams = {
+  /** Explicit OpenClaw owner whose Codex home backs this request. */
+  agentId?: string;
+  source?: CodexCatalogHome;
   cursor?: string;
   limit?: number;
   searchTerm?: string;
@@ -48,13 +54,34 @@ export type CodexSessionCatalogPageParams = {
 export type CodexSessionCatalogControl = {
   clientId?: string;
   connectionFingerprint?: string;
-  withPinnedConnection<T>(run: (control: CodexSessionCatalogControl) => Promise<T>): Promise<T>;
+  withPinnedConnection<T>(
+    run: (control: CodexSessionCatalogControl) => Promise<T>,
+    agentId?: string,
+    source?: CodexCatalogHome,
+  ): Promise<T>;
   listPage(params: CodexSessionCatalogPageParams): Promise<CodexSessionCatalogPage>;
-  listDescendantPage(params: CodexThreadListParams): Promise<CodexThreadListResponse>;
-  listTurnPage(params: CodexThreadTurnsListParams): Promise<CodexThreadTurnsListResponse>;
-  forkThread(params: CodexThreadForkParams): Promise<CodexThreadForkResponse>;
-  readThread(threadId: string, includeTurns?: boolean): Promise<CodexThread>;
-  archiveThread(threadId: string): Promise<void>;
+  listDescendantPage(
+    params: CodexThreadListParams,
+    agentId?: string,
+    source?: CodexCatalogHome,
+  ): Promise<CodexThreadListResponse>;
+  listTurnPage(
+    params: CodexThreadTurnsListParams,
+    agentId?: string,
+    source?: CodexCatalogHome,
+  ): Promise<CodexThreadTurnsListResponse>;
+  forkThread(
+    params: CodexThreadForkParams,
+    agentId?: string,
+    source?: CodexCatalogHome,
+  ): Promise<CodexThreadForkResponse>;
+  readThread(
+    threadId: string,
+    includeTurns?: boolean,
+    agentId?: string,
+    source?: CodexCatalogHome,
+  ): Promise<CodexThread>;
+  archiveThread(threadId: string, agentId?: string, source?: CodexCatalogHome): Promise<void>;
 };
 
 export type CodexSessionCatalogError = {
@@ -90,6 +117,7 @@ export type CodexSessionTranscriptPage = {
 };
 
 export type CodexSessionCatalogParams = {
+  agentId?: string;
   search?: string;
   limitPerHost?: number;
   hostIds?: string[];

@@ -2,7 +2,6 @@ import type { Dirent, Stats } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import { parseDateFirstTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
@@ -1758,12 +1757,14 @@ async function resolveNodeClaudeRecord(params: {
 
 async function continueClaudeSession(
   api: OpenClawPluginApi,
+  agentId: string,
   hostId: string,
   threadId: string,
   allowProcessHomeFallback?: boolean,
 ): Promise<{ sessionKey: string }> {
   const scanOptions = gatewayClaudeScanOptions(allowProcessHomeFallback);
   const sourceKey = adoptedSourceKey(hostId, threadId);
+  const operationKey = `${agentId}\0${sourceKey}`;
   const linkSession = async (sessionKey: string, history?: ClaudeTranscriptItem[]) =>
     await upstream.linkContinued({
       sessionKey,
@@ -1782,11 +1783,11 @@ async function continueClaudeSession(
           })
         ).items,
     });
-  const existing = listBoundClaudeSessions(api).get(sourceKey);
+  const existing = listBoundClaudeSessions(api, agentId).get(sourceKey);
   if (existing) {
     return await linkSession(existing);
   }
-  const pending = upstream.continueOperations.get(sourceKey);
+  const pending = upstream.continueOperations.get(operationKey);
   if (pending) {
     return await pending;
   }
@@ -1840,7 +1841,7 @@ async function continueClaudeSession(
       allowProcessHomeFallback,
     });
     const config = currentClaudeSessionCatalogConfig(api);
-    const adoptingAgentId = resolveDefaultAgentId(config);
+    const adoptingAgentId = agentId;
     // Adopt onto the model this agent actually routes to the CLI backend; the
     // packaged default may not be routed or allowed in an existing config.
     const model =
@@ -1854,7 +1855,7 @@ async function continueClaudeSession(
       const created = await api.runtime.agent.session.createSessionEntry({
         cfg: config,
         key: adoptedSessionKey(hostId, threadId),
-        agentId: resolveDefaultAgentId(config),
+        agentId: adoptingAgentId,
         recoverMatchingInitialEntry: true,
         ...(record.name ? { label: record.name } : {}),
         ...(record.cwd ? { spawnedCwd: record.cwd } : {}),
@@ -1885,19 +1886,19 @@ async function continueClaudeSession(
       });
       return await linkSession(created.key, history);
     } catch (error) {
-      const raced = listBoundClaudeSessions(api).get(sourceKey);
+      const raced = listBoundClaudeSessions(api, agentId).get(sourceKey);
       if (raced) {
         return await linkSession(raced, history);
       }
       throw error;
     }
   })();
-  upstream.continueOperations.set(sourceKey, operation);
+  upstream.continueOperations.set(operationKey, operation);
   try {
     return await operation;
   } finally {
-    if (upstream.continueOperations.get(sourceKey) === operation) {
-      upstream.continueOperations.delete(sourceKey);
+    if (upstream.continueOperations.get(operationKey) === operation) {
+      upstream.continueOperations.delete(operationKey);
     }
   }
 }
@@ -1990,10 +1991,11 @@ export function createClaudeSessionCatalogRuntime(
 ): ClaudeSessionCatalogRuntime {
   return {
     list: async (query) => {
-      const adopted = listBoundClaudeSessions(api, query.sessionEntries);
+      const adopted = listBoundClaudeSessions(api, query.agentId, query.sessionEntries);
       const localCliAvailable = catalogTerminal.isClaudeCliAvailable();
       const {
         allowProcessHomeFallback,
+        agentId: _agentId,
         listNodes,
         onHost,
         sessionEntries: _sessionEntries,
@@ -2011,7 +2013,7 @@ export function createClaudeSessionCatalogRuntime(
       return result.hosts.map(mapHost);
     },
     read: async (request) => {
-      const { allowProcessHomeFallback, ...catalogRequest } = request;
+      const { agentId: _agentId, allowProcessHomeFallback, ...catalogRequest } = request;
       const page = await readClaudeSessionTranscript({
         runtime: api.runtime,
         hostId: catalogRequest.hostId,
@@ -2026,6 +2028,7 @@ export function createClaudeSessionCatalogRuntime(
       assertClaudeLocalAccess(request.hostId, request.allowProcessHomeFallback);
       return await continueClaudeSession(
         api,
+        request.agentId,
         request.hostId,
         request.threadId,
         request.allowProcessHomeFallback,

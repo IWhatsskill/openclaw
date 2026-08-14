@@ -1,6 +1,5 @@
 import process from "node:process";
 import { resolveAcpSessionAvailability } from "openclaw/plugin-sdk/acp-runtime";
-import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   decodeNodePtyResumeParams,
@@ -263,7 +262,7 @@ async function listPiHosts(
   const runtime = api.runtime;
   const canContinue = resolvePiContinuationAvailability(api).available;
   const adopted = query.sessionEntries
-    ? listAdoptedPiSessions(api, query.sessionEntries)
+    ? listAdoptedPiSessions(api, query.agentId, query.sessionEntries)
     : new Map<string, string>();
   const requested = query.hostIds ? new Set(query.hostIds) : undefined;
   const hosts: SessionCatalogHost[] = [];
@@ -362,9 +361,11 @@ function resolvePiContinuationAvailability(
 
 function listAdoptedPiSessions(
   api: OpenClawPluginApi,
+  agentId?: string,
   sessionEntries?: SessionCatalogEntrySnapshot,
 ): Map<string, string> {
   return listAdoptedSessionCatalogSessions({
+    ...(agentId ? { agentId } : {}),
     config: currentPiCatalogConfig(api),
     pluginId: api.id,
     runtime: api.runtime,
@@ -381,6 +382,7 @@ function listAdoptedPiSessions(
 
 async function continuePiSession(
   api: OpenClawPluginApi,
+  agentId: string,
   hostId: string,
   threadId: string,
 ): Promise<Awaited<ReturnType<typeof linkContinuedPiSession>>> {
@@ -397,7 +399,7 @@ async function continuePiSession(
   const sourceKey = sessionCatalogAdoptedSourceKey(hostId, threadId);
   return await continueAdoption({
     sourceKey,
-    findExisting: () => listAdoptedPiSessions(api).get(sourceKey),
+    findExisting: () => listAdoptedPiSessions(api, agentId).get(sourceKey),
     create: async () => {
       const record = await requireLocalPiSession(threadId).catch(() => undefined);
       if (!record) {
@@ -417,7 +419,7 @@ async function continuePiSession(
       const created = await api.runtime.agent.session.createSessionEntry({
         cfg: config,
         key: sessionCatalogAdoptedSessionKey(PI_ADOPTED_SESSION_KEY_PREFIX, threadId),
-        agentId: resolveDefaultAgentId(config),
+        agentId,
         recoverMatchingInitialEntry: true,
         ...(record.name ? { label: record.name } : {}),
         ...(record.cwd ? { spawnedCwd: record.cwd } : {}),
@@ -435,6 +437,7 @@ async function continuePiSession(
             threadId,
             read: async ({ cursor, limit }) =>
               await readPiTranscript(api.runtime, {
+                agentId: entry.agentId,
                 hostId,
                 threadId,
                 limit,
@@ -632,7 +635,7 @@ export function createPiSessionCatalogRuntime(api: OpenClawPluginApi) {
     read: async (request) => await readPiTranscript(api.runtime, request),
     continueSession: async (request) => {
       assertPiLocalAccess(request.hostId, request.allowProcessHomeFallback);
-      return await continuePiSession(api, request.hostId, request.threadId);
+      return await continuePiSession(api, request.agentId, request.hostId, request.threadId);
     },
     checkUpstreamActivity: (probes, policy) =>
       checkPiUpstreamActivity(

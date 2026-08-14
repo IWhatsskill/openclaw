@@ -704,10 +704,15 @@ describe("chat pane catalog continuation lifecycle", () => {
   it("hands a continued catalog draft to the retained destination pane", async () => {
     const request = vi.fn().mockResolvedValue({ sessionKey: "agent:main:continued" });
     const { key, pane, state } = createCatalogContinuationPane(request);
+    pane.catalogSession = { ...pane.catalogSession!, sourceHomeId: "source-home-a" };
 
     await pane.continueCatalogSession(key);
 
-    expect(request).toHaveBeenCalledWith("sessions.catalog.continue", key);
+    expect(request).toHaveBeenCalledWith("sessions.catalog.continue", {
+      ...key,
+      agentId: "main",
+      sourceHomeId: "source-home-a",
+    });
     expect(pane.onPaneSessionChange).toHaveBeenCalledWith("single", "agent:main:continued");
     expect(consumePaneSessionHandoff(pane.context, pane.paneId, "agent:main:continued")).toEqual({
       attachments: [],
@@ -761,7 +766,10 @@ describe("chat pane catalog continuation lifecycle", () => {
 
     await pane.continueCatalogSession(key);
 
-    expect(request).toHaveBeenCalledWith("sessions.catalog.continue", key);
+    expect(request).toHaveBeenCalledWith("sessions.catalog.continue", {
+      ...key,
+      agentId: "main",
+    });
     const handoff = consumePaneSessionHandoff(
       pane.context,
       pane.paneId,
@@ -814,6 +822,27 @@ describe("chat pane catalog continuation lifecycle", () => {
     expect(state.handleSendChat).not.toHaveBeenCalled();
     expect(state.sessionKey).toBe("agent:main:different-conversation");
     expect(state.chatMessage).toBe("Draft belonging to the selected conversation");
+    expect(state.chatSending).toBe(false);
+  });
+
+  it("does not apply a catalog continuation after the selected agent changes", async () => {
+    const continued = createDeferred<{ sessionKey: string }>();
+    const request = vi.fn(() => continued.promise);
+    const { key, pane, state } = createCatalogContinuationPane(request);
+    state.assistantAgentId = "main";
+
+    const pending = pane.continueCatalogSession(key);
+    state.assistantAgentId = "jarvis";
+    continued.resolve({ sessionKey: "agent:main:stale-owner" });
+    await pending;
+
+    expect(request).toHaveBeenCalledWith("sessions.catalog.continue", {
+      ...key,
+      agentId: "main",
+    });
+    expect(pane.onPaneSessionChange).not.toHaveBeenCalled();
+    expect(state.handleChatDraftChange).not.toHaveBeenCalled();
+    expect(state.handleSendChat).not.toHaveBeenCalled();
     expect(state.chatSending).toBe(false);
   });
 

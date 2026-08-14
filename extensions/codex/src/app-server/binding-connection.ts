@@ -1,3 +1,4 @@
+import { resolveCodexCatalogAppServerForFingerprint } from "../session-catalog-homes.js";
 // Codex helper module selects an app-server connection from private binding ownership.
 import {
   readCodexPluginConfig,
@@ -58,7 +59,7 @@ export function resolveCodexBindingAppServerConnection(
       "Codex supervision is disabled; refusing to open a native user-home supervised session",
     );
   }
-  const appServer = (
+  let appServer = (
     usesSupervisionConnection
       ? resolveCodexSupervisionAppServerRuntimeOptions
       : resolveCodexAppServerRuntimeOptions
@@ -69,6 +70,16 @@ export function resolveCodexBindingAppServerConnection(
     const persistedFingerprint =
       binding.pendingSupervisionBranch?.connectionFingerprint ??
       binding.appServerRuntimeFingerprint;
+    if (persistedFingerprint) {
+      appServer =
+        resolveCodexCatalogAppServerForFingerprint({
+          fingerprint: persistedFingerprint,
+          config: runtimeParams.config,
+          pluginConfig: runtimeParams.pluginConfig,
+          agentDir: runtimeParams.agentDir,
+          env: runtimeParams.env,
+        }) ?? appServer;
+    }
     const currentFingerprint = buildCodexAppServerConnectionFingerprint(
       appServer,
       runtimeParams.agentDir,

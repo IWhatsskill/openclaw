@@ -775,7 +775,7 @@ describe("chat pane catalog session lifecycle", () => {
     } finally {
       window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, listener);
     }
-    expect(detail).toEqual({ open: true, catalog: key });
+    expect(detail).toEqual({ open: true, agentId: "main", catalog: key });
   });
 
   it("finds continuation metadata on a later catalog page", async () => {
@@ -786,6 +786,7 @@ describe("chat pane catalog session lifecycle", () => {
     } satisfies CatalogSessionKey;
     const selectedSession: SessionCatalogSession = {
       threadId: key.threadId,
+      sourceHomeId: "source-home-a",
       status: "idle",
       archived: false,
       canContinue: true,
@@ -835,18 +836,76 @@ describe("chat pane catalog session lifecycle", () => {
     await pane.loadCatalogSession(key, false);
 
     expect(request).toHaveBeenNthCalledWith(2, "sessions.catalog.list", {
+      agentId: "main",
       catalogId: key.catalogId,
       hostIds: [key.hostId],
       limitPerHost: 100,
       cursors: { [key.hostId]: "page-2" },
     });
     expect(request).toHaveBeenNthCalledWith(3, "sessions.catalog.read", {
+      agentId: "main",
       catalogId: key.catalogId,
       hostId: key.hostId,
       threadId: key.threadId,
+      sourceHomeId: "source-home-a",
       limit: 50,
     });
     expect(pane.catalogSession).toEqual(selectedSession);
+  });
+
+  it("discards a catalog read when the selected agent changes", async () => {
+    const key = {
+      catalogId: "codex",
+      hostId: "gateway:local",
+      threadId: "thread-101",
+    } satisfies CatalogSessionKey;
+    const read = createDeferred<SessionsCatalogReadResult>();
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        catalogs: [
+          {
+            id: "codex",
+            label: "Codex",
+            capabilities: {},
+            hosts: [
+              {
+                hostId: "gateway:local",
+                label: "Gateway",
+                kind: "gateway",
+                connected: true,
+                sessions: [
+                  {
+                    threadId: key.threadId,
+                    status: "idle",
+                    archived: false,
+                    canContinue: true,
+                    canArchive: true,
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      })
+      .mockImplementationOnce(() => read.promise);
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    pane.sessionKey = buildCatalogSessionKey(key);
+    state.sessionKey = pane.sessionKey;
+    state.assistantAgentId = "main";
+
+    const pending = pane.loadCatalogSession(key, false);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    state.assistantAgentId = "jarvis";
+    read.resolve({
+      hostId: key.hostId,
+      threadId: key.threadId,
+      items: [{ id: "u1", type: "userMessage", text: "stale" }],
+    });
+
+    await expect(pending).resolves.toBe(false);
+    expect(pane.catalogMessages).toEqual([]);
   });
 
   it.each([

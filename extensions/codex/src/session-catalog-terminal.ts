@@ -1,5 +1,5 @@
 // Codex catalog terminal ownership: validated resume commands and terminal plans.
-import { resolveDefaultAgentDir } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveAgentDir, resolveDefaultAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   decodeNodePtyResumeParams,
@@ -14,6 +14,7 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { SessionCatalogTerminalPlan } from "openclaw/plugin-sdk/session-catalog";
 import { resolveCodexAppServerLocalHomeDir } from "./app-server/auth-start-options.js";
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./app-server/config.js";
+import type { CodexCatalogHome } from "./session-catalog-homes.js";
 import {
   CatalogParamsError,
   CODEX_APP_SERVER_THREADS_CAPABILITY,
@@ -38,15 +39,24 @@ export type CodexTerminalConfigSources = {
   getRuntimeConfig: () => OpenClawConfig | undefined;
 };
 
-function resolveCodexCatalogTerminalHome(sources: CodexTerminalConfigSources): string {
+function resolveCodexCatalogTerminalHome(
+  sources: CodexTerminalConfigSources & { agentId?: string; source?: CodexCatalogHome },
+): string {
   const runtimeConfig = sources.getRuntimeConfig();
   if (!runtimeConfig) {
     throw new Error("OpenClaw runtime config is unavailable");
   }
-  const startOptions = resolveCodexSupervisionAppServerRuntimeOptions({
-    pluginConfig: sources.getPluginConfig(),
-  }).start;
-  return resolveCodexAppServerLocalHomeDir(startOptions, resolveDefaultAgentDir(runtimeConfig));
+  const agentDir =
+    sources.source?.agentDir ??
+    (sources.agentId
+      ? resolveAgentDir(runtimeConfig, sources.agentId)
+      : resolveDefaultAgentDir(runtimeConfig));
+  const startOptions =
+    sources.source?.appServer.start ??
+    resolveCodexSupervisionAppServerRuntimeOptions({
+      pluginConfig: sources.getPluginConfig(),
+    }).start;
+  return resolveCodexAppServerLocalHomeDir(startOptions, agentDir);
 }
 
 export function resolveLocalCodexTerminalExecutable(
@@ -77,14 +87,16 @@ export function codexNodeTerminalCapability(node: {
 export async function requireCatalogEligibleThread(
   control: CodexSessionCatalogControl,
   threadId: string,
+  agentId?: string,
+  source?: CodexCatalogHome,
 ): Promise<CodexSessionCatalogSession> {
   // Mutating actions use a fresh pinned control and authoritative thread/read. Passive positive hits
   // may use the cadence-safe page memo; only a miss must bypass it before rejecting a new thread.
-  const cached = await findCatalogEligibleThread(control, threadId, false);
+  const cached = await findCatalogEligibleThread(control, threadId, false, agentId, source);
   if (cached) {
     return cached;
   }
-  const refreshed = await findCatalogEligibleThread(control, threadId, true);
+  const refreshed = await findCatalogEligibleThread(control, threadId, true, agentId, source);
   if (refreshed) {
     return refreshed;
   }
@@ -95,11 +107,15 @@ async function findCatalogEligibleThread(
   control: CodexSessionCatalogControl,
   threadId: string,
   forceRefresh: boolean,
+  agentId?: string,
+  source?: CodexCatalogHome,
 ): Promise<CodexSessionCatalogSession | undefined> {
   let cursor: string | undefined;
   const seenCursors = new Set<string>();
   for (let pageIndex = 0; pageIndex < MAX_ACTION_CATALOG_PAGES; pageIndex += 1) {
     const page = await control.listPage({
+      ...(agentId ? { agentId } : {}),
+      ...(source ? { source } : {}),
       limit: CODEX_SESSION_CATALOG_MAX_PAGE_LIMIT,
       ...(cursor ? { cursor } : {}),
       ...(forceRefresh ? { forceRefresh: true } : {}),
@@ -219,16 +235,26 @@ async function resolveNodeCatalogEligibleThread(params: {
 
 export async function openCodexCatalogTerminal(
   params: {
+    agentId: string;
     api: OpenClawPluginApi;
     control: CodexSessionCatalogControl;
     hostId: string;
     threadId: string;
     parseCatalogPage: (value: unknown) => CodexSessionCatalogPage;
+    source?: CodexCatalogHome;
   } & CodexTerminalConfigSources,
 ): Promise<SessionCatalogTerminalPlan> {
   const title = `codex resume ${params.threadId.slice(0, 8)}…`;
-  if (params.hostId === CODEX_LOCAL_SESSION_HOST_ID) {
-    const record = await requireCatalogEligibleThread(params.control, params.threadId);
+  if (
+    params.hostId === CODEX_LOCAL_SESSION_HOST_ID ||
+    params.hostId.startsWith(`${CODEX_LOCAL_SESSION_HOST_ID}:`)
+  ) {
+    const record = await requireCatalogEligibleThread(
+      params.control,
+      params.threadId,
+      params.agentId,
+      params.source,
+    );
     const resolution = resolveLocalCodexTerminalResolution();
     // A managed app-server may exist without a local CLI. Fail closed so
     // terminal resume never targets a different machine or missing binary.
