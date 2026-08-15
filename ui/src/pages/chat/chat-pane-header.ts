@@ -376,7 +376,7 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
       panelActions: html`${renderChatTerminalButton(
         this.state,
         this.catalogSession,
-        this.state ? resolveChatAgentId(this.state) : "main",
+        this.state ? resolveChatAgentId(this.state) : null,
         sessionWorkspace.onToggleTerminal,
       )}${browserPanelAction}${desktopPanelAction}`,
       discussionAction: this.renderSessionDiscussionAction(discussion),

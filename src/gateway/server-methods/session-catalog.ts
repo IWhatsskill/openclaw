@@ -4,6 +4,7 @@ import {
   ErrorCodes,
   errorShape,
   type SessionCatalog,
+  type SessionCatalogLocator,
   type SessionsCatalogArchiveParams,
   type SessionsCatalogContinueParams,
   type SessionsCatalogListParams,
@@ -39,7 +40,12 @@ import {
   filterSessionCatalogHost,
   resolveSessionCatalogVisibility,
 } from "./session-catalog-visibility.js";
-import type { GatewayRequestHandlers, RespondFn } from "./types.js";
+import type {
+  GatewayClient,
+  GatewayRequestContext,
+  GatewayRequestHandlers,
+  RespondFn,
+} from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 const SESSION_CATALOG_SEARCH_MAX_UTF16_UNITS = 500;
@@ -261,6 +267,33 @@ function providerOrRespond(
     );
   }
   return provider;
+}
+
+async function authorizeCatalogRequest(params: {
+  request: SessionCatalogLocator & { agentId?: string };
+  provider: SessionCatalogProvider;
+  respond: RespondFn;
+  context: GatewayRequestContext;
+  client: GatewayClient | null;
+}): Promise<{ agentId: string; allowProcessHomeFallback: boolean } | null> {
+  const resolvedAgent = resolveAgentIdOrRespondError({
+    rawAgentId: params.request.agentId,
+    respond: params.respond,
+    cfg: params.context.getRuntimeConfig(),
+    normalize: normalizeOptionalString,
+  });
+  if (!resolvedAgent) {
+    return null;
+  }
+  const authorization = await authorizeSessionCatalogThread({
+    agentId: resolvedAgent.agentId,
+    client: params.client,
+    context: params.context,
+    provider: params.provider,
+    request: params.request,
+    respond: params.respond,
+  });
+  return authorization ? { agentId: resolvedAgent.agentId, ...authorization } : null;
 }
 
 function registrationOrRespond(catalogId: string, respond: RespondFn) {
@@ -488,23 +521,13 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
     if (!provider) {
       return;
     }
-    const resolvedAgent = resolveAgentIdOrRespondError({
-      rawAgentId: request.agentId,
-      respond,
-      cfg: context.getRuntimeConfig(),
-      normalize: normalizeOptionalString,
-    });
-    if (!resolvedAgent) {
-      return;
-    }
     try {
-      const authorization = await authorizeSessionCatalogThread({
-        agentId: resolvedAgent.agentId,
-        client,
-        context,
-        provider,
+      const authorization = await authorizeCatalogRequest({
         request,
+        provider,
         respond,
+        context,
+        client,
       });
       if (!authorization) {
         return;
@@ -514,7 +537,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
         true,
         await provider.read({
           ...providerRequest,
-          agentId: resolvedAgent.agentId,
+          agentId: authorization.agentId,
           allowProcessHomeFallback: authorization.allowProcessHomeFallback,
         }),
       );
@@ -549,23 +572,13 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "catalog is view-only"));
       return;
     }
-    const resolvedAgent = resolveAgentIdOrRespondError({
-      rawAgentId: request.agentId,
-      respond,
-      cfg: context.getRuntimeConfig(),
-      normalize: normalizeOptionalString,
-    });
-    if (!resolvedAgent) {
-      return;
-    }
     try {
-      const authorization = await authorizeSessionCatalogThread({
-        agentId: resolvedAgent.agentId,
-        client,
-        context,
-        provider,
+      const authorization = await authorizeCatalogRequest({
         request,
+        provider,
         respond,
+        context,
+        client,
       });
       if (!authorization) {
         return;
@@ -576,7 +589,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       const clientScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
       const result = await provider.continueSession({
         ...providerRequest,
-        agentId: resolvedAgent.agentId,
+        agentId: authorization.agentId,
         allowProcessHomeFallback: authorization.allowProcessHomeFallback,
         clientScopes,
       });
@@ -657,23 +670,13 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "catalog cannot archive"));
       return;
     }
-    const resolvedAgent = resolveAgentIdOrRespondError({
-      rawAgentId: request.agentId,
-      respond,
-      cfg: context.getRuntimeConfig(),
-      normalize: normalizeOptionalString,
-    });
-    if (!resolvedAgent) {
-      return;
-    }
     try {
-      const authorization = await authorizeSessionCatalogThread({
-        agentId: resolvedAgent.agentId,
-        client,
-        context,
-        provider,
+      const authorization = await authorizeCatalogRequest({
         request,
+        provider,
         respond,
+        context,
+        client,
       });
       if (!authorization) {
         return;
@@ -683,7 +686,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
         true,
         await provider.archive({
           ...providerRequest,
-          agentId: resolvedAgent.agentId,
+          agentId: authorization.agentId,
           allowProcessHomeFallback: authorization.allowProcessHomeFallback,
         }),
       );

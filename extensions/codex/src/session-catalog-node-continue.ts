@@ -359,8 +359,10 @@ export async function continueNodeCodexSession(params: {
   if (!nodeId || params.hostId !== `node:${nodeId}`) {
     throw new CatalogParamsError("Codex session catalog hostId is invalid");
   }
-  const agentId =
-    params.agentId ?? resolveSessionAgentIds({ config: params.config }).defaultAgentId;
+  const agentId = resolveSessionAgentIds({
+    config: params.config,
+    agentId: params.agentId,
+  }).defaultAgentId;
   const sourceKey = adoptedSourceKey(`node:${nodeId}`, params.threadId);
   const operationKey = adoptedOwnerSourceKey(agentId, `node:${nodeId}`, params.threadId);
   const current = continueOperations.get(operationKey) as

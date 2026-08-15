@@ -2029,7 +2029,7 @@ export function createClaudeSessionCatalogRuntime(
       assertClaudeLocalAccess(request.hostId, request.allowProcessHomeFallback);
       const agentId = resolveSessionAgentIds({
         config: api.config,
-        ...(request.agentId ? { agentId: request.agentId } : {}),
+        agentId: request.agentId,
       }).sessionAgentId;
       return await continueClaudeSession(
         api,

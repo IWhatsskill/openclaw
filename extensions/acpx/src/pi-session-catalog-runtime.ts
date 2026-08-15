@@ -638,7 +638,7 @@ export function createPiSessionCatalogRuntime(api: OpenClawPluginApi) {
       assertPiLocalAccess(request.hostId, request.allowProcessHomeFallback);
       const agentId = resolveSessionAgentIds({
         config: api.config,
-        ...(request.agentId ? { agentId: request.agentId } : {}),
+        agentId: request.agentId,
       }).sessionAgentId;
       return await continuePiSession(api, agentId, request.hostId, request.threadId);
     },

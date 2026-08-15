@@ -621,7 +621,7 @@ export function registerOpenCodeSessionCatalog(api: OpenClawPluginApi): void {
       assertOpenCodeLocalAccess(request.hostId, request.allowProcessHomeFallback);
       const agentId = resolveSessionAgentIds({
         config: api.config,
-        ...(request.agentId ? { agentId: request.agentId } : {}),
+        agentId: request.agentId,
       }).sessionAgentId;
       return await continueOpenCodeSession(api, agentId, request.hostId, request.threadId);
     },

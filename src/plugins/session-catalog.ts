@@ -214,7 +214,7 @@ export function listSessionCatalogEntries(params: {
     params.agentId || requiresExplicitOwner
       ? resolveSessionAgentIds({
           config: params.config,
-          ...(params.agentId ? { agentId: params.agentId } : {}),
+          agentId: params.agentId,
         }).sessionAgentId
       : undefined;
   const requestEntries = params.sessionEntries?.entriesForCatalog?.();
