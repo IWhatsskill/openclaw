@@ -2,9 +2,9 @@ import { createHash } from "node:crypto";
 import {
   listAgentIds,
   resolveAgentDir,
-  resolveDefaultAgentDir,
   resolveSessionAgentIds,
 } from "openclaw/plugin-sdk/agent-runtime";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   OpenClawPluginApi,
@@ -28,6 +28,8 @@ import {
 import { buildCodexAppServerConnectionFingerprint } from "./app-server/plugin-app-cache-key.js";
 import { assertCodexThreadForkParams } from "./app-server/protocol-validators.js";
 import type {
+  CodexAppServerRequestParams,
+  CodexAppServerRequestResult,
   CodexThread,
   CodexThreadForkParams,
   CodexThreadForkResponse,
@@ -52,7 +54,7 @@ import {
 import { assertCodexArchiveDescendantsUnowned } from "./app-server/thread-archive-guard.js";
 import { codexControlRequest } from "./command-rpc.js";
 import { resolveCodexCatalogCreateSession } from "./session-catalog-create.js";
-import { createCodexCatalogHomeSnapshot, type CodexCatalogHome } from "./session-catalog-homes.js";
+import { createCodexCatalogHomeResolver, type CodexCatalogHome } from "./session-catalog-homes.js";
 import {
   adoptedOwnerSourceKey,
   adoptedSourceKey,
@@ -113,6 +115,7 @@ import {
 import { toGenericTranscriptItem } from "./session-catalog-transcript-item.js";
 import type {
   CodexSessionCatalogControl,
+  CodexSessionCatalogControlFactory,
   CodexSessionCatalogHost,
   CodexSessionCatalogPage,
   CodexSessionCatalogPageParams,
@@ -144,15 +147,18 @@ type CodexCatalogRequestOptions = {
 type CodexCatalogPageCacheEntry = {
   expiresAt: number;
   page: Promise<CodexSessionCatalogPage>;
-  settledPage?: Promise<CodexSessionCatalogPage>;
-  stalePage?: Promise<CodexSessionCatalogPage>;
+  value?: CodexSessionCatalogPage;
 };
 
-function codexCatalogPageCacheKey(params: CodexSessionCatalogPageParams): string {
+function codexCatalogPageCacheKey(
+  params: CodexSessionCatalogPageParams,
+  agentId: string,
+  source?: CodexCatalogHome,
+): string {
   // Mirror listPage's search/cwd normalization; these trimmed values are what reach app-server.
   return JSON.stringify([
-    params.agentId ?? null,
-    params.source?.sourceHomeId ?? null,
+    agentId,
+    source?.sourceHomeId ?? null,
     params.cursor ?? null,
     params.limit ?? null,
     params.searchTerm?.trim().toLocaleLowerCase() || null,
@@ -174,13 +180,42 @@ type CodexSessionCatalogRequestSnapshot = {
   archiveThread(threadId: string): Promise<void>;
 };
 
+type CodexCatalogRequestMethod =
+  | typeof CODEX_CONTROL_METHODS.archiveThread
+  | typeof CODEX_CONTROL_METHODS.forkThread
+  | typeof CODEX_CONTROL_METHODS.listThreads
+  | typeof CODEX_CONTROL_METHODS.listThreadTurns
+  | typeof CODEX_CONTROL_METHODS.readThread;
+
+type CodexCatalogRequest = <M extends CodexCatalogRequestMethod>(
+  method: M,
+  requestParams: CodexAppServerRequestParams<M>,
+  timeoutMs?: number,
+) => Promise<CodexAppServerRequestResult<M>>;
+
+function createCodexCatalogRequestSnapshot(
+  requestTimeoutMs: number,
+  request: CodexCatalogRequest,
+): CodexSessionCatalogRequestSnapshot {
+  return {
+    requestTimeoutMs,
+    listThreads: (params, timeoutMs) =>
+      request(CODEX_CONTROL_METHODS.listThreads, params, timeoutMs),
+    listThreadTurns: (params) => request(CODEX_CONTROL_METHODS.listThreadTurns, params),
+    forkThread: (params) =>
+      request(CODEX_CONTROL_METHODS.forkThread, assertCodexThreadForkParams(params)),
+    readThread: async (threadId, includeTurns) =>
+      (await request(CODEX_CONTROL_METHODS.readThread, { threadId, includeTurns })).thread,
+    archiveThread: async (threadId) => {
+      await request(CODEX_CONTROL_METHODS.archiveThread, { threadId });
+    },
+  };
+}
+
 function createCodexSessionCatalogControlFromRequests(params: {
   clientId?: string;
   connectionFingerprint?: string;
-  createRequestSnapshot: (
-    agentId?: string,
-    source?: CodexCatalogHome,
-  ) => CodexSessionCatalogRequestSnapshot;
+  createRequestSnapshot: () => CodexSessionCatalogRequestSnapshot;
   now: () => number;
   withPinnedConnection: CodexSessionCatalogControl["withPinnedConnection"];
 }): CodexSessionCatalogControl {
@@ -202,7 +237,7 @@ function createCodexSessionCatalogControlFromRequests(params: {
       let nextCursor: string | undefined;
       let backwardsCursor: string | undefined;
       const seenCursors = new Set(cursor ? [cursor] : []);
-      const requests = params.createRequestSnapshot(pageParams.agentId, pageParams.source);
+      const requests = params.createRequestSnapshot();
       const deadline = params.now() + requests.requestTimeoutMs;
 
       for (let pageIndex = 0; pageIndex < maxPages; pageIndex += 1) {
@@ -252,28 +287,24 @@ function createCodexSessionCatalogControlFromRequests(params: {
         ...(backwardsCursor ? { backwardsCursor } : {}),
       };
     },
-    async listDescendantPage(listParams, agentId, source) {
-      const requests = params.createRequestSnapshot(agentId, source);
+    async listDescendantPage(listParams) {
+      const requests = params.createRequestSnapshot();
       const response = await requests.listThreads(listParams, requests.requestTimeoutMs);
       return response;
     },
-    async readThread(threadId, includeTurns, agentId, source) {
-      const thread = await params
-        .createRequestSnapshot(agentId, source)
-        .readThread(threadId, includeTurns ?? false);
+    async readThread(threadId, includeTurns = false) {
+      const thread = await params.createRequestSnapshot().readThread(threadId, includeTurns);
       return thread;
     },
-    async listTurnPage(listParams, agentId, source) {
-      const response = await params
-        .createRequestSnapshot(agentId, source)
-        .listThreadTurns(listParams);
+    async listTurnPage(listParams) {
+      const response = await params.createRequestSnapshot().listThreadTurns(listParams);
       return response;
     },
-    async forkThread(forkParams, agentId, source) {
-      return await params.createRequestSnapshot(agentId, source).forkThread(forkParams);
+    async forkThread(forkParams) {
+      return await params.createRequestSnapshot().forkThread(forkParams);
     },
-    async archiveThread(threadId, agentId, source) {
-      await params.createRequestSnapshot(agentId, source).archiveThread(threadId);
+    async archiveThread(threadId) {
+      await params.createRequestSnapshot().archiveThread(threadId);
     },
   };
 }
@@ -283,7 +314,7 @@ export function createCodexSessionCatalogControl(params: {
   getPluginConfig: () => unknown;
   getRuntimeConfig: () => OpenClawConfig | undefined;
   now?: () => number;
-}): CodexSessionCatalogControl {
+}): CodexSessionCatalogControlFactory {
   const now = params.now ?? Date.now;
   const getPluginConfig = () => params.getPluginConfig();
   const requestOptionsByConfig = new WeakMap<
@@ -296,15 +327,11 @@ export function createCodexSessionCatalogControl(params: {
   >();
   const resolveRequestOptions = (
     startOptions: CodexAppServerStartOptions,
-    agentId?: string,
+    agentId: string,
     source?: CodexCatalogHome,
   ): CodexCatalogRequestOptions => {
     const runtimeConfig = params.getRuntimeConfig();
-    const agentDir =
-      source?.agentDir ??
-      (agentId
-        ? resolveAgentDir(runtimeConfig ?? {}, agentId)
-        : resolveDefaultAgentDir(runtimeConfig ?? {}));
+    const agentDir = source?.agentDir ?? resolveAgentDir(runtimeConfig ?? {}, agentId);
     const resolvedStartOptions = source?.appServer.start ?? startOptions;
     if (!runtimeConfig) {
       return {
@@ -334,260 +361,145 @@ export function createCodexSessionCatalogControl(params: {
     return resolved;
   };
   const createRequestSnapshot = (
-    agentId?: string,
+    agentId: string,
     source?: CodexCatalogHome,
   ): CodexSessionCatalogRequestSnapshot => {
     const pluginConfig = getPluginConfig();
     const runtime =
       source?.appServer ?? resolveCodexSupervisionAppServerRuntimeOptions({ pluginConfig });
     const requestOptions = resolveRequestOptions(runtime.start, agentId, source);
-    return {
-      requestTimeoutMs: runtime.requestTimeoutMs,
-      listThreads: async (listParams, timeoutMs) =>
-        await codexControlRequest(pluginConfig, CODEX_CONTROL_METHODS.listThreads, listParams, {
+    return createCodexCatalogRequestSnapshot(
+      runtime.requestTimeoutMs,
+      async (method, requestParams, timeoutMs) =>
+        await codexControlRequest(pluginConfig, method, requestParams, {
           ...requestOptions,
-          timeoutMs,
+          ...(timeoutMs === undefined ? {} : { timeoutMs }),
         }),
-      readThread: async (threadId, includeTurns) =>
-        (
-          await codexControlRequest(
-            pluginConfig,
-            CODEX_CONTROL_METHODS.readThread,
-            { threadId, includeTurns },
-            requestOptions,
-          )
-        ).thread,
-      listThreadTurns: async (listParams) =>
-        await codexControlRequest(
-          pluginConfig,
-          CODEX_CONTROL_METHODS.listThreadTurns,
-          listParams,
-          requestOptions,
-        ),
-      forkThread: async (forkParams) =>
-        await codexControlRequest(
-          pluginConfig,
-          CODEX_CONTROL_METHODS.forkThread,
-          assertCodexThreadForkParams(forkParams),
-          requestOptions,
-        ),
-      archiveThread: async (threadId) => {
-        await codexControlRequest(
-          pluginConfig,
-          CODEX_CONTROL_METHODS.archiveThread,
-          { threadId },
-          requestOptions,
-        );
-      },
-    };
+    );
   };
 
-  const withPinnedConnection: CodexSessionCatalogControl["withPinnedConnection"] = async (
-    run,
-    agentId,
-    source,
-  ) => {
-    const pluginConfig = getPluginConfig();
-    const runtime =
-      source?.appServer ?? resolveCodexSupervisionAppServerRuntimeOptions({ pluginConfig });
-    const {
-      agentDir,
-      config: runtimeConfig,
-      startOptions,
-    } = resolveRequestOptions(runtime.start, agentId, source);
-    const client = await getLeasedSharedCodexAppServerClient({
-      agentDir,
-      config: runtimeConfig,
-      startOptions,
-      timeoutMs: runtime.requestTimeoutMs,
-    });
-    try {
-      const requests: CodexSessionCatalogRequestSnapshot = {
-        requestTimeoutMs: runtime.requestTimeoutMs,
-        listThreads: async (listParams, timeoutMs) =>
-          await requestCodexAppServerClientJson<CodexThreadListResponse>({
-            client,
-            method: CODEX_CONTROL_METHODS.listThreads,
-            requestParams: listParams,
-            config: runtimeConfig,
-            timeoutMs,
-          }),
-        readThread: async (threadId, includeTurns) =>
-          (
-            await requestCodexAppServerClientJson<{ thread: CodexThread }>({
+  const forRequest = (agentId: string, source?: CodexCatalogHome): CodexSessionCatalogControl => {
+    const withPinnedConnection: CodexSessionCatalogControl["withPinnedConnection"] = async (
+      run,
+    ) => {
+      const pluginConfig = getPluginConfig();
+      const runtime =
+        source?.appServer ?? resolveCodexSupervisionAppServerRuntimeOptions({ pluginConfig });
+      const {
+        agentDir,
+        config: runtimeConfig,
+        startOptions,
+      } = resolveRequestOptions(runtime.start, agentId, source);
+      const client = await getLeasedSharedCodexAppServerClient({
+        agentDir,
+        config: runtimeConfig,
+        startOptions,
+        timeoutMs: runtime.requestTimeoutMs,
+      });
+      try {
+        const requests = createCodexCatalogRequestSnapshot(
+          runtime.requestTimeoutMs,
+          async <M extends CodexCatalogRequestMethod>(
+            method: M,
+            requestParams: CodexAppServerRequestParams<M>,
+            timeoutMs?: number,
+          ): Promise<CodexAppServerRequestResult<M>> =>
+            await requestCodexAppServerClientJson<CodexAppServerRequestResult<M>>({
               client,
-              method: CODEX_CONTROL_METHODS.readThread,
-              requestParams: { threadId, includeTurns },
+              method,
+              requestParams,
               config: runtimeConfig,
-              timeoutMs: runtime.requestTimeoutMs,
-            })
-          ).thread,
-        listThreadTurns: async (listParams) =>
-          await requestCodexAppServerClientJson<CodexThreadTurnsListResponse>({
-            client,
-            method: CODEX_CONTROL_METHODS.listThreadTurns,
-            requestParams: listParams,
-            config: runtimeConfig,
-            timeoutMs: runtime.requestTimeoutMs,
-          }),
-        forkThread: async (forkParams) =>
-          await requestCodexAppServerClientJson<CodexThreadForkResponse>({
-            client,
-            method: CODEX_CONTROL_METHODS.forkThread,
-            requestParams: assertCodexThreadForkParams(forkParams),
-            config: runtimeConfig,
-            timeoutMs: runtime.requestTimeoutMs,
-          }),
-        archiveThread: async (threadId) => {
-          await requestCodexAppServerClientJson({
-            client,
-            method: CODEX_CONTROL_METHODS.archiveThread,
-            requestParams: { threadId },
-            config: runtimeConfig,
-            timeoutMs: runtime.requestTimeoutMs,
+              timeoutMs: timeoutMs ?? runtime.requestTimeoutMs,
+            }),
+        );
+        const pinnedControl: CodexSessionCatalogControl =
+          createCodexSessionCatalogControlFromRequests({
+            clientId: resolveCodexAppServerClientInstanceId(client),
+            connectionFingerprint: buildCodexAppServerConnectionFingerprint(runtime, agentDir),
+            createRequestSnapshot: () => requests,
+            now,
+            withPinnedConnection: async (nestedRun) => await nestedRun(pinnedControl),
           });
-        },
-      };
-      const pinnedControl: CodexSessionCatalogControl =
-        createCodexSessionCatalogControlFromRequests({
-          clientId: resolveCodexAppServerClientInstanceId(client),
-          connectionFingerprint: buildCodexAppServerConnectionFingerprint(runtime, agentDir),
-          createRequestSnapshot: () => requests,
-          now,
-          withPinnedConnection: async (nestedRun) => await nestedRun(pinnedControl),
-        });
-      return await run(pinnedControl);
-    } finally {
-      releaseLeasedSharedCodexAppServerClient(client);
-    }
-  };
-
-  const control = createCodexSessionCatalogControlFromRequests({
-    createRequestSnapshot,
-    now,
-    withPinnedConnection,
-  });
-  return {
-    ...control,
-    async listPage(pageParams) {
-      const runtimeConfig = params.getRuntimeConfig();
-      if (!runtimeConfig) {
-        return await control.listPage(pageParams);
+        return await run(pinnedControl);
+      } finally {
+        releaseLeasedSharedCodexAppServerClient(client);
       }
-      let cache = catalogPagesByConfig.get(runtimeConfig);
-      if (!cache) {
-        cache = new Map();
-        catalogPagesByConfig.set(runtimeConfig, cache);
-      }
-      const key = codexCatalogPageCacheKey(pageParams);
-      const cached = cache.get(key);
-      if (pageParams.forceRefresh !== true && cached) {
-        // A settled page always serves immediately. Expiry only starts one background refresh;
-        // its result becomes visible on the next poll (one polling cycle, about 30s, for a native
-        // session created outside OpenClaw). The TTL is a refresh trigger, never a serve gate.
-        cache.delete(key);
-        cache.set(key, cached);
-        if (cached.stalePage) {
-          return await cached.stalePage;
+    };
+    const control = createCodexSessionCatalogControlFromRequests({
+      createRequestSnapshot: () => createRequestSnapshot(agentId, source),
+      now,
+      withPinnedConnection,
+    });
+    return {
+      ...control,
+      async listPage(pageParams: CodexSessionCatalogPageParams) {
+        const runtimeConfig = params.getRuntimeConfig();
+        if (!runtimeConfig) {
+          return await control.listPage(pageParams);
         }
-        if (cached.expiresAt > now()) {
-          return await cached.page;
+        let cache = catalogPagesByConfig.get(runtimeConfig);
+        if (!cache) {
+          cache = new Map();
+          catalogPagesByConfig.set(runtimeConfig, cache);
         }
-
-        const stalePage = cached.settledPage;
-        if (!stalePage) {
-          return await cached.page;
+        const key = codexCatalogPageCacheKey(pageParams, agentId, source);
+        const cached = cache.get(key);
+        if (pageParams.forceRefresh !== true && cached) {
+          cache.delete(key);
+          cache.set(key, cached);
+          if (cached.expiresAt > now()) {
+            return cached.value ?? (await cached.page);
+          }
+        }
+        if (cached) {
+          cache.delete(key);
         }
         const page = control.listPage(pageParams);
+        const staleValue = cached?.value;
         const entry: CodexCatalogPageCacheEntry = {
           expiresAt: Number.POSITIVE_INFINITY,
           page,
-          settledPage: stalePage,
-          stalePage,
+          ...(staleValue ? { value: staleValue } : {}),
         };
         cache.set(key, entry);
-        void page.then(
-          () => {
-            if (cache.get(key) === entry) {
-              delete entry.stalePage;
-              entry.settledPage = page;
-              entry.expiresAt = now() + CODEX_SESSION_CATALOG_LIST_TTL_MS;
-            }
-          },
-          async () => {
-            let stale: CodexSessionCatalogPage | undefined;
-            try {
-              stale = await stalePage;
-            } catch {
-              // A still-pending cold fill is not a real stale page.
-            }
-            if (cache.get(key) !== entry) {
-              return;
-            }
-            if (stale) {
-              cache.delete(key);
-              const settledPage = Promise.resolve(stale);
-              cache.set(key, { expiresAt: now(), page: settledPage, settledPage });
-            } else {
-              cache.delete(key);
-            }
-          },
-        );
-        return await stalePage;
-      }
-      if (cached) {
-        cache.delete(key);
-      }
-      const serveStaleOnError = pageParams.forceRefresh !== true;
-      const page = control.listPage(pageParams);
-      const stalePage = cached?.settledPage;
-      const entry: CodexCatalogPageCacheEntry = {
-        expiresAt: Number.POSITIVE_INFINITY,
-        page,
-        ...(stalePage ? { stalePage, settledPage: stalePage } : {}),
-      };
-      cache.set(key, entry);
-      while (cache.size > CODEX_SESSION_CATALOG_LIST_CACHE_MAX_ENTRIES) {
-        const oldest = cache.keys().next();
-        if (oldest.done) {
-          break;
-        }
-        cache.delete(oldest.value);
-      }
-      try {
-        const result = await page;
-        if (cache.get(key) === entry) {
-          delete entry.stalePage;
-          entry.settledPage = page;
-          entry.expiresAt = now() + CODEX_SESSION_CATALOG_LIST_TTL_MS;
-        }
-        return result;
-      } catch (error) {
-        if (stalePage) {
-          let stale: CodexSessionCatalogPage | undefined;
-          try {
-            stale = await stalePage;
-          } catch {
-            // The prior page was not real data, so propagate the current app-server failure.
+        pruneMapToMaxSize(cache, CODEX_SESSION_CATALOG_LIST_CACHE_MAX_ENTRIES);
+        const settle = (value: CodexSessionCatalogPage) => {
+          if (cache.get(key) === entry) {
+            entry.value = value;
+            entry.expiresAt = now() + CODEX_SESSION_CATALOG_LIST_TTL_MS;
           }
-          if (stale) {
-            if (cache.get(key) === entry) {
-              cache.delete(key);
-              const settledPage = Promise.resolve(stale);
-              cache.set(key, { expiresAt: now(), page: settledPage, settledPage });
-            }
-            if (serveStaleOnError) {
-              return stale;
-            }
+          return value;
+        };
+        const restore = () => {
+          if (cache.get(key) !== entry) {
+            return;
           }
+          if (staleValue) {
+            cache.set(key, {
+              expiresAt: now(),
+              page: Promise.resolve(staleValue),
+              value: staleValue,
+            });
+          } else {
+            cache.delete(key);
+          }
+        };
+        // Expiry starts one background refresh. Passive callers keep the last settled page while
+        // the next poll publishes success or retries failure; a forced caller still sees failure.
+        if (pageParams.forceRefresh !== true && staleValue) {
+          void page.then(settle, restore);
+          return staleValue;
         }
-        if (cache.get(key) === entry) {
-          cache.delete(key);
+        try {
+          return settle(await page);
+        } catch (error) {
+          restore();
+          throw error;
         }
-        throw error;
-      }
-    },
+      },
+    };
   };
+  return { forRequest };
 }
 
 async function listGatewayHost(params: {
@@ -600,17 +512,14 @@ async function listGatewayHost(params: {
   sessionEntries?: SessionCatalogEntrySnapshot;
   source?: CodexCatalogHome;
 }): Promise<CodexSessionCatalogHost> {
+  const hostId = params.source?.hostId ?? CODEX_LOCAL_SESSION_HOST_ID;
+  const label = params.source?.label ?? "Local Codex";
+  const sourceHomeId = params.source?.sourceHomeId ?? CODEX_LOCAL_SESSION_HOST_ID;
   try {
     const page = parseCatalogPage(
       await params.control.listPage({
-        agentId: params.agentId,
-        ...(params.source ? { source: params.source } : {}),
         limit: params.query.limitPerHost,
-        ...(params.query.cursors?.[params.source?.hostId ?? CODEX_LOCAL_SESSION_HOST_ID]
-          ? {
-              cursor: params.query.cursors[params.source?.hostId ?? CODEX_LOCAL_SESSION_HOST_ID],
-            }
-          : {}),
+        ...(params.query.cursors?.[hostId] ? { cursor: params.query.cursors[hostId] } : {}),
         ...(params.query.search ? { searchTerm: params.query.search } : {}),
       }),
     );
@@ -622,20 +531,15 @@ async function listGatewayHost(params: {
       sessionEntries: params.sessionEntries,
     });
     return {
-      hostId: params.source?.hostId ?? CODEX_LOCAL_SESSION_HOST_ID,
-      label: params.source?.label ?? "Local Codex",
+      hostId,
+      label,
       kind: "gateway",
       connected: true,
       ...page,
       sessions: page.sessions.map((session) => {
         const adopted =
-          adoptedSessions.get(
-            adoptedSourceKey(
-              params.source?.sourceHomeId ?? CODEX_LOCAL_SESSION_HOST_ID,
-              session.threadId,
-            ),
-          ) ??
-          (params.source?.hostId === CODEX_LOCAL_SESSION_HOST_ID
+          adoptedSessions.get(adoptedSourceKey(sourceHomeId, session.threadId)) ??
+          (hostId === CODEX_LOCAL_SESSION_HOST_ID
             ? adoptedSessions.get(adoptedSourceKey(CODEX_LOCAL_SESSION_HOST_ID, session.threadId))
             : undefined);
         const sourced = params.source
@@ -646,8 +550,8 @@ async function listGatewayHost(params: {
     };
   } catch (error) {
     return {
-      hostId: params.source?.hostId ?? CODEX_LOCAL_SESSION_HOST_ID,
-      label: params.source?.label ?? "Local Codex",
+      hostId,
+      label,
       kind: "gateway",
       connected: false,
       sessions: [],
@@ -662,7 +566,7 @@ async function listCodexSessionCatalog(params: {
   bindingStore: CodexAppServerBindingStore;
   config?: OpenClawConfig;
   runtime: PluginRuntime;
-  control: CodexSessionCatalogControl;
+  control: CodexSessionCatalogControlFactory;
   query?: CodexSessionCatalogParams;
   listNodes?: Parameters<SessionCatalogProvider["list"]>[0]["listNodes"];
   onHost?: (host: CodexSessionCatalogHost) => void;
@@ -670,8 +574,10 @@ async function listCodexSessionCatalog(params: {
   includeLocal?: boolean;
   localHomes?: CodexCatalogHome[];
 }): Promise<CodexSessionCatalogResult> {
-  const agentId =
-    params.agentId ?? resolveSessionAgentIds({ config: params.config ?? {} }).defaultAgentId;
+  const agentId = resolveSessionAgentIds({
+    config: params.config ?? {},
+    agentId: params.agentId,
+  }).sessionAgentId;
   const query = readGatewayParams(params.query);
   const requestedHostIds = query.hostIds ? new Set(query.hostIds) : undefined;
   const configuredLocalHomes = params.localHomes?.filter(
@@ -688,7 +594,7 @@ async function listCodexSessionCatalog(params: {
       agentId,
       bindingStore: params.bindingStore,
       config: params.config,
-      control: params.control,
+      control: params.control.forRequest(agentId, source),
       query,
       runtime: params.runtime,
       sessionEntries: params.sessionEntries,
@@ -843,7 +749,7 @@ function flattenTranscriptPageDesc(page: CodexThreadTurnsListResponse) {
 
 /** Reads the persisted transcript for a Gateway-local or paired-node Codex session. */
 async function readCodexSessionTranscript(params: {
-  agentId?: string;
+  agentId: string;
   runtime: PluginRuntime;
   control: CodexSessionCatalogControl;
   hostId: string;
@@ -853,8 +759,7 @@ async function readCodexSessionTranscript(params: {
   source?: CodexCatalogHome;
 }): Promise<CodexSessionTranscriptPage> {
   if (params.source || params.hostId === CODEX_LOCAL_SESSION_HOST_ID) {
-    const agentId = params.agentId ?? resolveSessionAgentIds({ config: {} }).defaultAgentId;
-    await requireCatalogEligibleThread(params.control, params.threadId, agentId, params.source);
+    await requireCatalogEligibleThread(params.control, params.threadId);
     const listParams = {
       threadId: params.threadId,
       limit: params.limit,
@@ -862,9 +767,7 @@ async function readCodexSessionTranscript(params: {
       itemsView: "full" as const,
       ...(params.cursor ? { cursor: params.cursor } : {}),
     };
-    const response = params.source
-      ? await params.control.listTurnPage(listParams, agentId, params.source)
-      : await params.control.listTurnPage(listParams, agentId);
+    const response = await params.control.listTurnPage(listParams);
     const page = parseTranscriptPage(response);
     return {
       hostId: params.hostId,
@@ -1320,7 +1223,7 @@ async function createOrReuseAdoptedSession(params: {
   }
 }
 
-async function continueLocalCodexSessionInner(params: {
+type ContinueLocalCodexSessionParams = {
   agentId: string;
   api: OpenClawPluginApi;
   bindingStore: CodexAppServerBindingStore;
@@ -1328,29 +1231,27 @@ async function continueLocalCodexSessionInner(params: {
   control: CodexSessionCatalogControl;
   threadId: string;
   hostId?: string;
-  source?: CodexCatalogHome;
+  sourceHomeId?: string;
+  allowLegacy?: boolean;
   onContinued?: (upstream: CodexUpstreamBaseline & { connectionFingerprint: string }) => void;
-}): Promise<{ sessionKey: string; disposition: CodexSessionDisposition }> {
-  await requireCatalogEligibleThread(
-    params.control,
-    params.threadId,
-    params.agentId,
-    params.source,
-  );
+};
+
+async function continueLocalCodexSessionInner(
+  params: ContinueLocalCodexSessionParams,
+): Promise<{ sessionKey: string; disposition: CodexSessionDisposition }> {
+  await requireCatalogEligibleThread(params.control, params.threadId);
   const existing = await findAdoptedSessionEntry({
     agentId: params.agentId,
     bindingStore: params.bindingStore,
     config: params.config,
     runtime: params.api.runtime,
     threadId: params.threadId,
-    ...(params.source?.sourceHomeId ? { sourceHomeId: params.source.sourceHomeId } : {}),
-    ...(params.source?.hostId === CODEX_LOCAL_SESSION_HOST_ID ? { allowLegacy: true } : {}),
+    ...(params.sourceHomeId ? { sourceHomeId: params.sourceHomeId } : {}),
+    ...(params.allowLegacy === true ? { allowLegacy: true } : {}),
   });
   if (existing) {
     const boundThreadId = requireBoundThread(existing);
-    const boundThread = params.source
-      ? await params.control.readThread(boundThreadId, true, params.agentId, params.source)
-      : await params.control.readThread(boundThreadId, true, params.agentId);
+    const boundThread = await params.control.readThread(boundThreadId, true);
     if (boundThread.id !== boundThreadId) {
       throw new Error("Codex app-server returned a different thread than requested");
     }
@@ -1387,9 +1288,7 @@ async function continueLocalCodexSessionInner(params: {
     return { sessionKey: existing.key, disposition: "existing" };
   }
 
-  const sourceThread = params.source
-    ? await params.control.readThread(params.threadId, true, params.agentId, params.source)
-    : await params.control.readThread(params.threadId, true, params.agentId);
+  const sourceThread = await params.control.readThread(params.threadId, true);
   if (sourceThread.id !== params.threadId) {
     throw new Error("Codex app-server returned a different thread than requested");
   }
@@ -1407,16 +1306,14 @@ async function continueLocalCodexSessionInner(params: {
     config: params.config,
     sourceThread,
     connectionFingerprint,
-    ...(params.source?.sourceHomeId ? { sourceHomeId: params.source.sourceHomeId } : {}),
-    ...(params.source?.hostId === CODEX_LOCAL_SESSION_HOST_ID ? { allowLegacy: true } : {}),
+    ...(params.sourceHomeId ? { sourceHomeId: params.sourceHomeId } : {}),
+    ...(params.allowLegacy === true ? { allowLegacy: true } : {}),
   });
   const boundThreadId = requireBoundThread(adopted);
   const baselineThread =
     boundThreadId === sourceThread.id
       ? sourceThread
-      : params.source
-        ? await params.control.readThread(boundThreadId, true, params.agentId, params.source)
-        : await params.control.readThread(boundThreadId, true, params.agentId);
+      : await params.control.readThread(boundThreadId, true);
   if (baselineThread.id !== boundThreadId) {
     throw new Error("Codex app-server returned a different thread than requested");
   }
@@ -1428,26 +1325,14 @@ async function continueLocalCodexSessionInner(params: {
 }
 
 /** Creates one locked OpenClaw branch whose first harness run forks the Codex source. */
-async function continueLocalCodexSession(params: {
-  agentId?: string;
-  api: OpenClawPluginApi;
-  bindingStore: CodexAppServerBindingStore;
-  config: OpenClawConfig;
-  control: CodexSessionCatalogControl;
-  threadId: string;
-  hostId?: string;
-  source?: CodexCatalogHome;
-  onContinued?: (upstream: CodexUpstreamBaseline & { connectionFingerprint: string }) => void;
-}): Promise<{ sessionKey: string; disposition: CodexSessionDisposition }> {
-  const agentId =
-    params.agentId ?? resolveSessionAgentIds({ config: params.config }).defaultAgentId;
-  const sourceKey = adoptedSourceKey(
-    params.hostId ?? params.source?.hostId ?? CODEX_LOCAL_SESSION_HOST_ID,
-    params.threadId,
-  );
+async function continueLocalCodexSession(params: ContinueLocalCodexSessionParams): Promise<{
+  sessionKey: string;
+  disposition: CodexSessionDisposition;
+}> {
+  const sourceKey = adoptedSourceKey(params.hostId ?? CODEX_LOCAL_SESSION_HOST_ID, params.threadId);
   const operationKey = adoptedOwnerSourceKey(
-    agentId,
-    params.hostId ?? params.source?.hostId ?? CODEX_LOCAL_SESSION_HOST_ID,
+    params.agentId,
+    params.hostId ?? CODEX_LOCAL_SESSION_HOST_ID,
     params.threadId,
   );
   const current = continueOperations.get(operationKey);
@@ -1455,11 +1340,9 @@ async function continueLocalCodexSession(params: {
     return await current;
   }
   const run = async (control: CodexSessionCatalogControl) =>
-    await continueLocalCodexSessionInner({ ...params, agentId, control });
+    await continueLocalCodexSessionInner({ ...params, control });
   const operation = runSessionActionExclusive(sourceKey, async () =>
-    params.source
-      ? params.control.withPinnedConnection(run, agentId, params.source)
-      : params.control.withPinnedConnection(run, agentId),
+    params.control.withPinnedConnection(run),
   );
   continueOperations.set(operationKey, operation);
   try {
@@ -1525,35 +1408,28 @@ async function assertNoPendingSupervisionBranch(params: {
 
 /** Archives one inactive Gateway-local Codex thread after a fresh status read. */
 async function archiveLocalCodexSession(params: {
-  agentId?: string;
+  agentId: string;
   bindingStore: CodexAppServerBindingStore;
   config: OpenClawConfig;
   control: CodexSessionCatalogControl;
   runtime: PluginRuntime;
   threadId: string;
   hostId?: string;
-  source?: CodexCatalogHome;
+  sourceHomeId?: string;
+  allowLegacy?: boolean;
 }): Promise<{ archived: true }> {
-  const agentId =
-    params.agentId ?? resolveSessionAgentIds({ config: params.config }).defaultAgentId;
   return await runSessionActionExclusive(
-    adoptedSourceKey(
-      params.hostId ?? params.source?.hostId ?? CODEX_LOCAL_SESSION_HOST_ID,
-      params.threadId,
-    ),
+    adoptedSourceKey(params.hostId ?? CODEX_LOCAL_SESSION_HOST_ID, params.threadId),
     async () => {
       return await params.bindingStore.withThreadArchiveFence(async () => {
         const run = async (control: CodexSessionCatalogControl) => {
-          await requireCatalogEligibleThread(control, params.threadId, agentId, params.source);
+          await requireCatalogEligibleThread(control, params.threadId);
           await assertNoPendingSupervisionBranch({
             ...params,
-            agentId,
-            ...(params.source?.sourceHomeId ? { sourceHomeId: params.source.sourceHomeId } : {}),
-            ...(params.source?.hostId === CODEX_LOCAL_SESSION_HOST_ID ? { allowLegacy: true } : {}),
+            ...(params.sourceHomeId ? { sourceHomeId: params.sourceHomeId } : {}),
+            ...(params.allowLegacy === true ? { allowLegacy: true } : {}),
           });
-          const thread = params.source
-            ? await control.readThread(params.threadId, false, agentId, params.source)
-            : await control.readThread(params.threadId, false, agentId);
+          const thread = await control.readThread(params.threadId, false);
           if (thread.id !== params.threadId) {
             throw new Error("Codex app-server returned a different thread than requested");
           }
@@ -1566,30 +1442,19 @@ async function archiveLocalCodexSession(params: {
           await assertCodexArchiveDescendantsUnowned({
             bindingStore: params.bindingStore,
             threadId: params.threadId,
-            listPage: (request) =>
-              params.source
-                ? control.listDescendantPage(request, agentId, params.source)
-                : control.listDescendantPage(request, agentId),
+            listPage: (request) => control.listDescendantPage(request),
             assertDescendantIdle: async (descendantThreadId) => {
-              const descendant = params.source
-                ? await control.readThread(descendantThreadId, false, agentId, params.source)
-                : await control.readThread(descendantThreadId, false, agentId);
+              const descendant = await control.readThread(descendantThreadId, false);
               if (descendant.id !== descendantThreadId) {
                 throw new Error("Codex app-server returned a different descendant than requested");
               }
               requireIdleThread(descendant, "archive");
             },
           });
-          if (params.source) {
-            await control.archiveThread(params.threadId, agentId, params.source);
-          } else {
-            await control.archiveThread(params.threadId, agentId);
-          }
+          await control.archiveThread(params.threadId);
           return { archived: true as const };
         };
-        return params.source
-          ? await params.control.withPinnedConnection(run, agentId, params.source)
-          : await params.control.withPinnedConnection(run, agentId);
+        return await params.control.withPinnedConnection(run);
       });
     },
   );
@@ -1665,14 +1530,11 @@ function isLocalCodexCatalogHost(hostId: string): boolean {
   );
 }
 
-async function resolveLocalCatalogHomeForThread(params: {
-  agentId: string;
-  control: CodexSessionCatalogControl;
+function resolveLocalCatalogHomeForThread(params: {
   homes: CodexCatalogHome[];
   hostId: string;
   sourceHomeId?: string;
-  threadId: string;
-}): Promise<CodexCatalogHome> {
+}): CodexCatalogHome {
   if (params.homes.length === 0) {
     throw new CatalogParamsError("local Codex sessions are unavailable in isolated state");
   }
@@ -1682,24 +1544,23 @@ async function resolveLocalCatalogHomeForThread(params: {
   if (exact.length === 0 || (params.sourceHomeId && exact[0]?.hostId !== params.hostId)) {
     throw new CatalogParamsError("Codex session source home is unavailable");
   }
-  const home = exact[0]!;
-  await requireCatalogEligibleThread(params.control, params.threadId, params.agentId, home);
-  return home;
+  return exact[0]!;
 }
 
 function registerCodexSessionCatalog(params: {
   api: OpenClawPluginApi;
   bindingStore: CodexAppServerBindingStore;
-  control: CodexSessionCatalogControl;
+  control: CodexSessionCatalogControlFactory;
   getPluginConfig: () => unknown;
   getRuntimeConfig: () => OpenClawConfig | undefined;
 }): void {
-  const homeSnapshot = createCodexCatalogHomeSnapshot({
+  const homeResolver = createCodexCatalogHomeResolver({
     config: params.getRuntimeConfig() ?? (params.api.config as OpenClawConfig),
-    pluginConfig: params.getPluginConfig(),
+    getRuntimeConfig: params.getRuntimeConfig,
+    getPluginConfig: params.getPluginConfig,
   });
   const catalogHomes = (agentId: string, allowProcessHomeFallback?: boolean) => {
-    const homes = homeSnapshot.forAgent(agentId);
+    const homes = homeResolver.forAgent(agentId);
     return allowProcessHomeFallback === false
       ? homes.filter((home) => !home.usesProcessHomeFallback)
       : homes;
@@ -1707,8 +1568,31 @@ function registerCodexSessionCatalog(params: {
   const resolveRequestAgentId = (agentId?: string) =>
     resolveSessionAgentIds({
       config: params.getRuntimeConfig() ?? (params.api.config as OpenClawConfig),
-      ...(agentId ? { agentId } : {}),
+      agentId,
     }).sessionAgentId;
+  const bindRequest = (request: {
+    agentId?: string;
+    hostId: string;
+    sourceHomeId?: string;
+    allowProcessHomeFallback?: boolean;
+  }) => {
+    const agentId = resolveRequestAgentId(request.agentId);
+    const source = isLocalCodexCatalogHost(request.hostId)
+      ? resolveLocalCatalogHomeForThread({
+          homes: [...catalogHomes(agentId, request.allowProcessHomeFallback)],
+          hostId: request.hostId,
+          ...(request.sourceHomeId ? { sourceHomeId: request.sourceHomeId } : {}),
+        })
+      : undefined;
+    return { agentId, source, control: params.control.forRequest(agentId, source) };
+  };
+  const bindLocalRequest = (request: Parameters<typeof bindRequest>[0]) => {
+    const bound = bindRequest(request);
+    if (!bound.source) {
+      throw new CatalogParamsError("Codex session catalog hostId is invalid");
+    }
+    return { ...bound, source: bound.source };
+  };
   const checkUpstreamActivity = upstream.createChecker({ ...params, catalogHomes });
   const provider: SessionCatalogProvider = {
     id: "codex",
@@ -1749,37 +1633,26 @@ function registerCodexSessionCatalog(params: {
       ).hosts.map(mapHost);
     },
     read: async (request) => {
-      const { agentId: requestedAgentId, allowProcessHomeFallback, ...catalogRequest } = request;
-      const agentId = resolveRequestAgentId(requestedAgentId);
-      const source = isLocalCodexCatalogHost(catalogRequest.hostId)
-        ? await resolveLocalCatalogHomeForThread({
-            agentId,
-            control: params.control,
-            homes: [...catalogHomes(agentId, allowProcessHomeFallback)],
-            hostId: catalogRequest.hostId,
-            ...(catalogRequest.sourceHomeId ? { sourceHomeId: catalogRequest.sourceHomeId } : {}),
-            threadId: catalogRequest.threadId,
-          })
-        : undefined;
+      const { agentId, source, control } = bindRequest(request);
       const page = await readCodexSessionTranscript({
         agentId,
         runtime: params.api.runtime,
-        control: params.control,
-        hostId: catalogRequest.hostId,
-        threadId: catalogRequest.threadId,
-        cursor: catalogRequest.cursor,
-        limit: catalogRequest.limit ?? DEFAULT_TRANSCRIPT_PAGE_LIMIT,
+        control,
+        hostId: request.hostId,
+        threadId: request.threadId,
+        cursor: request.cursor,
+        limit: request.limit ?? DEFAULT_TRANSCRIPT_PAGE_LIMIT,
         ...(source ? { source } : {}),
       });
       return { ...page, items: page.items.map(toGenericTranscriptItem) };
     },
     continueSession: async (request) => {
-      const agentId = resolveRequestAgentId(request.agentId);
       const config = params.getRuntimeConfig();
       if (!config) {
         throw new Error("OpenClaw runtime config is unavailable");
       }
       if (request.hostId.startsWith("node:")) {
+        const agentId = resolveRequestAgentId(request.agentId);
         return await continueNodeCodexSession({
           agentId,
           api: params.api,
@@ -1792,24 +1665,18 @@ function registerCodexSessionCatalog(params: {
       if (!isLocalCodexCatalogHost(request.hostId)) {
         throw new CatalogParamsError("Codex session catalog hostId is invalid");
       }
-      const source = await resolveLocalCatalogHomeForThread({
-        agentId,
-        control: params.control,
-        homes: [...catalogHomes(agentId, request.allowProcessHomeFallback)],
-        hostId: request.hostId,
-        ...(request.sourceHomeId ? { sourceHomeId: request.sourceHomeId } : {}),
-        threadId: request.threadId,
-      });
+      const { agentId, source, control } = bindLocalRequest(request);
       let upstreamBaseline: (CodexUpstreamBaseline & { connectionFingerprint: string }) | undefined;
       const continued = await continueLocalCodexSession({
         agentId,
         api: params.api,
         bindingStore: params.bindingStore,
         config,
-        control: params.control,
+        control,
         threadId: request.threadId,
         hostId: source.hostId,
-        source,
+        sourceHomeId: source.sourceHomeId,
+        ...(source.hostId === CODEX_LOCAL_SESSION_HOST_ID ? { allowLegacy: true } : {}),
         onContinued: (baseline) => {
           upstreamBaseline = baseline;
         },
@@ -1826,7 +1693,6 @@ function registerCodexSessionCatalog(params: {
         ),
       ),
     archive: async (request) => {
-      const agentId = resolveRequestAgentId(request.agentId);
       const runnerConfirmation: unknown = request.confirmNoOtherRunner;
       if (runnerConfirmation !== true) {
         throw new CatalogParamsError(
@@ -1840,40 +1706,25 @@ function registerCodexSessionCatalog(params: {
       if (!config) {
         throw new Error("OpenClaw runtime config is unavailable");
       }
-      const source = await resolveLocalCatalogHomeForThread({
-        agentId,
-        control: params.control,
-        homes: [...catalogHomes(agentId, request.allowProcessHomeFallback)],
-        hostId: request.hostId,
-        ...(request.sourceHomeId ? { sourceHomeId: request.sourceHomeId } : {}),
-        threadId: request.threadId,
-      });
+      const { agentId, source, control } = bindLocalRequest(request);
       await archiveLocalCodexSession({
         agentId,
         bindingStore: params.bindingStore,
         config,
-        control: params.control,
+        control,
         runtime: params.api.runtime,
         threadId: request.threadId,
         hostId: source.hostId,
-        source,
+        sourceHomeId: source.sourceHomeId,
+        ...(source.hostId === CODEX_LOCAL_SESSION_HOST_ID ? { allowLegacy: true } : {}),
       });
       return { ok: true };
     },
     openTerminal: async (request) => {
-      const agentId = resolveRequestAgentId(request.agentId);
-      const source = isLocalCodexCatalogHost(request.hostId)
-        ? await resolveLocalCatalogHomeForThread({
-            agentId,
-            control: params.control,
-            homes: [...catalogHomes(agentId, request.allowProcessHomeFallback)],
-            hostId: request.hostId,
-            threadId: request.threadId,
-          })
-        : undefined;
+      const { agentId, source, control } = bindRequest(request);
       return await openCodexCatalogTerminal({
         api: params.api,
-        control: params.control,
+        control,
         getPluginConfig: params.getPluginConfig,
         getRuntimeConfig: params.getRuntimeConfig,
         parseCatalogPage,

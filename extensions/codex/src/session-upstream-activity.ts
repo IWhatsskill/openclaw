@@ -8,19 +8,16 @@ import type {
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CodexAppServerRpcError } from "./app-server/client.js";
 import { buildCodexAppServerConnectionFingerprint } from "./app-server/plugin-app-cache-key.js";
-import type {
-  CodexThread,
-  CodexThreadTurnsListParams,
-  CodexThreadTurnsListResponse,
-  CodexTurn,
-  CodexUserInput,
-} from "./app-server/protocol.js";
+import type { CodexTurn, CodexUserInput } from "./app-server/protocol.js";
 import {
   sessionBindingIdentity,
   type CodexAppServerBindingStore,
 } from "./app-server/session-binding.js";
 import type { CodexCatalogHome } from "./session-catalog-homes.js";
-import type { CodexSessionCatalogControl } from "./session-catalog-types.js";
+import type {
+  CodexSessionCatalogControl,
+  CodexSessionCatalogControlFactory,
+} from "./session-catalog-types.js";
 
 const CODEX_UPSTREAM_TURN_LIMIT = 100;
 // codex-rs app-server thread/read maps a gone rollout to JSON-RPC invalid_request
@@ -38,16 +35,10 @@ function isCodexThreadGoneError(error: unknown): boolean {
   );
 }
 
-type CodexUpstreamControl = {
-  connectionFingerprint?: string;
-  withPinnedConnection<T>(
-    run: (control: CodexUpstreamControl) => Promise<T>,
-    agentId?: string,
-    source?: CodexCatalogHome,
-  ): Promise<T>;
-  listTurnPage(params: CodexThreadTurnsListParams): Promise<CodexThreadTurnsListResponse>;
-  readThread(threadId: string, includeTurns?: boolean): Promise<CodexThread>;
-};
+type CodexUpstreamControl = Pick<
+  CodexSessionCatalogControl,
+  "connectionFingerprint" | "listTurnPage" | "readThread" | "withPinnedConnection"
+>;
 
 type CodexUpstreamMarker = {
   turnId: string | null;
@@ -160,64 +151,58 @@ async function checkCodexUpstreamActivity(
   control: CodexUpstreamControl,
   resolveThreadId: (probe: SessionUpstreamProbe) => Promise<string> = async (probe) =>
     probe.threadId,
-  pin?: { agentId: string; source: CodexCatalogHome },
 ): Promise<SessionUpstreamActivity[]> {
-  return await control.withPinnedConnection(
-    async (pinned) => {
-      const activities: SessionUpstreamActivity[] = [];
-      for (const probe of probes) {
-        const fingerprint = upstreamConnectionFingerprint(probe);
-        if (
-          probe.upstreamKind !== "codex-app-server" ||
-          !fingerprint ||
-          fingerprint !== pinned.connectionFingerprint
-        ) {
+  return await control.withPinnedConnection(async (pinned) => {
+    const activities: SessionUpstreamActivity[] = [];
+    for (const probe of probes) {
+      const fingerprint = upstreamConnectionFingerprint(probe);
+      if (
+        probe.upstreamKind !== "codex-app-server" ||
+        !fingerprint ||
+        fingerprint !== pinned.connectionFingerprint
+      ) {
+        continue;
+      }
+      try {
+        const threadId = await resolveThreadId(probe);
+        const page = await pinned.listTurnPage({
+          threadId,
+          limit: CODEX_UPSTREAM_TURN_LIMIT,
+          sortDirection: "desc",
+          itemsView: "full",
+        });
+        const marker = readMarker(probe);
+        if (page.data.length === 0 && marker) {
+          // Deleted threads do NOT reject turns/list: codex-rs load_thread_turns_list_history
+          // swallows ThreadNotFound/no-rollout and returns an empty page, and rollback can
+          // empty a live thread too. thread/read is the existence oracle: it still succeeds
+          // after rollback and rejects "thread not loaded" only once the rollout is gone.
+          try {
+            await pinned.readThread(threadId, false);
+          } catch (error) {
+            if (isCodexThreadGoneError(error)) {
+              activities.push({ kind: "missing", sessionKey: probe.sessionKey });
+            }
+          }
           continue;
         }
-        try {
-          const threadId = await resolveThreadId(probe);
-          const page = await pinned.listTurnPage({
-            threadId,
-            limit: CODEX_UPSTREAM_TURN_LIMIT,
-            sortDirection: "desc",
-            itemsView: "full",
-          });
-          const marker = readMarker(probe);
-          if (page.data.length === 0 && marker) {
-            // Deleted threads do NOT reject turns/list: codex-rs load_thread_turns_list_history
-            // swallows ThreadNotFound/no-rollout and returns an empty page, and rollback can
-            // empty a live thread too. thread/read is the existence oracle: it still succeeds
-            // after rollback and rejects "thread not loaded" only once the rollout is gone.
-            try {
-              await pinned.readThread(threadId, false);
-            } catch (error) {
-              if (isCodexThreadGoneError(error)) {
-                activities.push({ kind: "missing", sessionKey: probe.sessionKey });
-              }
-            }
-            continue;
-          }
-          const activity = classifyCodexUpstreamTurns({ probe, turns: page.data });
-          if (activity) {
-            activities.push(activity);
-          }
-        } catch {
-          // One transient probe failure must not suppress healthy sessions in the same batch.
+        const activity = classifyCodexUpstreamTurns({ probe, turns: page.data });
+        if (activity) {
+          activities.push(activity);
         }
+      } catch {
+        // One transient probe failure must not suppress healthy sessions in the same batch.
       }
-      return activities;
-    },
-    pin?.agentId,
-    pin?.source,
-  );
+    }
+    return activities;
+  });
 }
 
 export function createChecker(params: {
   api: OpenClawPluginApi;
   bindingStore: CodexAppServerBindingStore;
-  control: CodexSessionCatalogControl;
+  control: CodexSessionCatalogControlFactory;
   catalogHomes: (agentId: string) => readonly CodexCatalogHome[];
-  getPluginConfig?: () => unknown;
   getRuntimeConfig: () => OpenClawConfig | undefined;
 }): NonNullable<SessionCatalogProvider["checkUpstreamActivity"]> {
   const resolveThreadId = async (probe: SessionUpstreamProbe) => {
@@ -242,7 +227,7 @@ export function createChecker(params: {
   return async (probes) => {
     const groups = new Map<
       string,
-      { agentId: string; source?: CodexCatalogHome; probes: SessionUpstreamProbe[] }
+      { control: CodexSessionCatalogControl; probes: SessionUpstreamProbe[] }
     >();
     for (const probe of probes) {
       const fingerprint = upstreamConnectionFingerprint(probe);
@@ -258,8 +243,7 @@ export function createChecker(params: {
         );
       const key = `${probe.agentId}\0${source?.sourceHomeId ?? "legacy"}`;
       const group = groups.get(key) ?? {
-        agentId: probe.agentId,
-        ...(source ? { source } : {}),
+        control: params.control.forRequest(probe.agentId, source),
         probes: [],
       };
       group.probes.push(probe);
@@ -267,12 +251,7 @@ export function createChecker(params: {
     }
     const batches = await Promise.all(
       [...groups.values()].map((group) =>
-        checkCodexUpstreamActivity(
-          group.probes,
-          params.control,
-          resolveThreadId,
-          group.source ? { agentId: group.agentId, source: group.source } : undefined,
-        ),
+        checkCodexUpstreamActivity(group.probes, group.control, resolveThreadId),
       ),
     );
     return batches.flat();

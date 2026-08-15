@@ -49,9 +49,6 @@ export type CodexSessionCatalogPage = {
 };
 
 export type CodexSessionCatalogPageParams = {
-  /** Explicit OpenClaw owner whose Codex home backs this request. */
-  agentId?: string;
-  source?: CodexCatalogHome;
   cursor?: string;
   limit?: number;
   searchTerm?: string;
@@ -63,34 +60,17 @@ export type CodexSessionCatalogPageParams = {
 export type CodexSessionCatalogControl = {
   clientId?: string;
   connectionFingerprint?: string;
-  withPinnedConnection<T>(
-    run: (control: CodexSessionCatalogControl) => Promise<T>,
-    agentId?: string,
-    source?: CodexCatalogHome,
-  ): Promise<T>;
+  withPinnedConnection<T>(run: (control: CodexSessionCatalogControl) => Promise<T>): Promise<T>;
   listPage(params: CodexSessionCatalogPageParams): Promise<CodexSessionCatalogPage>;
-  listDescendantPage(
-    params: CodexThreadListParams,
-    agentId?: string,
-    source?: CodexCatalogHome,
-  ): Promise<CodexThreadListResponse>;
-  listTurnPage(
-    params: CodexThreadTurnsListParams,
-    agentId?: string,
-    source?: CodexCatalogHome,
-  ): Promise<CodexThreadTurnsListResponse>;
-  forkThread(
-    params: CodexThreadForkParams,
-    agentId?: string,
-    source?: CodexCatalogHome,
-  ): Promise<CodexThreadForkResponse>;
-  readThread(
-    threadId: string,
-    includeTurns?: boolean,
-    agentId?: string,
-    source?: CodexCatalogHome,
-  ): Promise<CodexThread>;
-  archiveThread(threadId: string, agentId?: string, source?: CodexCatalogHome): Promise<void>;
+  listDescendantPage(params: CodexThreadListParams): Promise<CodexThreadListResponse>;
+  listTurnPage(params: CodexThreadTurnsListParams): Promise<CodexThreadTurnsListResponse>;
+  forkThread(params: CodexThreadForkParams): Promise<CodexThreadForkResponse>;
+  readThread(threadId: string, includeTurns?: boolean): Promise<CodexThread>;
+  archiveThread(threadId: string): Promise<void>;
+};
+
+export type CodexSessionCatalogControlFactory = {
+  forRequest(agentId: string, source?: CodexCatalogHome): CodexSessionCatalogControl;
 };
 
 export type CodexSessionCatalogError = {

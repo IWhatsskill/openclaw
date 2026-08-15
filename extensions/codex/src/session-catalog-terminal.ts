@@ -87,16 +87,14 @@ export function codexNodeTerminalCapability(node: {
 export async function requireCatalogEligibleThread(
   control: CodexSessionCatalogControl,
   threadId: string,
-  agentId?: string,
-  source?: CodexCatalogHome,
 ): Promise<CodexSessionCatalogSession> {
   // Mutating actions use a fresh pinned control and authoritative thread/read. Passive positive hits
   // may use the cadence-safe page memo; only a miss must bypass it before rejecting a new thread.
-  const cached = await findCatalogEligibleThread(control, threadId, false, agentId, source);
+  const cached = await findCatalogEligibleThread(control, threadId, false);
   if (cached) {
     return cached;
   }
-  const refreshed = await findCatalogEligibleThread(control, threadId, true, agentId, source);
+  const refreshed = await findCatalogEligibleThread(control, threadId, true);
   if (refreshed) {
     return refreshed;
   }
@@ -107,15 +105,11 @@ async function findCatalogEligibleThread(
   control: CodexSessionCatalogControl,
   threadId: string,
   forceRefresh: boolean,
-  agentId?: string,
-  source?: CodexCatalogHome,
 ): Promise<CodexSessionCatalogSession | undefined> {
   let cursor: string | undefined;
   const seenCursors = new Set<string>();
   for (let pageIndex = 0; pageIndex < MAX_ACTION_CATALOG_PAGES; pageIndex += 1) {
     const page = await control.listPage({
-      ...(agentId ? { agentId } : {}),
-      ...(source ? { source } : {}),
       limit: CODEX_SESSION_CATALOG_MAX_PAGE_LIMIT,
       ...(cursor ? { cursor } : {}),
       ...(forceRefresh ? { forceRefresh: true } : {}),
@@ -249,12 +243,7 @@ export async function openCodexCatalogTerminal(
     params.hostId === CODEX_LOCAL_SESSION_HOST_ID ||
     params.hostId.startsWith(`${CODEX_LOCAL_SESSION_HOST_ID}:`)
   ) {
-    const record = await requireCatalogEligibleThread(
-      params.control,
-      params.threadId,
-      params.agentId,
-      params.source,
-    );
+    const record = await requireCatalogEligibleThread(params.control, params.threadId);
     const resolution = resolveLocalCodexTerminalResolution();
     // A managed app-server may exist without a local CLI. Fail closed so
     // terminal resume never targets a different machine or missing binary.

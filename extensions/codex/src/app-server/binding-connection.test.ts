@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
-import { createCodexCatalogHomeSnapshot } from "../session-catalog-homes.js";
+import { createCodexCatalogHomeResolver } from "../session-catalog-homes.js";
 import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
 import {
   requireCodexSupervisionModelSelection,
@@ -58,7 +58,9 @@ describe("Codex binding app-server connection", () => {
   });
 
   it("recovers the exact secondary Codex home recorded by a supervised binding", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-binding-home-"));
+    const root = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-binding-home-")),
+    );
     try {
       const alphaAgentDir = path.join(root, "agents", "alpha", "agent");
       const betaAgentDir = path.join(root, "agents", "beta", "agent");
@@ -79,9 +81,10 @@ describe("Codex binding app-server connection", () => {
         },
       } as OpenClawConfig;
       const env = { ...process.env, CODEX_HOME: processCodexHome };
-      const source = createCodexCatalogHomeSnapshot({
+      const source = createCodexCatalogHomeResolver({
         config,
-        pluginConfig: { supervision: { enabled: true } },
+        getRuntimeConfig: () => config,
+        getPluginConfig: () => ({ supervision: { enabled: true } }),
         env,
       })
         .forAgent("beta")
@@ -136,7 +139,12 @@ describe("Codex binding app-server connection", () => {
       supervision: { enabled: true },
       appServer: { transport: "websocket", url: "ws://127.0.0.1:4500" },
     };
-    createCodexCatalogHomeSnapshot({ config, pluginConfig, env: {} });
+    createCodexCatalogHomeResolver({
+      config,
+      getRuntimeConfig: () => config,
+      getPluginConfig: () => pluginConfig,
+      env: {},
+    });
     const connection = resolveCodexBindingAppServerConnection({
       binding: supervisedBinding(pluginConfig, agentDir),
       pluginConfig,

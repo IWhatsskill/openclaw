@@ -1,6 +1,7 @@
 // Codex supervision tests cover passive listing and safe local session takeover.
 /* oxlint-disable typescript/unbound-method -- assertions inspect vi.fn-backed object methods, not unbound class methods. */
 import { createHash } from "node:crypto";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -32,7 +33,7 @@ import {
   type CodexAppServerBindingStore,
   type CodexAppServerThreadBinding,
 } from "./app-server/session-binding.test-helpers.js";
-import { createCodexCatalogHomeSnapshot, type CodexCatalogHome } from "./session-catalog-homes.js";
+import { createCodexCatalogHomeResolver, type CodexCatalogHome } from "./session-catalog-homes.js";
 import { listPairedNode } from "./session-catalog-node-continue.js";
 import { catalogError, parseCatalogPage } from "./session-catalog-parsing.js";
 import {
@@ -40,10 +41,14 @@ import {
   requireCatalogEligibleThread,
   type CodexTerminalConfigSources,
 } from "./session-catalog-terminal.js";
+import type {
+  CodexSessionCatalogControl,
+  CodexSessionCatalogControlFactory,
+} from "./session-catalog-types.js";
 import {
   CODEX_LOCAL_SESSION_HOST_ID,
   codexSessionCatalogRuntime,
-  createCodexSessionCatalogControl,
+  createCodexSessionCatalogControl as createCodexSessionCatalogControlFactory,
   createCodexSessionCatalogNodeHostCommands as createCodexSessionCatalogNodeHostCommandsRuntime,
   createCodexSessionCatalogNodeInvokePolicies,
 } from "./session-catalog.js";
@@ -56,23 +61,69 @@ const CODEX_NODE_CONTINUE_COMMANDS = [
   CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
   CODEX_CLI_SESSION_RESUME_COMMAND,
 ] as const;
-type CodexSessionCatalogControl = ReturnType<typeof createCodexSessionCatalogControl>;
 const originalPath = process.env.PATH;
 const tempDirs: string[] = [];
 
 const archiveLocalCodexSession = codexSessionCatalogRuntime.archiveLocal;
-const continueLocalCodexSession = codexSessionCatalogRuntime.continueLocal;
-const listCodexSessionCatalog = codexSessionCatalogRuntime.list;
-const readCodexSessionTranscript = codexSessionCatalogRuntime.readTranscript;
+const continueLocalCodexSessionRuntime = codexSessionCatalogRuntime.continueLocal;
+const listCodexSessionCatalogRuntime = codexSessionCatalogRuntime.list;
+const readCodexSessionTranscriptRuntime = codexSessionCatalogRuntime.readTranscript;
 const registerCodexSessionCatalogRuntime = codexSessionCatalogRuntime.register;
 
+function createCodexSessionCatalogControl(
+  params: Parameters<typeof createCodexSessionCatalogControlFactory>[0],
+): CodexSessionCatalogControl {
+  const config = params.getRuntimeConfig() ?? {};
+  return createCodexSessionCatalogControlFactory(params).forRequest(
+    resolveSessionAgentIds({ config }).sessionAgentId,
+  );
+}
+
+function asControlFactory(
+  control: CodexSessionCatalogControl | CodexSessionCatalogControlFactory,
+): CodexSessionCatalogControlFactory {
+  return "forRequest" in control ? control : { forRequest: () => control };
+}
+
+function listCodexSessionCatalog(
+  params: Omit<Parameters<typeof listCodexSessionCatalogRuntime>[0], "control"> & {
+    control: CodexSessionCatalogControl | CodexSessionCatalogControlFactory;
+  },
+) {
+  return listCodexSessionCatalogRuntime({ ...params, control: asControlFactory(params.control) });
+}
+
+function continueLocalCodexSession(
+  params: Omit<Parameters<typeof continueLocalCodexSessionRuntime>[0], "agentId"> & {
+    agentId?: string;
+  },
+) {
+  return continueLocalCodexSessionRuntime({
+    ...params,
+    agentId: params.agentId ?? resolveSessionAgentIds({ config: params.config }).sessionAgentId,
+  });
+}
+
+function readCodexSessionTranscript(
+  params: Omit<Parameters<typeof readCodexSessionTranscriptRuntime>[0], "agentId"> & {
+    agentId?: string;
+  },
+) {
+  return readCodexSessionTranscriptRuntime({ ...params, agentId: params.agentId ?? "main" });
+}
+
 function registerCodexSessionCatalog(
-  params: Omit<Parameters<typeof registerCodexSessionCatalogRuntime>[0], "getPluginConfig"> & {
+  params: Omit<
+    Parameters<typeof registerCodexSessionCatalogRuntime>[0],
+    "control" | "getPluginConfig"
+  > & {
+    control: CodexSessionCatalogControl | CodexSessionCatalogControlFactory;
     getPluginConfig?: () => unknown;
   },
 ) {
   return registerCodexSessionCatalogRuntime({
     ...params,
+    control: asControlFactory(params.control),
     getPluginConfig: params.getPluginConfig ?? (() => undefined),
   });
 }
@@ -491,14 +542,17 @@ function createRuntime(
 
 function archiveTestSession(params: {
   control: CodexSessionCatalogControl;
+  agentId?: string;
   config?: OpenClawConfig;
   bindingStore?: CodexAppServerBindingStore;
   runtime?: PluginRuntime;
   threadId?: string;
 }) {
+  const archiveConfig = params.config ?? config;
   return archiveLocalCodexSession({
+    agentId: params.agentId ?? resolveSessionAgentIds({ config: archiveConfig }).sessionAgentId,
     bindingStore: params.bindingStore ?? createCodexTestBindingStore(),
-    config: params.config ?? config,
+    config: archiveConfig,
     control: params.control,
     runtime: params.runtime ?? createRuntime().runtime,
     threadId: params.threadId ?? "thread-1",
@@ -678,12 +732,12 @@ describe("Codex supervision catalog", () => {
       agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } },
     } as OpenClawConfig;
     commandRpcMocks.codexControlRequest.mockResolvedValue({ data: [] });
-    const control = createCodexSessionCatalogControl({
+    const control = createCodexSessionCatalogControlFactory({
       getPluginConfig: () => ({ supervision: { enabled: true } }),
       getRuntimeConfig: () => runtimeConfig,
-    });
+    }).forRequest("beta");
 
-    await expect(control.listPage({ agentId: "beta" })).resolves.toEqual({ sessions: [] });
+    await expect(control.listPage({})).resolves.toEqual({ sessions: [] });
 
     expect(commandRpcMocks.codexControlRequest.mock.calls[0]?.[3]).toMatchObject({
       agentDir: resolveAgentDir(runtimeConfig, "beta"),
@@ -692,7 +746,9 @@ describe("Codex supervision catalog", () => {
   });
 
   it("discovers every existing Codex home while retaining the route owner directory", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-catalog-homes-"));
+    const root = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-catalog-homes-")),
+    );
     tempDirs.push(root);
     const alphaAgentDir = path.join(root, "agents", "alpha", "agent");
     const betaAgentDir = path.join(root, "agents", "beta", "agent");
@@ -715,9 +771,10 @@ describe("Codex supervision catalog", () => {
     } as OpenClawConfig;
     const env = { ...process.env, CODEX_HOME: processCodexHome };
 
-    const homes = createCodexCatalogHomeSnapshot({
+    const homes = createCodexCatalogHomeResolver({
       config: runtimeConfig,
-      pluginConfig: { supervision: { enabled: true } },
+      getRuntimeConfig: () => runtimeConfig,
+      getPluginConfig: () => ({ supervision: { enabled: true } }),
       env,
     }).forAgent("beta");
 
@@ -740,7 +797,7 @@ describe("Codex supervision catalog", () => {
     pinnedConnectionMocks.request.mockResolvedValue({
       thread: idleThread({ id: "thread-source" }),
     });
-    const control = createCodexSessionCatalogControl({
+    const control = createCodexSessionCatalogControlFactory({
       getPluginConfig: () => ({ supervision: { enabled: true } }),
       getRuntimeConfig: () => runtimeConfig,
     });
@@ -751,11 +808,10 @@ describe("Codex supervision catalog", () => {
     );
     expect(alphaSource).toBeDefined();
 
-    await control.listPage({ agentId: "beta", source: alphaSource });
-    await control.withPinnedConnection(
+    const boundControl = control.forRequest("beta", alphaSource);
+    await boundControl.listPage({});
+    await boundControl.withPinnedConnection(
       async (pinned) => await pinned.readThread("thread-source", false),
-      "beta",
-      alphaSource,
     );
 
     expect(commandRpcMocks.codexControlRequest.mock.calls[0]?.[3]).toMatchObject({
@@ -772,8 +828,70 @@ describe("Codex supervision catalog", () => {
     );
   });
 
+  it("refreshes Codex homes once for each hot-reloaded config generation", async () => {
+    const root = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-catalog-reload-")),
+    );
+    tempDirs.push(root);
+    const alphaAgentDir = path.join(root, "agents", "alpha", "agent");
+    const betaAgentDir = path.join(root, "agents", "beta", "agent");
+    const processCodexHome = path.join(root, "process-codex-home");
+    const alphaCodexHome = resolveCodexAppServerHomeDir(alphaAgentDir);
+    const betaCodexHome = resolveCodexAppServerHomeDir(betaAgentDir);
+    await Promise.all(
+      [processCodexHome, alphaCodexHome, betaCodexHome].map((dir) =>
+        fs.mkdir(dir, { recursive: true }),
+      ),
+    );
+    const configA = {
+      agents: { ownership: "explicit", list: [{ id: "alpha", agentDir: alphaAgentDir }] },
+    } as OpenClawConfig;
+    const configB = {
+      agents: {
+        ownership: "explicit",
+        list: [
+          { id: "alpha", agentDir: alphaAgentDir },
+          { id: "beta", agentDir: betaAgentDir },
+        ],
+      },
+    } as OpenClawConfig;
+    let runtimeConfig = configA;
+    const existsSync = vi.spyOn(fsSync, "existsSync");
+    try {
+      const resolver = createCodexCatalogHomeResolver({
+        config: configA,
+        getRuntimeConfig: () => runtimeConfig,
+        getPluginConfig: () => ({ supervision: { enabled: true } }),
+        env: { ...process.env, CODEX_HOME: processCodexHome },
+      });
+      const seedDiscoveryCount = existsSync.mock.calls.length;
+
+      expect(resolver.forAgent("alpha")).not.toHaveLength(0);
+      expect(resolver.forAgent("alpha")).not.toHaveLength(0);
+      expect(existsSync).toHaveBeenCalledTimes(seedDiscoveryCount);
+
+      runtimeConfig = configB;
+      const betaHomes = resolver.forAgent("beta");
+      expect(
+        betaHomes.some(
+          (home) =>
+            resolveCodexAppServerLocalHomeDir(home.appServer.start, home.agentDir, process.env) ===
+            betaCodexHome,
+        ),
+      ).toBe(true);
+      const reloadedDiscoveryCount = existsSync.mock.calls.length;
+
+      expect(resolver.forAgent("beta")).toEqual(betaHomes);
+      expect(existsSync).toHaveBeenCalledTimes(reloadedDiscoveryCount);
+    } finally {
+      existsSync.mockRestore();
+    }
+  });
+
   it("exposes every local source as an actionable host for the selected owner", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-catalog-hosts-"));
+    const root = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-catalog-hosts-")),
+    );
     tempDirs.push(root);
     const alphaAgentDir = path.join(root, "agents", "alpha", "agent");
     const betaAgentDir = path.join(root, "agents", "beta", "agent");
@@ -796,27 +914,23 @@ describe("Codex supervision catalog", () => {
     } as OpenClawConfig;
     const { runtime } = createRuntime();
     const { api, getProvider } = createGatewayApi(runtime, runtimeConfig);
-    const listPage = vi.fn(
-      async ({
-        source,
-      }: {
-        agentId?: string;
-        source?: { agentDir: string; sourceHomeId: string };
-      }) => ({
-        sessions: [
-          {
-            threadId: `thread-${source?.sourceHomeId ?? "missing"}`,
-            status: "idle",
-            source: "cli",
-            archived: false as const,
-          },
-        ],
-      }),
+    const listPage = vi.fn(async (source?: { agentDir: string; sourceHomeId: string }) => ({
+      sessions: [
+        {
+          threadId: `thread-${source?.sourceHomeId ?? "missing"}`,
+          status: "idle",
+          source: "cli",
+          archived: false as const,
+        },
+      ],
+    }));
+    const forRequest = vi.fn((agentId: string, source?: CodexCatalogHome) =>
+      createControl({ listPage: async () => await listPage(source) }),
     );
     registerCodexSessionCatalog({
       api,
       bindingStore: createCodexTestBindingStore(),
-      control: createControl({ listPage }),
+      control: { forRequest },
       getPluginConfig: () => ({ supervision: { enabled: true } }),
       getRuntimeConfig: () => runtimeConfig,
     });
@@ -837,10 +951,10 @@ describe("Codex supervision catalog", () => {
             host.sessions[0]?.canArchive,
         ),
       ).toBe(true);
-      expect(listPage.mock.calls.every(([request]) => request.agentId === "beta")).toBe(true);
-      expect(
-        listPage.mock.calls.every(([request]) => request.source?.agentDir === betaAgentDir),
-      ).toBe(true);
+      expect(forRequest.mock.calls.every(([agentId]) => agentId === "beta")).toBe(true);
+      expect(forRequest.mock.calls.every(([, source]) => source?.agentDir === betaAgentDir)).toBe(
+        true,
+      );
     });
   });
 
@@ -1703,7 +1817,6 @@ describe("Codex supervision catalog", () => {
     });
 
     expect(control.listPage).toHaveBeenCalledWith({
-      agentId: "main",
       cursor: "local-page-2",
       limit: 7,
       searchTerm: "match",
@@ -2452,8 +2565,8 @@ describe("Codex supervision actions", () => {
       },
     });
     expect(control.readThread).toHaveBeenCalledTimes(2);
-    expect(control.readThread).toHaveBeenNthCalledWith(1, "thread-1", true, "main");
-    expect(control.readThread).toHaveBeenNthCalledWith(2, "thread-1", true, "main");
+    expect(control.readThread).toHaveBeenNthCalledWith(1, "thread-1", true);
+    expect(control.readThread).toHaveBeenNthCalledWith(2, "thread-1", true);
     expect(commandRpcMocks.codexControlRequest).not.toHaveBeenCalled();
   });
 
@@ -2541,7 +2654,7 @@ describe("Codex supervision actions", () => {
       onContinued: (baseline) => baselines.push(baseline),
     });
 
-    expect(control.readThread).toHaveBeenCalledWith("thread-1-branch", true, "main");
+    expect(control.readThread).toHaveBeenCalledWith("thread-1-branch", true);
     expect(baselines).toEqual([
       {
         connectionFingerprint: "catalog-connection",
@@ -2711,7 +2824,7 @@ describe("Codex supervision actions", () => {
       archived: true,
     });
     expect(control.archiveThread).toHaveBeenCalledOnce();
-    expect(control.archiveThread).toHaveBeenCalledWith("thread-1", "main");
+    expect(control.archiveThread).toHaveBeenCalledWith("thread-1");
   });
 
   it("serializes archive behind an in-flight Continue and rejects the pending branch", async () => {
@@ -3089,7 +3202,7 @@ describe("Codex supervision actions", () => {
       sessionKey,
       disposition: "existing",
     });
-    expect(control.readThread).toHaveBeenCalledWith("thread-1-branch", true, "main");
+    expect(control.readThread).toHaveBeenCalledWith("thread-1-branch", true);
     expect(patchSessionEntry).toHaveBeenCalledOnce();
     expect(createSessionEntry).not.toHaveBeenCalled();
   });
@@ -3134,7 +3247,6 @@ describe("Codex supervision actions", () => {
       expect(control.readThread).toHaveBeenCalledWith(
         mapped ? "thread-1-branch" : "thread-1",
         includeTurns,
-        "main",
       );
       expect(createSessionEntry).not.toHaveBeenCalled();
       expect(patchSessionEntry).not.toHaveBeenCalled();
@@ -3339,9 +3451,8 @@ describe("Codex supervision actions", () => {
         threadId: "thread-1",
       }),
     ).resolves.toMatchObject({ disposition: "forked" });
-    expect(listPage).toHaveBeenNthCalledWith(1, { agentId: "main", limit: 100 });
+    expect(listPage).toHaveBeenNthCalledWith(1, { limit: 100 });
     expect(listPage).toHaveBeenNthCalledWith(2, {
-      agentId: "main",
       cursor: "page-2",
       limit: 100,
     });
@@ -3447,8 +3558,8 @@ describe("Codex supervision actions", () => {
     );
     expect(createSessionEntry).not.toHaveBeenCalled();
     expect(control.archiveThread).not.toHaveBeenCalled();
-    expect(control.readThread).toHaveBeenNthCalledWith(1, "thread-1", true, "main");
-    expect(control.readThread).toHaveBeenNthCalledWith(2, "thread-1", false, "main");
+    expect(control.readThread).toHaveBeenNthCalledWith(1, "thread-1", true);
+    expect(control.readThread).toHaveBeenNthCalledWith(2, "thread-1", false);
   });
 
   it("archives an idle local thread only after the fresh status read", async () => {
@@ -3459,8 +3570,8 @@ describe("Codex supervision actions", () => {
     await expect(archiveTestSession({ control })).resolves.toEqual({
       archived: true,
     });
-    expect(control.readThread).toHaveBeenCalledWith("thread-1", false, "main");
-    expect(control.archiveThread).toHaveBeenCalledWith("thread-1", "main");
+    expect(control.readThread).toHaveBeenCalledWith("thread-1", false);
+    expect(control.archiveThread).toHaveBeenCalledWith("thread-1");
     expect(readThread.mock.invocationCallOrder[0]).toBeLessThan(
       archiveThread.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
@@ -3579,7 +3690,7 @@ describe("Codex supervision actions", () => {
     await expect(archiveTestSession({ bindingStore, control })).rejects.toThrow(
       "attached to an OpenClaw session",
     );
-    expect(control.readThread).toHaveBeenCalledWith("thread-1", false, "main");
+    expect(control.readThread).toHaveBeenCalledWith("thread-1", false);
     expect(control.archiveThread).not.toHaveBeenCalled();
   });
 
@@ -3606,22 +3717,17 @@ describe("Codex supervision actions", () => {
     await expect(archiveTestSession({ bindingStore, control })).rejects.toThrow(
       "spawned descendant is owned by an OpenClaw session",
     );
-    expect(control.listDescendantPage).toHaveBeenNthCalledWith(
-      1,
-      {
-        ancestorThreadId: "thread-1",
-        archived: false,
-        limit: 100,
-        sortKey: "created_at",
-        sortDirection: "desc",
-        useStateDbOnly: true,
-      },
-      "main",
-    );
+    expect(control.listDescendantPage).toHaveBeenNthCalledWith(1, {
+      ancestorThreadId: "thread-1",
+      archived: false,
+      limit: 100,
+      sortKey: "created_at",
+      sortDirection: "desc",
+      useStateDbOnly: true,
+    });
     expect(control.listDescendantPage).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({ cursor: "descendants-2" }),
-      "main",
     );
     expect(control.archiveThread).not.toHaveBeenCalled();
   });
@@ -3640,7 +3746,7 @@ describe("Codex supervision actions", () => {
     await expect(archiveTestSession({ control })).rejects.toThrow(
       "Codex session is active in this App Server",
     );
-    expect(control.readThread).toHaveBeenCalledWith("active-descendant", false, "main");
+    expect(control.readThread).toHaveBeenCalledWith("active-descendant", false);
     expect(control.archiveThread).not.toHaveBeenCalled();
   });
 
@@ -3673,8 +3779,8 @@ describe("Codex supervision actions", () => {
     releaseValidation();
     await expect(archiving).resolves.toEqual({ archived: true });
     await expect(bindingStore.read(lateIdentity)).resolves.toBeUndefined();
-    expect(control.readThread).toHaveBeenCalledWith("idle-descendant", false, "main");
-    expect(control.archiveThread).toHaveBeenCalledWith("thread-1", "main");
+    expect(control.readThread).toHaveBeenCalledWith("idle-descendant", false);
+    expect(control.archiveThread).toHaveBeenCalledWith("thread-1");
   });
 
   it.each([
@@ -3747,7 +3853,7 @@ describe("Codex supervision actions", () => {
     await expect(archiveTestSession({ control })).resolves.toEqual({
       archived: true,
     });
-    expect(control.archiveThread).toHaveBeenCalledWith("thread-1", "main");
+    expect(control.archiveThread).toHaveBeenCalledWith("thread-1");
   });
 
   it("registers generic actions and keeps paired-node archive view-only", async () => {
@@ -4520,15 +4626,12 @@ describe("Codex supervision actions", () => {
       ],
       nextCursor: "turns-page-2",
     });
-    expect(listTurnPage).toHaveBeenCalledWith(
-      {
-        threadId: "thread-1",
-        limit: 50,
-        sortDirection: "desc",
-        itemsView: "full",
-      },
-      "main",
-    );
+    expect(listTurnPage).toHaveBeenCalledWith({
+      threadId: "thread-1",
+      limit: 50,
+      sortDirection: "desc",
+      itemsView: "full",
+    });
     expect(control.readThread).not.toHaveBeenCalled();
   });
 

@@ -1,3 +1,4 @@
+import { resolveSessionAgentIds } from "openclaw/plugin-sdk/agent-runtime";
 /**
  * Bundled Codex plugin entry: app-server harness, media understanding,
  * migration provider, CLI-session commands, and binding hooks.
@@ -127,17 +128,22 @@ export default definePluginEntry({
     };
     const bindingStore = createLazyCodexAppServerBindingStore(lazyBindingStateStore);
     registerCodexCliMetadata(api);
-    const sessionCatalogControl = createCodexSessionCatalogControl({
+    const sessionCatalogControlFactory = createCodexSessionCatalogControl({
       getPluginConfig: resolveCurrentPluginConfig,
       getRuntimeConfig: resolveCurrentConfig,
     });
+    const sessionCatalogControl = sessionCatalogControlFactory.forRequest(
+      resolveSessionAgentIds({
+        config: resolveCurrentConfig() ?? (api.config as OpenClawConfig),
+      }).sessionAgentId,
+    );
     const sessionCatalogEnabled =
       readCodexPluginConfig(resolveCurrentPluginConfig()).sessionCatalog?.enabled !== false;
     if (sessionCatalogEnabled) {
       codexSessionCatalogRuntime.register({
         api,
         bindingStore,
-        control: sessionCatalogControl,
+        control: sessionCatalogControlFactory,
         getPluginConfig: resolveCurrentPluginConfig,
         getRuntimeConfig: resolveCurrentConfig,
       });
