@@ -263,7 +263,7 @@ describe("session catalog Gateway methods", () => {
         },
       ],
     };
-    const list = vi.fn(async (_request: { agentId: string }) => [host]);
+    const list = vi.fn(async (_request: { agentId?: string }) => [host]);
     const read = vi.fn(async ({ hostId, threadId }) => ({ hostId, threadId, items: [] }));
     const continueSession = vi.fn(async () => ({ sessionKey: "agent:beta:continued" }));
     const archive = vi.fn(async () => ({ ok: true as const }));

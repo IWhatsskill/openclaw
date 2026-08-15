@@ -231,10 +231,7 @@ const config = {} as OpenClawConfig;
 function compatibilityOwnerConfig(owner = "alpha"): OpenClawConfig {
   return {
     agents: {
-      list: ["alpha", "beta"].map((id) => ({
-        id,
-        ...(id === owner ? { default: true } : {}),
-      })),
+      list: ["alpha", "beta"].map((id) => (id === owner ? { id, default: true } : { id })),
     },
   } as OpenClawConfig;
 }

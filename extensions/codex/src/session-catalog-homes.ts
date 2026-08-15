@@ -63,7 +63,7 @@ function appServerForCatalogHome(
 }
 
 /** Resolves every local Codex store the operator already owns, without path disclosure. */
-export function resolveCodexCatalogHomes(params: {
+function resolveCodexCatalogHomes(params: {
   config?: OpenClawConfig;
   pluginConfig?: unknown;
   ownerAgentId?: string;
@@ -159,7 +159,7 @@ export function resolveCodexCatalogHomes(params: {
   return homes;
 }
 
-export type CodexCatalogHomeSnapshot = {
+type CodexCatalogHomeSnapshot = {
   forAgent(agentId: string): readonly CodexCatalogHome[];
 };
 
