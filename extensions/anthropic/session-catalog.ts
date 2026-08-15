@@ -2,6 +2,7 @@ import type { Dirent, Stats } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { resolveSessionAgentIds } from "openclaw/plugin-sdk/agent-runtime";
 import { parseDateFirstTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
@@ -2026,9 +2027,13 @@ export function createClaudeSessionCatalogRuntime(
     },
     continueSession: async (request) => {
       assertClaudeLocalAccess(request.hostId, request.allowProcessHomeFallback);
+      const agentId = resolveSessionAgentIds({
+        config: api.config,
+        ...(request.agentId ? { agentId: request.agentId } : {}),
+      }).sessionAgentId;
       return await continueClaudeSession(
         api,
-        request.agentId,
+        agentId,
         request.hostId,
         request.threadId,
         request.allowProcessHomeFallback,

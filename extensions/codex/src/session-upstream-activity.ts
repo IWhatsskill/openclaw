@@ -19,7 +19,7 @@ import {
   sessionBindingIdentity,
   type CodexAppServerBindingStore,
 } from "./app-server/session-binding.js";
-import { resolveCodexCatalogHomes, type CodexCatalogHome } from "./session-catalog-homes.js";
+import type { CodexCatalogHome } from "./session-catalog-homes.js";
 import type { CodexSessionCatalogControl } from "./session-catalog-types.js";
 
 const CODEX_UPSTREAM_TURN_LIMIT = 100;
@@ -216,6 +216,7 @@ export function createChecker(params: {
   api: OpenClawPluginApi;
   bindingStore: CodexAppServerBindingStore;
   control: CodexSessionCatalogControl;
+  catalogHomes: (agentId: string) => readonly CodexCatalogHome[];
   getPluginConfig?: () => unknown;
   getRuntimeConfig: () => OpenClawConfig | undefined;
 }): NonNullable<SessionCatalogProvider["checkUpstreamActivity"]> {
@@ -239,7 +240,6 @@ export function createChecker(params: {
       : probe.threadId;
   };
   return async (probes) => {
-    const config = params.getRuntimeConfig();
     const groups = new Map<
       string,
       { agentId: string; source?: CodexCatalogHome; probes: SessionUpstreamProbe[] }
@@ -249,15 +249,13 @@ export function createChecker(params: {
       if (!fingerprint) {
         continue;
       }
-      const source = resolveCodexCatalogHomes({
-        config,
-        pluginConfig: params.getPluginConfig?.(),
-        ownerAgentId: probe.agentId,
-      }).find(
-        (home) =>
-          home.hostId === probe.hostId &&
-          buildCodexAppServerConnectionFingerprint(home.appServer, home.agentDir) === fingerprint,
-      );
+      const source = params
+        .catalogHomes(probe.agentId)
+        .find(
+          (home) =>
+            home.hostId === probe.hostId &&
+            buildCodexAppServerConnectionFingerprint(home.appServer, home.agentDir) === fingerprint,
+        );
       const key = `${probe.agentId}\0${source?.sourceHomeId ?? "legacy"}`;
       const group = groups.get(key) ?? {
         agentId: probe.agentId,

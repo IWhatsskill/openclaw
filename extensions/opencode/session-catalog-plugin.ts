@@ -2,6 +2,7 @@ import { accessSync, constants, statSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { resolveAcpSessionAvailability } from "openclaw/plugin-sdk/acp-runtime";
+import { resolveSessionAgentIds } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveNodeHostExecutable } from "openclaw/plugin-sdk/node-host";
 import type {
@@ -618,7 +619,11 @@ export function registerOpenCodeSessionCatalog(api: OpenClawPluginApi): void {
     read: async (request) => await readOpenCodeTranscript(api.runtime, request),
     continueSession: async (request) => {
       assertOpenCodeLocalAccess(request.hostId, request.allowProcessHomeFallback);
-      return await continueOpenCodeSession(api, request.agentId, request.hostId, request.threadId);
+      const agentId = resolveSessionAgentIds({
+        config: api.config,
+        ...(request.agentId ? { agentId: request.agentId } : {}),
+      }).sessionAgentId;
+      return await continueOpenCodeSession(api, agentId, request.hostId, request.threadId);
     },
     checkUpstreamActivity: (probes, policy) =>
       checkOpenCodeUpstreamActivity(

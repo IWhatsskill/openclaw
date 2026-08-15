@@ -6,7 +6,7 @@ import { vi } from "vitest";
 import { registerPiSessionCatalog } from "./pi-session-catalog-plugin.js";
 
 type RegisteredSessionCatalogProvider = Parameters<OpenClawPluginApi["registerSessionCatalog"]>[0];
-type OptionalCatalogAgent<T extends { agentId: string }> = Omit<T, "agentId"> & {
+type OptionalCatalogAgent<T extends { agentId?: string }> = Omit<T, "agentId"> & {
   agentId?: string;
 };
 export type TestSessionCatalogProvider = Omit<

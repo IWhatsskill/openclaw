@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
-import { resolveCodexCatalogHomes } from "../session-catalog-homes.js";
+import { createCodexCatalogHomeSnapshot } from "../session-catalog-homes.js";
 import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
 import {
   requireCodexSupervisionModelSelection,
@@ -13,7 +13,7 @@ import {
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 
-function supervisedBinding(pluginConfig: unknown) {
+function supervisedBinding(pluginConfig: unknown, agentDir?: string) {
   return {
     connectionScope: "supervision" as const,
     appServerRuntimeFingerprint: buildCodexAppServerConnectionFingerprint(
@@ -22,6 +22,7 @@ function supervisedBinding(pluginConfig: unknown) {
         env: {},
         requirementsToml: null,
       }),
+      agentDir,
     ),
   };
 }
@@ -78,12 +79,13 @@ describe("Codex binding app-server connection", () => {
         },
       } as OpenClawConfig;
       const env = { ...process.env, CODEX_HOME: processCodexHome };
-      const source = resolveCodexCatalogHomes({
+      const source = createCodexCatalogHomeSnapshot({
         config,
         pluginConfig: { supervision: { enabled: true } },
-        ownerAgentId: "beta",
         env,
-      }).find((home) => home.appServer.start.env?.CODEX_HOME === alphaCodexHome);
+      })
+        .forAgent("beta")
+        .find((home) => home.appServer.start.env?.CODEX_HOME === alphaCodexHome);
       expect(source).toBeDefined();
       const fingerprint = buildCodexAppServerConnectionFingerprint(source!.appServer, betaAgentDir);
 
@@ -126,15 +128,20 @@ describe("Codex binding app-server connection", () => {
   });
 
   it("preserves an explicit supervised WebSocket endpoint while selecting native auth", () => {
+    const agentDir = path.join(os.tmpdir(), "openclaw-websocket-agent");
+    const config = {
+      agents: { list: [{ id: "main", agentDir, default: true }] },
+    } as OpenClawConfig;
+    const pluginConfig = {
+      supervision: { enabled: true },
+      appServer: { transport: "websocket", url: "ws://127.0.0.1:4500" },
+    };
+    createCodexCatalogHomeSnapshot({ config, pluginConfig, env: {} });
     const connection = resolveCodexBindingAppServerConnection({
-      binding: supervisedBinding({
-        supervision: { enabled: true },
-        appServer: { transport: "websocket", url: "ws://127.0.0.1:4500" },
-      }),
-      pluginConfig: {
-        supervision: { enabled: true },
-        appServer: { transport: "websocket", url: "ws://127.0.0.1:4500" },
-      },
+      binding: supervisedBinding(pluginConfig, agentDir),
+      pluginConfig,
+      config,
+      agentDir,
       env: {},
       requirementsToml: null,
     });

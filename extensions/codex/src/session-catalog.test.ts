@@ -20,7 +20,6 @@ import type { SessionCatalogProvider as RegisteredSessionCatalogProvider } from 
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { retainLegacyDefaultAgentId } from "../../../src/config/legacy.default-agent-owner.js";
 import {
   resolveCodexAppServerHomeDir,
   resolveCodexAppServerLocalHomeDir,
@@ -33,8 +32,7 @@ import {
   type CodexAppServerBindingStore,
   type CodexAppServerThreadBinding,
 } from "./app-server/session-binding.test-helpers.js";
-import { resolveCodexCatalogHomes, type CodexCatalogHome } from "./session-catalog-homes.js";
-import { listSupervisionAgentIds } from "./session-catalog-node-adoption.js";
+import { createCodexCatalogHomeSnapshot, type CodexCatalogHome } from "./session-catalog-homes.js";
 import { listPairedNode } from "./session-catalog-node-continue.js";
 import { catalogError, parseCatalogPage } from "./session-catalog-parsing.js";
 import {
@@ -177,7 +175,7 @@ type SessionEntrySummary = ReturnType<
   PluginRuntime["agent"]["session"]["listSessionEntries"]
 >[number];
 
-type OptionalCatalogAgent<T extends { agentId: string }> = Omit<T, "agentId"> & {
+type OptionalCatalogAgent<T extends { agentId?: string }> = Omit<T, "agentId"> & {
   agentId?: string;
 };
 type SessionCatalogProvider = Omit<
@@ -230,13 +228,15 @@ function bindTestCatalogOwner(provider: RegisteredSessionCatalogProvider): Sessi
 
 const config = {} as OpenClawConfig;
 
-function retainedOwnerConfig(owner = "alpha"): OpenClawConfig {
-  return retainLegacyDefaultAgentId(
-    {
-      agents: { list: [{ id: "alpha" }, { id: "beta" }] },
-    } as OpenClawConfig,
-    owner,
-  );
+function compatibilityOwnerConfig(owner = "alpha"): OpenClawConfig {
+  return {
+    agents: {
+      list: ["alpha", "beta"].map((id) => ({
+        id,
+        ...(id === owner ? { default: true } : {}),
+      })),
+    },
+  } as OpenClawConfig;
 }
 
 async function normalizeCodexManifestConfig(value: unknown): Promise<Record<string, unknown>> {
@@ -646,7 +646,7 @@ describe("Codex supervision catalog", () => {
   });
 
   it("preserves the retained owner directory across normal cloned requests", async () => {
-    const runtimeConfig = retainedOwnerConfig();
+    const runtimeConfig = compatibilityOwnerConfig();
     const expectedAgentDir = resolveDefaultAgentDir(runtimeConfig);
     commandRpcMocks.codexControlRequest.mockImplementation(
       async (
@@ -718,12 +718,11 @@ describe("Codex supervision catalog", () => {
     } as OpenClawConfig;
     const env = { ...process.env, CODEX_HOME: processCodexHome };
 
-    const homes = resolveCodexCatalogHomes({
+    const homes = createCodexCatalogHomeSnapshot({
       config: runtimeConfig,
       pluginConfig: { supervision: { enabled: true } },
-      ownerAgentId: "beta",
       env,
-    });
+    }).forAgent("beta");
 
     expect(
       new Set(
@@ -898,10 +897,6 @@ describe("Codex supervision catalog", () => {
     expect(sessions.get(homeA.hostId)).toMatchObject({ sessionKey, sourceHomeId: "home-a" });
     expect(sessions.get(homeB.hostId)).toMatchObject({ sourceHomeId: "home-b" });
     expect(sessions.get(homeB.hostId)).not.toHaveProperty("sessionKey");
-  });
-
-  it("orders supervision scans with the retained owner first", () => {
-    expect(listSupervisionAgentIds(retainedOwnerConfig("beta"))).toEqual(["beta", "alpha"]);
   });
 
   it("uses a sanitized preview only when Codex has no thread name", async () => {
@@ -2317,7 +2312,7 @@ describe("Codex supervision catalog", () => {
 
 describe("Codex supervision actions", () => {
   it("lists and adopts a local session under the retained compatibility owner", async () => {
-    const runtimeConfig = retainedOwnerConfig();
+    const runtimeConfig = compatibilityOwnerConfig();
     const { runtime, createSessionEntry } = createRuntime();
     const { api } = createGatewayApi(runtime);
     const bindingStore = createCodexTestBindingStore();
@@ -3479,7 +3474,7 @@ describe("Codex supervision actions", () => {
       appServer: { command: "codex-archive-a" },
       supervision: { enabled: true },
     };
-    const initialRuntimeConfig = retainedOwnerConfig();
+    const initialRuntimeConfig = compatibilityOwnerConfig();
     const expectedAgentDir = resolveDefaultAgentDir(initialRuntimeConfig);
     let runtimeConfig = initialRuntimeConfig;
     pinnedConnectionMocks.request.mockImplementation(
@@ -3937,7 +3932,7 @@ describe("Codex supervision actions", () => {
   });
 
   it("adopts a paired-node session with bounded history and an executable binding", async () => {
-    let runtimeConfig = retainedOwnerConfig();
+    let runtimeConfig = compatibilityOwnerConfig();
     const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async ({ command }) => {
       if (command === CODEX_APP_SERVER_THREADS_LIST_COMMAND) {
         return {
@@ -4427,6 +4422,13 @@ describe("Codex supervision actions", () => {
       getProvider()?.startTerminalSession?.({ agentId: "main", cwd: "/workspace/blank" }),
     ).resolves.toMatchObject({ argv: [executable], cwd: "/workspace/blank" });
     pluginConfig = { appServer: { homeScope: "user" } };
+    registerCodexSessionCatalog({
+      api,
+      bindingStore: createCodexTestBindingStore(),
+      control,
+      getPluginConfig: () => pluginConfig,
+      getRuntimeConfig: () => config,
+    });
     await expect(
       getProvider()?.openTerminal?.({ hostId: CODEX_LOCAL_SESSION_HOST_ID, threadId }),
     ).resolves.toMatchObject({

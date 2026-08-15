@@ -16,17 +16,14 @@ import {
   resolveCodexSupervisionAppServerRuntimeOptions,
   type CodexAppServerRuntimeOptions,
 } from "./app-server/config.js";
-import { buildCodexAppServerConnectionFingerprint } from "./app-server/plugin-app-cache-key.js";
+import {
+  buildCodexAppServerConnectionFingerprint,
+  replaceCodexCatalogConnectionHomes,
+} from "./app-server/plugin-app-cache-key.js";
 import { CODEX_LOCAL_SESSION_HOST_ID, MAX_HOST_COUNT } from "./session-catalog-parsing.js";
+import type { CodexCatalogHome } from "./session-catalog-types.js";
 
-export type CodexCatalogHome = {
-  sourceHomeId: string;
-  hostId: string;
-  label: string;
-  agentDir: string;
-  appServer: CodexAppServerRuntimeOptions;
-  usesProcessHomeFallback: boolean;
-};
+export type { CodexCatalogHome } from "./session-catalog-types.js";
 
 type CatalogHomeCandidate = {
   codexHome: string;
@@ -162,22 +159,41 @@ export function resolveCodexCatalogHomes(params: {
   return homes;
 }
 
-/** Recovers the catalog connection recorded by a supervised binding fingerprint. */
-export function resolveCodexCatalogAppServerForFingerprint(params: {
-  fingerprint: string;
+export type CodexCatalogHomeSnapshot = {
+  forAgent(agentId: string): readonly CodexCatalogHome[];
+};
+
+/** Discovers Codex homes once at plugin registration and reuses that lifecycle snapshot. */
+export function createCodexCatalogHomeSnapshot(params: {
   config?: OpenClawConfig;
   pluginConfig?: unknown;
-  agentDir?: string;
   env?: NodeJS.ProcessEnv;
-}): CodexAppServerRuntimeOptions | undefined {
-  const agentDir = params.agentDir ?? resolveDefaultAgentDir(params.config ?? {}, params.env);
-  return resolveCodexCatalogHomes({
-    config: params.config,
-    pluginConfig: params.pluginConfig,
-    ownerAgentDir: agentDir,
-    env: params.env,
-  }).find(
-    (home) =>
-      buildCodexAppServerConnectionFingerprint(home.appServer, agentDir) === params.fingerprint,
-  )?.appServer;
+}): CodexCatalogHomeSnapshot {
+  const config = params.config ?? {};
+  const env = params.env ?? process.env;
+  const homesByAgent = new Map(
+    listAgentIds(config).map((agentId) => [
+      agentId,
+      resolveCodexCatalogHomes({
+        config,
+        pluginConfig: params.pluginConfig,
+        ownerAgentId: agentId,
+        env,
+      }),
+    ]),
+  );
+  replaceCodexCatalogConnectionHomes(
+    [...homesByAgent.values()].flatMap((homes) =>
+      homes
+        .filter((home) => home.appServer.start.transport === "stdio")
+        .map((home) => ({
+          agentDir: home.agentDir,
+          fingerprint: buildCodexAppServerConnectionFingerprint(home.appServer, home.agentDir),
+          codexHome: resolveCodexAppServerLocalHomeDir(home.appServer.start, home.agentDir, env),
+        })),
+    ),
+  );
+  return {
+    forAgent: (agentId) => homesByAgent.get(agentId) ?? [],
+  };
 }

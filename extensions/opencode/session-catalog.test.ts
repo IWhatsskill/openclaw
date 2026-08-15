@@ -12,7 +12,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 type ResolveAcpSessionAvailability =
   (typeof import("openclaw/plugin-sdk/acp-runtime"))["resolveAcpSessionAvailability"];
 type RegisteredSessionCatalogProvider = Parameters<OpenClawPluginApi["registerSessionCatalog"]>[0];
-type OptionalCatalogAgent<T extends { agentId: string }> = Omit<T, "agentId"> & {
+type OptionalCatalogAgent<T extends { agentId?: string }> = Omit<T, "agentId"> & {
   agentId?: string;
 };
 type SessionCatalogProvider = Omit<

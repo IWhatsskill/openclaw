@@ -1,4 +1,3 @@
-import { resolveCodexCatalogAppServerForFingerprint } from "../session-catalog-homes.js";
 // Codex helper module selects an app-server connection from private binding ownership.
 import {
   readCodexPluginConfig,
@@ -6,7 +5,10 @@ import {
   resolveCodexSupervisionAppServerRuntimeOptions,
   type CodexAppServerRuntimeOptions,
 } from "./config.js";
-import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
+import {
+  buildCodexAppServerConnectionFingerprint,
+  resolveCodexCatalogConnectionHome,
+} from "./plugin-app-cache-key.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
 
 type CodexAppServerRuntimeOptionsParams = NonNullable<
@@ -70,15 +72,20 @@ export function resolveCodexBindingAppServerConnection(
     const persistedFingerprint =
       binding.pendingSupervisionBranch?.connectionFingerprint ??
       binding.appServerRuntimeFingerprint;
-    if (persistedFingerprint) {
-      appServer =
-        resolveCodexCatalogAppServerForFingerprint({
-          fingerprint: persistedFingerprint,
-          config: runtimeParams.config,
-          pluginConfig: runtimeParams.pluginConfig,
-          agentDir: runtimeParams.agentDir,
-          env: runtimeParams.env,
-        }) ?? appServer;
+    const catalogHome = persistedFingerprint
+      ? resolveCodexCatalogConnectionHome(persistedFingerprint, runtimeParams.agentDir)
+      : undefined;
+    if (catalogHome) {
+      // Connection recovery changes only the store location. The freshly resolved
+      // runtime keeps its native-model review and permission policy.
+      appServer = {
+        ...appServer,
+        start: {
+          ...appServer.start,
+          homeScope: "user",
+          env: { ...appServer.start.env, CODEX_HOME: catalogHome },
+        },
+      };
     }
     const currentFingerprint = buildCodexAppServerConnectionFingerprint(
       appServer,

@@ -12,8 +12,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
 export type SessionCatalogListProviderParams = {
-  /** Concrete Gateway-resolved owner for this catalog request. */
-  agentId: string;
+  /** Gateway always supplies this; optional only for pre-existing external provider types. */
+  agentId?: string;
   /** False when Gateway-local scans must not inherit a root from process HOME. */
   allowProcessHomeFallback?: boolean;
   /** Trimmed, non-empty search capped at 500 UTF-16 code units by the gateway. */
@@ -29,8 +29,8 @@ export type SessionCatalogListProviderParams = {
   onHost?: (host: SessionCatalogHost) => void;
 };
 export type SessionCatalogReadProviderParams = Omit<SessionsCatalogReadParams, "catalogId"> & {
-  /** Concrete Gateway-resolved owner for this catalog request. */
-  agentId: string;
+  /** Gateway always supplies this; optional only for pre-existing external provider types. */
+  agentId?: string;
   /** False when Gateway-local reads must not inherit a root from process HOME. */
   allowProcessHomeFallback?: boolean;
 };
@@ -38,8 +38,8 @@ export type SessionCatalogContinueProviderParams = Omit<
   SessionsCatalogContinueParams,
   "catalogId"
 > & {
-  /** Concrete Gateway-resolved owner for this catalog request. */
-  agentId: string;
+  /** Gateway always supplies this; optional only for pre-existing external provider types. */
+  agentId?: string;
   /** False when Gateway-local continuation must not inherit a root from process HOME. */
   allowProcessHomeFallback?: boolean;
   /** Caller's gateway scopes so providers can gate high-authority continues up front. */
@@ -49,8 +49,8 @@ export type SessionCatalogArchiveProviderParams = Omit<
   SessionsCatalogArchiveParams,
   "catalogId"
 > & {
-  /** Concrete Gateway-resolved owner for this catalog request. */
-  agentId: string;
+  /** Gateway always supplies this; optional only for pre-existing external provider types. */
+  agentId?: string;
   /** False when Gateway-local archive must not inherit a root from process HOME. */
   allowProcessHomeFallback?: boolean;
 };
@@ -190,7 +190,8 @@ export type SessionCatalogProvider = {
   archive?: (params: SessionCatalogArchiveProviderParams) => Promise<{ ok: true }>;
   openTerminal?: (request: {
     allowProcessHomeFallback?: boolean;
-    agentId: string;
+    /** Gateway always supplies this; optional only for pre-existing external provider types. */
+    agentId?: string;
     hostId: string;
     threadId: string;
   }) => Promise<SessionCatalogTerminalPlan>;
@@ -214,7 +215,7 @@ export function listSessionCatalogEntries(params: {
       ? resolveSessionAgentIds({
           config: params.config,
           ...(params.agentId ? { agentId: params.agentId } : {}),
-        }).defaultAgentId
+        }).sessionAgentId
       : undefined;
   const requestEntries = params.sessionEntries?.entriesForCatalog?.();
   if (requestEntries) {

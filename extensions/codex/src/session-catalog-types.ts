@@ -1,3 +1,4 @@
+import type { CodexAppServerRuntimeOptions } from "./app-server/config.js";
 import type {
   CodexThread,
   CodexThreadForkParams,
@@ -7,7 +8,15 @@ import type {
   CodexThreadTurnsListParams,
   CodexThreadTurnsListResponse,
 } from "./app-server/protocol.js";
-import type { CodexCatalogHome } from "./session-catalog-homes.js";
+
+export type CodexCatalogHome = {
+  sourceHomeId: string;
+  hostId: string;
+  label: string;
+  agentDir: string;
+  appServer: CodexAppServerRuntimeOptions;
+  usesProcessHomeFallback: boolean;
+};
 
 /** Read-only metadata for one Codex app-server thread. */
 export type CodexSessionCatalogSession = {

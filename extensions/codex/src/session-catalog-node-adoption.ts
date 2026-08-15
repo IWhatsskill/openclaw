@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { listAgentIds, resolveSessionAgentIds } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
@@ -79,11 +78,6 @@ export async function runSessionActionExclusive<T>(
 export function adoptionSessionKeyRest(sessionKey: string): string {
   const trimmed = sessionKey.trim();
   return parseAgentSessionKey(trimmed)?.rest ?? trimmed;
-}
-
-export function listSupervisionAgentIds(config: OpenClawConfig): string[] {
-  const defaultAgentId = resolveSessionAgentIds({ config }).defaultAgentId;
-  return [defaultAgentId, ...listAgentIds(config).filter((agentId) => agentId !== defaultAgentId)];
 }
 
 export function adoptedSourceKey(hostId: string, threadId: string): string {

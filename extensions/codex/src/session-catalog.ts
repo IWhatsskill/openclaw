@@ -52,7 +52,7 @@ import {
 import { assertCodexArchiveDescendantsUnowned } from "./app-server/thread-archive-guard.js";
 import { codexControlRequest } from "./command-rpc.js";
 import { resolveCodexCatalogCreateSession } from "./session-catalog-create.js";
-import { resolveCodexCatalogHomes, type CodexCatalogHome } from "./session-catalog-homes.js";
+import { createCodexCatalogHomeSnapshot, type CodexCatalogHome } from "./session-catalog-homes.js";
 import {
   adoptedOwnerSourceKey,
   adoptedSourceKey,
@@ -1694,17 +1694,22 @@ function registerCodexSessionCatalog(params: {
   getPluginConfig: () => unknown;
   getRuntimeConfig: () => OpenClawConfig | undefined;
 }): void {
+  const homeSnapshot = createCodexCatalogHomeSnapshot({
+    config: params.getRuntimeConfig() ?? (params.api.config as OpenClawConfig),
+    pluginConfig: params.getPluginConfig(),
+  });
   const catalogHomes = (agentId: string, allowProcessHomeFallback?: boolean) => {
-    const homes = resolveCodexCatalogHomes({
-      config: params.getRuntimeConfig(),
-      pluginConfig: params.getPluginConfig(),
-      ownerAgentId: agentId,
-    });
+    const homes = homeSnapshot.forAgent(agentId);
     return allowProcessHomeFallback === false
       ? homes.filter((home) => !home.usesProcessHomeFallback)
       : homes;
   };
-  const checkUpstreamActivity = upstream.createChecker(params);
+  const resolveRequestAgentId = (agentId?: string) =>
+    resolveSessionAgentIds({
+      config: params.getRuntimeConfig() ?? (params.api.config as OpenClawConfig),
+      ...(agentId ? { agentId } : {}),
+    }).sessionAgentId;
+  const checkUpstreamActivity = upstream.createChecker({ ...params, catalogHomes });
   const provider: SessionCatalogProvider = {
     id: "codex",
     label: "Codex",
@@ -1717,16 +1722,17 @@ function registerCodexSessionCatalog(params: {
     list: async (query) => {
       const localTerminalAvailable = resolveLocalCodexTerminalExecutable() !== undefined;
       const {
-        agentId,
+        agentId: requestedAgentId,
         allowProcessHomeFallback,
         listNodes,
         onHost,
         sessionEntries,
         ...gatewayQuery
       } = query;
+      const agentId = resolveRequestAgentId(requestedAgentId);
       const mapHost = (host: CodexSessionCatalogHost) =>
         toGenericCatalogHost(host, localTerminalAvailable);
-      const localHomes = catalogHomes(agentId, allowProcessHomeFallback);
+      const localHomes = [...catalogHomes(agentId, allowProcessHomeFallback)];
       return (
         await listCodexSessionCatalog({
           agentId,
@@ -1743,19 +1749,20 @@ function registerCodexSessionCatalog(params: {
       ).hosts.map(mapHost);
     },
     read: async (request) => {
-      const { allowProcessHomeFallback, ...catalogRequest } = request;
+      const { agentId: requestedAgentId, allowProcessHomeFallback, ...catalogRequest } = request;
+      const agentId = resolveRequestAgentId(requestedAgentId);
       const source = isLocalCodexCatalogHost(catalogRequest.hostId)
         ? await resolveLocalCatalogHomeForThread({
-            agentId: catalogRequest.agentId,
+            agentId,
             control: params.control,
-            homes: catalogHomes(catalogRequest.agentId, allowProcessHomeFallback),
+            homes: [...catalogHomes(agentId, allowProcessHomeFallback)],
             hostId: catalogRequest.hostId,
             ...(catalogRequest.sourceHomeId ? { sourceHomeId: catalogRequest.sourceHomeId } : {}),
             threadId: catalogRequest.threadId,
           })
         : undefined;
       const page = await readCodexSessionTranscript({
-        agentId: catalogRequest.agentId,
+        agentId,
         runtime: params.api.runtime,
         control: params.control,
         hostId: catalogRequest.hostId,
@@ -1767,13 +1774,14 @@ function registerCodexSessionCatalog(params: {
       return { ...page, items: page.items.map(toGenericTranscriptItem) };
     },
     continueSession: async (request) => {
+      const agentId = resolveRequestAgentId(request.agentId);
       const config = params.getRuntimeConfig();
       if (!config) {
         throw new Error("OpenClaw runtime config is unavailable");
       }
       if (request.hostId.startsWith("node:")) {
         return await continueNodeCodexSession({
-          agentId: request.agentId,
+          agentId,
           api: params.api,
           config,
           hostId: request.hostId,
@@ -1785,16 +1793,16 @@ function registerCodexSessionCatalog(params: {
         throw new CatalogParamsError("Codex session catalog hostId is invalid");
       }
       const source = await resolveLocalCatalogHomeForThread({
-        agentId: request.agentId,
+        agentId,
         control: params.control,
-        homes: catalogHomes(request.agentId, request.allowProcessHomeFallback),
+        homes: [...catalogHomes(agentId, request.allowProcessHomeFallback)],
         hostId: request.hostId,
         ...(request.sourceHomeId ? { sourceHomeId: request.sourceHomeId } : {}),
         threadId: request.threadId,
       });
       let upstreamBaseline: (CodexUpstreamBaseline & { connectionFingerprint: string }) | undefined;
       const continued = await continueLocalCodexSession({
-        agentId: request.agentId,
+        agentId,
         api: params.api,
         bindingStore: params.bindingStore,
         config,
@@ -1818,6 +1826,7 @@ function registerCodexSessionCatalog(params: {
         ),
       ),
     archive: async (request) => {
+      const agentId = resolveRequestAgentId(request.agentId);
       const runnerConfirmation: unknown = request.confirmNoOtherRunner;
       if (runnerConfirmation !== true) {
         throw new CatalogParamsError(
@@ -1832,15 +1841,15 @@ function registerCodexSessionCatalog(params: {
         throw new Error("OpenClaw runtime config is unavailable");
       }
       const source = await resolveLocalCatalogHomeForThread({
-        agentId: request.agentId,
+        agentId,
         control: params.control,
-        homes: catalogHomes(request.agentId, request.allowProcessHomeFallback),
+        homes: [...catalogHomes(agentId, request.allowProcessHomeFallback)],
         hostId: request.hostId,
         ...(request.sourceHomeId ? { sourceHomeId: request.sourceHomeId } : {}),
         threadId: request.threadId,
       });
       await archiveLocalCodexSession({
-        agentId: request.agentId,
+        agentId,
         bindingStore: params.bindingStore,
         config,
         control: params.control,
@@ -1852,11 +1861,12 @@ function registerCodexSessionCatalog(params: {
       return { ok: true };
     },
     openTerminal: async (request) => {
+      const agentId = resolveRequestAgentId(request.agentId);
       const source = isLocalCodexCatalogHost(request.hostId)
         ? await resolveLocalCatalogHomeForThread({
-            agentId: request.agentId,
+            agentId,
             control: params.control,
-            homes: catalogHomes(request.agentId, request.allowProcessHomeFallback),
+            homes: [...catalogHomes(agentId, request.allowProcessHomeFallback)],
             hostId: request.hostId,
             threadId: request.threadId,
           })
@@ -1869,6 +1879,7 @@ function registerCodexSessionCatalog(params: {
         parseCatalogPage,
         ...(source ? { source } : {}),
         ...request,
+        agentId,
       });
     },
     startTerminalSession: async (request) => {

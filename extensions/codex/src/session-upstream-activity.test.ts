@@ -75,6 +75,7 @@ function createActivityChecker(params: {
     api,
     bindingStore,
     control: params.control,
+    catalogHomes: () => [],
     getRuntimeConfig: () => undefined,
   });
 }

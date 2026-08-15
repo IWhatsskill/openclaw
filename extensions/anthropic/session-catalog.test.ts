@@ -25,7 +25,7 @@ import {
   readLocalClaudeTranscriptPage,
 } from "./session-catalog.js";
 
-type OptionalCatalogAgent<T extends { agentId: string }> = Omit<T, "agentId"> & {
+type OptionalCatalogAgent<T extends { agentId?: string }> = Omit<T, "agentId"> & {
   agentId?: string;
 };
 type SessionCatalogProvider = Omit<

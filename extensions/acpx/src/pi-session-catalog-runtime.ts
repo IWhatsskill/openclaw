@@ -1,5 +1,6 @@
 import process from "node:process";
 import { resolveAcpSessionAvailability } from "openclaw/plugin-sdk/acp-runtime";
+import { resolveSessionAgentIds } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   decodeNodePtyResumeParams,
@@ -635,7 +636,11 @@ export function createPiSessionCatalogRuntime(api: OpenClawPluginApi) {
     read: async (request) => await readPiTranscript(api.runtime, request),
     continueSession: async (request) => {
       assertPiLocalAccess(request.hostId, request.allowProcessHomeFallback);
-      return await continuePiSession(api, request.agentId, request.hostId, request.threadId);
+      const agentId = resolveSessionAgentIds({
+        config: api.config,
+        ...(request.agentId ? { agentId: request.agentId } : {}),
+      }).sessionAgentId;
+      return await continuePiSession(api, agentId, request.hostId, request.threadId);
     },
     checkUpstreamActivity: (probes, policy) =>
       checkPiUpstreamActivity(
