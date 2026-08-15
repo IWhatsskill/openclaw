@@ -129,10 +129,11 @@ export default definePluginEntry({
     const bindingStore = createLazyCodexAppServerBindingStore(lazyBindingStateStore);
     registerCodexCliMetadata(api);
     const sessionCatalogControlFactory = createCodexSessionCatalogControl({
+      config: api.config as OpenClawConfig,
       getPluginConfig: resolveCurrentPluginConfig,
       getRuntimeConfig: resolveCurrentConfig,
     });
-    const sessionCatalogControl = sessionCatalogControlFactory.forRequest(
+    const nodeSessionCatalogControl = sessionCatalogControlFactory.forRequest(
       resolveSessionAgentIds({
         config: resolveCurrentConfig() ?? (api.config as OpenClawConfig),
       }).sessionAgentId,
@@ -147,7 +148,7 @@ export default definePluginEntry({
         getPluginConfig: resolveCurrentPluginConfig,
         getRuntimeConfig: resolveCurrentConfig,
       });
-      for (const command of createCodexSessionCatalogNodeHostCommands(sessionCatalogControl, {
+      for (const command of createCodexSessionCatalogNodeHostCommands(nodeSessionCatalogControl, {
         getPluginConfig: resolveCurrentPluginConfig,
         getRuntimeConfig: resolveCurrentConfig,
       })) {
@@ -180,7 +181,7 @@ export default definePluginEntry({
     api.registerAgentHarness(
       createCodexAppServerAgentHarness({
         bindingStore,
-        sessionCatalogControl,
+        sessionCatalogControlFactory,
         resolveConfig: resolveCurrentConfig,
         resolvePluginConfig: resolveCurrentPluginConfig,
         runtime: api.runtime,

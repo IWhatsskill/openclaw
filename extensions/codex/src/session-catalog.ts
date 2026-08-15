@@ -311,12 +311,20 @@ function createCodexSessionCatalogControlFromRequests(params: {
 
 /** Builds the passive catalog over the Codex plugin's canonical shared client. */
 export function createCodexSessionCatalogControl(params: {
+  config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
   getPluginConfig: () => unknown;
   getRuntimeConfig: () => OpenClawConfig | undefined;
   now?: () => number;
 }): CodexSessionCatalogControlFactory {
   const now = params.now ?? Date.now;
   const getPluginConfig = () => params.getPluginConfig();
+  const homeResolver = createCodexCatalogHomeResolver({
+    config: params.getRuntimeConfig() ?? params.config ?? {},
+    getRuntimeConfig: params.getRuntimeConfig,
+    getPluginConfig: params.getPluginConfig,
+    ...(params.env ? { env: params.env } : {}),
+  });
   const requestOptionsByConfig = new WeakMap<
     OpenClawConfig,
     Map<string, CodexCatalogRequestOptions>
@@ -499,7 +507,18 @@ export function createCodexSessionCatalogControl(params: {
       },
     };
   };
-  return { forRequest };
+  const homesForAgent = (agentId: string) => homeResolver.forAgent(agentId);
+  const forUpstream = (agentId: string, connectionFingerprint: string) => {
+    // A fingerprint is correlation only. A miss must stay fail-closed instead of selecting a
+    // different home whose thread namespace could contain the same copied identifier.
+    const source = homesForAgent(agentId).find(
+      (home) =>
+        buildCodexAppServerConnectionFingerprint(home.appServer, home.agentDir) ===
+        connectionFingerprint,
+    );
+    return source ? forRequest(agentId, source) : undefined;
+  };
+  return { forRequest, forUpstream, homesForAgent };
 }
 
 async function listGatewayHost(params: {
@@ -1554,13 +1573,8 @@ function registerCodexSessionCatalog(params: {
   getPluginConfig: () => unknown;
   getRuntimeConfig: () => OpenClawConfig | undefined;
 }): void {
-  const homeResolver = createCodexCatalogHomeResolver({
-    config: params.getRuntimeConfig() ?? (params.api.config as OpenClawConfig),
-    getRuntimeConfig: params.getRuntimeConfig,
-    getPluginConfig: params.getPluginConfig,
-  });
   const catalogHomes = (agentId: string, allowProcessHomeFallback?: boolean) => {
-    const homes = homeResolver.forAgent(agentId);
+    const homes = params.control.homesForAgent(agentId);
     return allowProcessHomeFallback === false
       ? homes.filter((home) => !home.usesProcessHomeFallback)
       : homes;
@@ -1593,7 +1607,7 @@ function registerCodexSessionCatalog(params: {
     }
     return { ...bound, source: bound.source };
   };
-  const checkUpstreamActivity = upstream.createChecker({ ...params, catalogHomes });
+  const checkUpstreamActivity = upstream.createChecker(params);
   const provider: SessionCatalogProvider = {
     id: "codex",
     label: "Codex",

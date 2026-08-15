@@ -79,8 +79,9 @@ function createActivityChecker(params: {
     bindingStore,
     control: {
       forRequest: () => params.control,
+      homesForAgent: () => [],
+      forUpstream: () => params.control,
     } satisfies CodexSessionCatalogControlFactory,
-    catalogHomes: () => [],
     getRuntimeConfig: () => undefined,
   });
 }

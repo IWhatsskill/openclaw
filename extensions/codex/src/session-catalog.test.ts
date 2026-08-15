@@ -26,6 +26,7 @@ import {
   resolveCodexAppServerLocalHomeDir,
 } from "./app-server/auth-start-options.js";
 import { resolveCodexAppServerUserHomeDir } from "./app-server/config.js";
+import { buildCodexAppServerConnectionFingerprint } from "./app-server/plugin-app-cache-key.js";
 import type { CodexThread } from "./app-server/protocol.js";
 import { sessionBindingIdentity } from "./app-server/session-binding.js";
 import {
@@ -79,15 +80,31 @@ function createCodexSessionCatalogControl(
   );
 }
 
+type CodexSessionCatalogControlFactoryStub = Pick<CodexSessionCatalogControlFactory, "forRequest">;
+
 function asControlFactory(
-  control: CodexSessionCatalogControl | CodexSessionCatalogControlFactory,
+  control:
+    | CodexSessionCatalogControl
+    | CodexSessionCatalogControlFactory
+    | CodexSessionCatalogControlFactoryStub,
 ): CodexSessionCatalogControlFactory {
-  return "forRequest" in control ? control : { forRequest: () => control };
+  if ("homesForAgent" in control) {
+    return control;
+  }
+  const forRequest = "forRequest" in control ? control.forRequest : () => control;
+  return {
+    forRequest,
+    homesForAgent: () => [],
+    forUpstream: (agentId) => forRequest(agentId),
+  };
 }
 
 function listCodexSessionCatalog(
   params: Omit<Parameters<typeof listCodexSessionCatalogRuntime>[0], "control"> & {
-    control: CodexSessionCatalogControl | CodexSessionCatalogControlFactory;
+    control:
+      | CodexSessionCatalogControl
+      | CodexSessionCatalogControlFactory
+      | CodexSessionCatalogControlFactoryStub;
   },
 ) {
   return listCodexSessionCatalogRuntime({ ...params, control: asControlFactory(params.control) });
@@ -117,14 +134,33 @@ function registerCodexSessionCatalog(
     Parameters<typeof registerCodexSessionCatalogRuntime>[0],
     "control" | "getPluginConfig"
   > & {
-    control: CodexSessionCatalogControl | CodexSessionCatalogControlFactory;
+    control:
+      | CodexSessionCatalogControl
+      | CodexSessionCatalogControlFactory
+      | CodexSessionCatalogControlFactoryStub;
     getPluginConfig?: () => unknown;
   },
 ) {
+  const getPluginConfig = params.getPluginConfig ?? (() => undefined);
+  const baseControl = asControlFactory(params.control);
+  const control =
+    "homesForAgent" in params.control
+      ? baseControl
+      : (() => {
+          const resolver = createCodexCatalogHomeResolver({
+            config: params.getRuntimeConfig() ?? (params.api.config as OpenClawConfig),
+            getRuntimeConfig: params.getRuntimeConfig,
+            getPluginConfig,
+          });
+          return {
+            ...baseControl,
+            homesForAgent: (agentId: string) => resolver.forAgent(agentId),
+          } satisfies CodexSessionCatalogControlFactory;
+        })();
   return registerCodexSessionCatalogRuntime({
     ...params,
-    control: asControlFactory(params.control),
-    getPluginConfig: params.getPluginConfig ?? (() => undefined),
+    control,
+    getPluginConfig,
   });
 }
 
@@ -771,12 +807,13 @@ describe("Codex supervision catalog", () => {
     } as OpenClawConfig;
     const env = { ...process.env, CODEX_HOME: processCodexHome };
 
-    const homes = createCodexCatalogHomeResolver({
+    const control = createCodexSessionCatalogControlFactory({
       config: runtimeConfig,
+      env,
       getRuntimeConfig: () => runtimeConfig,
       getPluginConfig: () => ({ supervision: { enabled: true } }),
-      env,
-    }).forAgent("beta");
+    });
+    const homes = control.homesForAgent("beta");
 
     expect(
       new Set(
@@ -797,10 +834,6 @@ describe("Codex supervision catalog", () => {
     pinnedConnectionMocks.request.mockResolvedValue({
       thread: idleThread({ id: "thread-source" }),
     });
-    const control = createCodexSessionCatalogControlFactory({
-      getPluginConfig: () => ({ supervision: { enabled: true } }),
-      getRuntimeConfig: () => runtimeConfig,
-    });
     const alphaSource = homes.find(
       (home) =>
         resolveCodexAppServerLocalHomeDir(home.appServer.start, home.agentDir, env) ===
@@ -808,9 +841,15 @@ describe("Codex supervision catalog", () => {
     );
     expect(alphaSource).toBeDefined();
 
-    const boundControl = control.forRequest("beta", alphaSource);
-    await boundControl.listPage({});
-    await boundControl.withPinnedConnection(
+    const alphaFingerprint = buildCodexAppServerConnectionFingerprint(
+      alphaSource!.appServer,
+      alphaSource!.agentDir,
+    );
+    const boundControl = control.forUpstream("beta", alphaFingerprint);
+    expect(boundControl).toBeDefined();
+    expect(control.forUpstream("beta", "unknown-fingerprint")).toBeUndefined();
+    await boundControl!.listPage({});
+    await boundControl!.withPinnedConnection(
       async (pinned) => await pinned.readThread("thread-source", false),
     );
 

@@ -7,13 +7,11 @@ import type {
 } from "openclaw/plugin-sdk/session-catalog";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CodexAppServerRpcError } from "./app-server/client.js";
-import { buildCodexAppServerConnectionFingerprint } from "./app-server/plugin-app-cache-key.js";
 import type { CodexTurn, CodexUserInput } from "./app-server/protocol.js";
 import {
   sessionBindingIdentity,
   type CodexAppServerBindingStore,
 } from "./app-server/session-binding.js";
-import type { CodexCatalogHome } from "./session-catalog-homes.js";
 import type {
   CodexSessionCatalogControl,
   CodexSessionCatalogControlFactory,
@@ -202,7 +200,6 @@ export function createChecker(params: {
   api: OpenClawPluginApi;
   bindingStore: CodexAppServerBindingStore;
   control: CodexSessionCatalogControlFactory;
-  catalogHomes: (agentId: string) => readonly CodexCatalogHome[];
   getRuntimeConfig: () => OpenClawConfig | undefined;
 }): NonNullable<SessionCatalogProvider["checkUpstreamActivity"]> {
   const resolveThreadId = async (probe: SessionUpstreamProbe) => {
@@ -234,16 +231,13 @@ export function createChecker(params: {
       if (!fingerprint) {
         continue;
       }
-      const source = params
-        .catalogHomes(probe.agentId)
-        .find(
-          (home) =>
-            home.hostId === probe.hostId &&
-            buildCodexAppServerConnectionFingerprint(home.appServer, home.agentDir) === fingerprint,
-        );
-      const key = `${probe.agentId}\0${source?.sourceHomeId ?? "legacy"}`;
+      const control = params.control.forUpstream(probe.agentId, fingerprint);
+      if (!control) {
+        continue;
+      }
+      const key = `${probe.agentId}\0${fingerprint}`;
       const group = groups.get(key) ?? {
-        control: params.control.forRequest(probe.agentId, source),
+        control,
         probes: [],
       };
       group.probes.push(probe);

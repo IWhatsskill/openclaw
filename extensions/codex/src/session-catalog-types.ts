@@ -71,6 +71,11 @@ export type CodexSessionCatalogControl = {
 
 export type CodexSessionCatalogControlFactory = {
   forRequest(agentId: string, source?: CodexCatalogHome): CodexSessionCatalogControl;
+  homesForAgent(agentId: string): readonly CodexCatalogHome[];
+  forUpstream(
+    agentId: string,
+    connectionFingerprint: string,
+  ): CodexSessionCatalogControl | undefined;
 };
 
 export type CodexSessionCatalogError = {
