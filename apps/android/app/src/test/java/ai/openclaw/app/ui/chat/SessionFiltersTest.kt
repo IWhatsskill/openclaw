@@ -99,7 +99,7 @@ class SessionFiltersTest {
   }
 
   @Test
-  fun pickerIncludesStaleSelectableSessionsAndKeepsCurrentFirst() {
+  fun pickerIncludesCanonicalActiveRowsAndKeepsCurrentFirst() {
     val sessions =
       listOf(
         ChatSessionEntry(key = "old-channel", updatedAtMs = 1L),
@@ -115,42 +115,6 @@ class SessionFiltersTest {
       ).map { it.key }
 
     assertEquals(listOf("main", "active-old", "old-channel"), result)
-  }
-
-  @Test
-  fun pickerSearchesSessionMetadataAndKey() {
-    val sessions =
-      listOf(
-        ChatSessionEntry(
-          key = "agent:main:slack:channel:ops",
-          updatedAtMs = 2L,
-          label = "Operations",
-        ),
-        ChatSessionEntry(
-          key = "agent:main:signal:direct:123",
-          updatedAtMs = 1L,
-          displayName = "Personal",
-        ),
-      )
-
-    assertEquals(
-      listOf("agent:main:slack:channel:ops"),
-      resolveSessionPickerChoices(
-        "main",
-        sessions,
-        mainSessionKey = "main",
-        query = "operations",
-      ).map { it.key },
-    )
-    assertEquals(
-      listOf("agent:main:signal:direct:123"),
-      resolveSessionPickerChoices(
-        "main",
-        sessions,
-        mainSessionKey = "main",
-        query = "123",
-      ).map { it.key },
-    )
   }
 
   @Test

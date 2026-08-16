@@ -46,6 +46,7 @@ import ai.openclaw.app.i18n.resolveNativeTextResource
 import ai.openclaw.app.i18n.verbatimText
 import ai.openclaw.app.resolveAgentIdFromMainSessionKey
 import ai.openclaw.app.selectableAgents
+import ai.openclaw.app.ui.SessionFilter
 import ai.openclaw.app.ui.copyGatewayDiagnosticsReport
 import ai.openclaw.app.ui.design.AgentAvatarSource
 import ai.openclaw.app.ui.design.ClawAgentAvatar
@@ -64,7 +65,9 @@ import ai.openclaw.app.ui.gatewayDiagnosticsEndpoint
 import ai.openclaw.app.ui.gatewayStatusForDisplay
 import ai.openclaw.app.ui.localizedUppercase
 import ai.openclaw.app.ui.relativeSessionTime
+import ai.openclaw.app.ui.rememberSessionBrowserSearchState
 import ai.openclaw.app.ui.rememberSystemAnimationsEnabled
+import ai.openclaw.app.ui.resolveSessionBrowserEntries
 import android.os.SystemClock
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -176,7 +179,6 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.DateFormat
@@ -957,12 +959,10 @@ fun ChatScreen(
 
   if (showSessionPicker) {
     ChatSessionPickerSheet(
+      viewModel = viewModel,
       sessions = sessions,
       currentSessionKey = sessionKey,
       mainSessionKey = mainSessionKey,
-      onSearch = { query ->
-        viewModel.fetchChatSessionList(search = query, archived = false)
-      },
       onDismiss = { showSessionPicker = false },
       onSelect = { entry ->
         viewModel.switchChatSession(entry.key, entry.ownerAgentId)
@@ -1095,32 +1095,38 @@ private fun ChatSessionSwitcher(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ChatSessionPickerSheet(
+  viewModel: MainViewModel,
   sessions: List<ChatSessionEntry>,
   currentSessionKey: String,
   mainSessionKey: String,
   onDismiss: () -> Unit,
   onSelect: (ChatSessionEntry) -> Unit,
-  onSearch: suspend (String) -> List<ChatSessionEntry>,
   onOpenAllSessions: () -> Unit,
 ) {
   var query by rememberSaveable { mutableStateOf("") }
-  var remoteResults by remember { mutableStateOf<List<ChatSessionEntry>?>(null) }
-  LaunchedEffect(query) {
-    val normalizedQuery = query.trim()
-    if (normalizedQuery.isEmpty()) {
-      remoteResults = null
-      return@LaunchedEffect
+  val searchState =
+    rememberSessionBrowserSearchState(
+      viewModel = viewModel,
+      sessions = sessions,
+      query = query,
+      archived = false,
+    )
+  val browserEntries =
+    remember(searchState.entries, currentSessionKey) {
+      resolveSessionBrowserEntries(
+        entries = searchState.entries,
+        currentSessionKey = currentSessionKey,
+        filter = SessionFilter.Recent,
+        recentFirst = true,
+      )
     }
-    delay(250)
-    remoteResults = onSearch(normalizedQuery)
-  }
   val choices =
-    remember(sessions, currentSessionKey, mainSessionKey, query, remoteResults) {
+    remember(browserEntries, currentSessionKey, mainSessionKey, searchState.query) {
       resolveSessionPickerChoices(
         currentSessionKey = currentSessionKey,
-        sessions = remoteResults ?: sessions,
+        sessions = browserEntries,
         mainSessionKey = mainSessionKey,
-        query = query,
+        includeFallbackSessions = searchState.query.isEmpty(),
       )
     }
 
@@ -1212,11 +1218,10 @@ private fun ChatSessionPickerSheet(
                 ?: chatSessionChipText(entry = entry, mainSessionKey = mainSessionKey)
             val metadata =
               listOfNotNull(
-                  entry.label?.trim()?.takeIf { it.isNotEmpty() && it != title },
-                  (entry.lastActivityAt ?: entry.updatedAtMs)?.let(::relativeSessionTime),
-                  entry.key.takeIf { it != title },
-                )
-                .joinToString(" · ")
+                entry.label?.trim()?.takeIf { it.isNotEmpty() && it != title },
+                (entry.lastActivityAt ?: entry.updatedAtMs)?.let(::relativeSessionTime),
+                entry.key.takeIf { it != title },
+              ).joinToString(" Â· ")
             Surface(
               onClick = { onSelect(entry) },
               modifier = Modifier.fillMaxWidth().heightIn(min = ClawTheme.spacing.touchTarget),
