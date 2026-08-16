@@ -71,7 +71,11 @@ computer and opted-in paired nodes by default. Disable only that catalog with:
 }
 ```
 
-Additional local Codex stores can be registered for managed stdio connections:
+Discovery automatically covers the Gateway process Codex home (`CODEX_HOME` or
+`~/.codex`) and the Codex home of every configured OpenClaw agent. Register
+additional local Codex stores only when sessions live in a home OpenClaw does
+not already know about, for example a store created with a custom `CODEX_HOME`
+outside OpenClaw:
 
 ```json5
 {
@@ -90,9 +94,17 @@ Additional local Codex stores can be registered for managed stdio connections:
 }
 ```
 
+Configured stores appear in the sidebar alongside automatically discovered
+ones, labeled `Local Codex · configured <n>` and grouped by each session's
+working directory. Sessions in these stores support the same view, continue,
+and archive actions, and the selected OpenClaw agent still owns the resulting
+connection; `homes` only adds catalog sources.
+
 Only existing directories are included. Equivalent paths are canonicalized and
-deduplicated. Changes require a Gateway restart. `sessionCatalog.homes` is
-rejected with Unix or WebSocket app-server transports because those transports
+deduplicated against the automatic homes, and automatic homes keep priority
+under the 100-source catalog cap. Changes require a Gateway restart.
+`sessionCatalog.homes` needs the default managed stdio app-server transport;
+Unix and WebSocket transports reject it with a visible error because they
 cannot start a source-bound app-server for each home.
 
 `supervision` separately controls agent-facing tools:
