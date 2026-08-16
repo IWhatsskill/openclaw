@@ -176,6 +176,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.DateFormat
@@ -959,6 +960,9 @@ fun ChatScreen(
       sessions = sessions,
       currentSessionKey = sessionKey,
       mainSessionKey = mainSessionKey,
+      onSearch = { query ->
+        viewModel.fetchChatSessionList(search = query, archived = false)
+      },
       onDismiss = { showSessionPicker = false },
       onSelect = { entry ->
         viewModel.switchChatSession(entry.key, entry.ownerAgentId)
@@ -1096,14 +1100,25 @@ private fun ChatSessionPickerSheet(
   mainSessionKey: String,
   onDismiss: () -> Unit,
   onSelect: (ChatSessionEntry) -> Unit,
+  onSearch: suspend (String) -> List<ChatSessionEntry>,
   onOpenAllSessions: () -> Unit,
 ) {
   var query by rememberSaveable { mutableStateOf("") }
+  var remoteResults by remember { mutableStateOf<List<ChatSessionEntry>?>(null) }
+  LaunchedEffect(query) {
+    val normalizedQuery = query.trim()
+    if (normalizedQuery.isEmpty()) {
+      remoteResults = null
+      return@LaunchedEffect
+    }
+    delay(250)
+    remoteResults = onSearch(normalizedQuery)
+  }
   val choices =
-    remember(sessions, currentSessionKey, mainSessionKey, query) {
+    remember(sessions, currentSessionKey, mainSessionKey, query, remoteResults) {
       resolveSessionPickerChoices(
         currentSessionKey = currentSessionKey,
-        sessions = sessions,
+        sessions = remoteResults ?: sessions,
         mainSessionKey = mainSessionKey,
         query = query,
       )
@@ -1143,7 +1158,10 @@ private fun ChatSessionPickerSheet(
         BasicTextField(
           value = query,
           onValueChange = { query = it },
-          modifier = Modifier.weight(1f),
+          modifier =
+            Modifier
+              .weight(1f)
+              .semantics { contentDescription = nativeString("Search sessions") },
           singleLine = true,
           textStyle = ClawTheme.type.body.copy(color = ClawTheme.colors.text),
           cursorBrush = SolidColor(ClawTheme.colors.primary),
