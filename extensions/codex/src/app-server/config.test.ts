@@ -367,10 +367,13 @@ describe("Codex app-server config", () => {
     ).toStrictEqual({});
   });
 
-  it("parses the native session discovery toggle", () => {
-    expect(readCodexPluginConfig({ sessionCatalog: { enabled: false } }).sessionCatalog).toEqual({
-      enabled: false,
-    });
+  it("parses native session discovery options", () => {
+    expect(
+      readCodexPluginConfig({
+        sessionCatalog: { enabled: false, homes: [" /srv/codex-extra "] },
+      }).sessionCatalog,
+    ).toEqual({ enabled: false, homes: ["/srv/codex-extra"] });
+    expect(readCodexPluginConfig({ sessionCatalog: { homes: [" "] } })).toStrictEqual({});
   });
 
   it("rejects unknown app-server fields", () => {
