@@ -160,6 +160,23 @@ internal fun hasAdditionalSessionChoices(
   }
 }
 
+internal enum class SessionPickerContentMode {
+  SearchLoading,
+  SearchNoMatches,
+  Choices,
+}
+
+/** Keeps a pending picker search distinct from a settled empty result. */
+internal fun sessionPickerContentMode(
+  searchLoading: Boolean,
+  hasChoices: Boolean,
+): SessionPickerContentMode =
+  when {
+    searchLoading -> SessionPickerContentMode.SearchLoading
+    hasChoices -> SessionPickerContentMode.Choices
+    else -> SessionPickerContentMode.SearchNoMatches
+  }
+
 /** Builds quick-switch-specific choices from canonical active browser rows. */
 internal fun resolveSessionPickerChoices(
   currentSessionKey: String,

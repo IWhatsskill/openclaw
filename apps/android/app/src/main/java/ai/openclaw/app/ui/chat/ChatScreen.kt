@@ -1197,7 +1197,17 @@ private fun ChatSessionPickerSheet(
         color = ClawTheme.colors.border,
         thickness = 1.dp,
       )
-      if (choices.isEmpty()) {
+      val pickerContentMode =
+        sessionPickerContentMode(
+          searchLoading = searchState.loading,
+          hasChoices = choices.isNotEmpty(),
+        )
+      if (pickerContentMode == SessionPickerContentMode.SearchLoading) {
+        ClawLoadingState(
+          title = nativeString("Searching threads"),
+          modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp),
+        )
+      } else if (pickerContentMode == SessionPickerContentMode.SearchNoMatches) {
         Text(
           text = nativeString("No matching sessions"),
           modifier = Modifier.padding(horizontal = 20.dp, vertical = 24.dp),

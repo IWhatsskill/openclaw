@@ -118,6 +118,14 @@ class SessionFiltersTest {
   }
 
   @Test
+  fun pickerContentKeepsPendingSearchDistinctFromNoMatches() {
+    assertEquals(SessionPickerContentMode.SearchLoading, sessionPickerContentMode(searchLoading = true, hasChoices = false))
+    assertEquals(SessionPickerContentMode.SearchLoading, sessionPickerContentMode(searchLoading = true, hasChoices = true))
+    assertEquals(SessionPickerContentMode.SearchNoMatches, sessionPickerContentMode(searchLoading = false, hasChoices = false))
+    assertEquals(SessionPickerContentMode.Choices, sessionPickerContentMode(searchLoading = false, hasChoices = true))
+  }
+
+  @Test
   fun isSelectableChatSession_matchesIosRecentSessionFilter() {
     val hidden =
       listOf(
