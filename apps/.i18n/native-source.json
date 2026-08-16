@@ -3562,6 +3562,17 @@
       ]
     },
     {
+      "id": "native.android.69a9a58c98cfdacb",
+      "source": "Clear search",
+      "surface": "android",
+      "sites": [
+        {
+          "kind": "ui-call",
+          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt"
+        }
+      ]
+    },
+    {
       "id": "native.android.5a8c6e77f0a61003",
       "source": "Clear session search",
       "surface": "android",
@@ -5327,6 +5338,10 @@
       "source": "Current session",
       "surface": "android",
       "sites": [
+        {
+          "kind": "ui-call",
+          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt"
+        },
         {
           "kind": "resource-string",
           "path": "apps/android/wear/src/main/res/values/strings.xml"
@@ -8735,6 +8750,17 @@
       ]
     },
     {
+      "id": "native.android.a4dfdc8ffb7f41e4",
+      "source": "Manage all sessions",
+      "surface": "android",
+      "sites": [
+        {
+          "kind": "ui-call",
+          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt"
+        }
+      ]
+    },
+    {
       "id": "native.android.95087e0110f8f1d1",
       "source": "Manage installed skills and add trusted releases from ClawHub.",
       "surface": "android",
@@ -9911,6 +9937,17 @@
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt"
+        }
+      ]
+    },
+    {
+      "id": "native.android.c8af857e495b16d4",
+      "source": "No matching sessions",
+      "surface": "android",
+      "sites": [
+        {
+          "kind": "ui-call",
+          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt"
         }
       ]
     },
@@ -12381,6 +12418,10 @@
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SidebarComponents.kt"
+        },
+        {
+          "kind": "ui-call",
+          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt"
         }
       ]
     },
@@ -14806,6 +14847,10 @@
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SidebarComponents.kt"
+        },
+        {
+          "kind": "ui-call",
+          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt"
         }
       ]
     },
@@ -16520,6 +16565,17 @@
     {
       "id": "native.android.e254550a992e959b",
       "source": "Switch branch",
+      "surface": "android",
+      "sites": [
+        {
+          "kind": "ui-call",
+          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt"
+        }
+      ]
+    },
+    {
+      "id": "native.android.b1e8839e0d4bae0a",
+      "source": "Switch chat",
       "surface": "android",
       "sites": [
         {
