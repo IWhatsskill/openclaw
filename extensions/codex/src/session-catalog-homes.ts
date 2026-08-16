@@ -89,6 +89,19 @@ function resolveCodexCatalogHomes(params: {
       label: "Local Codex · user",
       usesProcessHomeFallback: !processHomeConfigured,
     });
+    const agentIds = listAgentIds(config).toSorted((left, right) =>
+      left === ownerAgentId ? -1 : right === ownerAgentId ? 1 : left.localeCompare(right),
+    );
+    candidates.push(
+      ...agentIds.flatMap((agentId) => {
+        const codexHome = canonicalCatalogHome(
+          resolveCodexAppServerHomeDir(resolveAgentDir(config, agentId, env)),
+        );
+        return fs.existsSync(codexHome)
+          ? [{ codexHome, label: `Local Codex · ${agentId}`, usesProcessHomeFallback: false }]
+          : [];
+      }),
+    );
     candidates.push(
       ...configuredHomes.flatMap((value, index) => {
         const codexHome = existingCanonicalCatalogHome(value);
@@ -100,19 +113,6 @@ function resolveCodexCatalogHomes(params: {
                 usesProcessHomeFallback: false,
               },
             ]
-          : [];
-      }),
-    );
-    const agentIds = listAgentIds(config).toSorted((left, right) =>
-      left === ownerAgentId ? -1 : right === ownerAgentId ? 1 : left.localeCompare(right),
-    );
-    candidates.push(
-      ...agentIds.flatMap((agentId) => {
-        const codexHome = canonicalCatalogHome(
-          resolveCodexAppServerHomeDir(resolveAgentDir(config, agentId, env)),
-        );
-        return fs.existsSync(codexHome)
-          ? [{ codexHome, label: `Local Codex · ${agentId}`, usesProcessHomeFallback: false }]
           : [];
       }),
     );

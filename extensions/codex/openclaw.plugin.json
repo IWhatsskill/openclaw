@@ -406,7 +406,7 @@
     },
     "sessionCatalog.homes": {
       "label": "Additional Codex Homes",
-      "help": "Existing local Codex home directories to include in native session discovery. Paths are canonicalized and deduplicated. Applies to managed local app-server connections and requires a Gateway restart.",
+      "help": "Existing local Codex home directories to include in native session discovery. Paths are canonicalized and deduplicated. Requires appServer.transport=stdio and a Gateway restart.",
       "advanced": true
     },
     "codexDynamicToolsLoading": {

@@ -376,6 +376,20 @@ describe("Codex app-server config", () => {
     expect(readCodexPluginConfig({ sessionCatalog: { homes: [" "] } })).toStrictEqual({});
   });
 
+  it.each([
+    { transport: "unix", homeScope: "user" },
+    { transport: "websocket", url: "ws://127.0.0.1:39175" },
+  ] as const)("rejects additional session homes for $transport app servers", (appServer) => {
+    expect(() =>
+      resolveRuntimeForTest({
+        pluginConfig: { appServer, sessionCatalog: { homes: ["/srv/codex-extra"] } },
+        env: {},
+      }),
+    ).toThrow(
+      "plugins.entries.codex.config.sessionCatalog.homes requires appServer.transport=stdio",
+    );
+  });
+
   it("rejects unknown app-server fields", () => {
     expect(
       readCodexPluginConfig({

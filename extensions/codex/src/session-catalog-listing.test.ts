@@ -1,5 +1,6 @@
 // Codex supervision tests cover passive listing and safe local session takeover.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MAX_HOST_COUNT } from "./session-catalog-parsing.js";
 import {
   tempDirs,
   createCodexSessionCatalogControl,
@@ -295,11 +296,14 @@ describe("Codex supervision catalog", () => {
     const processCodexHome = path.join(root, "process-codex-home");
     const alphaCodexHome = resolveCodexAppServerHomeDir(alphaAgentDir);
     const betaCodexHome = resolveCodexAppServerHomeDir(betaAgentDir);
-    const configuredCodexHome = path.join(root, "configured-codex-home");
+    const configuredCodexHomes = Array.from({ length: MAX_HOST_COUNT }, (_, index) =>
+      path.join(root, "configured-codex-home", String(index)),
+    );
+    const configuredCodexHome = configuredCodexHomes[0]!;
     const configuredCodexHomeAlias = path.join(root, "configured-codex-home-alias");
     const configuredFile = path.join(root, "not-a-codex-home");
     await Promise.all(
-      [processCodexHome, alphaCodexHome, betaCodexHome, configuredCodexHome].map((dir) =>
+      [processCodexHome, alphaCodexHome, betaCodexHome, ...configuredCodexHomes].map((dir) =>
         fs.mkdir(dir, { recursive: true }),
       ),
     );
@@ -331,23 +335,25 @@ describe("Codex supervision catalog", () => {
             alphaCodexHome,
             path.join(root, "missing-codex-home"),
             configuredFile,
+            ...configuredCodexHomes.slice(1),
           ],
         },
       }),
     });
     const homes = control.homesForAgent("beta");
 
-    expect(
-      new Set(
-        homes.map((home) =>
-          resolveCodexAppServerLocalHomeDir(home.appServer.start, home.agentDir, env),
-        ),
-      ),
-    ).toEqual(new Set([processCodexHome, configuredCodexHome, alphaCodexHome, betaCodexHome]));
-    expect(homes.map((home) => home.agentDir)).toEqual(Array(4).fill(betaAgentDir));
+    const resolvedHomes = homes.map((home) =>
+      resolveCodexAppServerLocalHomeDir(home.appServer.start, home.agentDir, env),
+    );
+    expect(homes).toHaveLength(MAX_HOST_COUNT);
+    expect(resolvedHomes.slice(0, 3)).toEqual([processCodexHome, betaCodexHome, alphaCodexHome]);
+    expect(resolvedHomes.filter((home) => configuredCodexHomes.includes(home))).toHaveLength(
+      MAX_HOST_COUNT - 3,
+    );
+    expect(homes.map((home) => home.agentDir)).toEqual(Array(MAX_HOST_COUNT).fill(betaAgentDir));
     expect(homes[0]?.hostId).toBe(CODEX_LOCAL_SESSION_HOST_ID);
     expect(homes.slice(1).every((home) => home.hostId.startsWith("gateway:local:"))).toBe(true);
-    expect(new Set(homes.map((home) => home.sourceHomeId)).size).toBe(4);
+    expect(new Set(homes.map((home) => home.sourceHomeId)).size).toBe(MAX_HOST_COUNT);
     expect(
       JSON.stringify(homes.map(({ hostId, sourceHomeId }) => ({ hostId, sourceHomeId }))),
     ).not.toContain(root);

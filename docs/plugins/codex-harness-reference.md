@@ -71,7 +71,7 @@ computer and opted-in paired nodes by default. Disable only that catalog with:
 }
 ```
 
-Additional local Codex stores can be registered explicitly:
+Additional local Codex stores can be registered for managed stdio connections:
 
 ```json5
 {
@@ -91,7 +91,9 @@ Additional local Codex stores can be registered explicitly:
 ```
 
 Only existing directories are included. Equivalent paths are canonicalized and
-deduplicated. Changes require a Gateway restart.
+deduplicated. Changes require a Gateway restart. `sessionCatalog.homes` is
+rejected with Unix or WebSocket app-server transports because those transports
+cannot start a source-bound app-server for each home.
 
 `supervision` separately controls agent-facing tools:
 
