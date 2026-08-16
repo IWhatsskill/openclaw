@@ -159,3 +159,56 @@ internal fun hasAdditionalSessionChoices(
       (entry.key == mainKey || isSelectableChatSession(entry.key, mainKey))
   }
 }
+/** Builds the full in-chat picker list without the compact row's 24-hour cutoff. */
+internal fun resolveSessionPickerChoices(
+  currentSessionKey: String,
+  sessions: List<ChatSessionEntry>,
+  mainSessionKey: String,
+  query: String = "",
+): List<ChatSessionEntry> {
+  val mainKey = mainSessionKey.trim().ifEmpty { "main" }
+  val current = currentSessionKey.trim().let { if (it == "main" && mainKey != "main") mainKey else it }
+  val aliasKey = if (mainKey == "main") null else "main"
+  val candidates = linkedMapOf<String, ChatSessionEntry>()
+
+  sessions.forEach { entry ->
+    if (entry.key == aliasKey) return@forEach
+    if (entry.key != mainKey && !isSelectableChatSession(entry.key, mainKey)) return@forEach
+    candidates.putIfAbsent(entry.key, entry)
+  }
+  if (mainKey !in candidates) candidates[mainKey] = ChatSessionEntry(key = mainKey, updatedAtMs = null)
+  if (
+    current.isNotEmpty() &&
+      current != aliasKey &&
+      current !in candidates &&
+      (current == mainKey || isSelectableChatSession(current, mainKey))
+  ) {
+    candidates[current] = ChatSessionEntry(key = current, updatedAtMs = null)
+  }
+
+  val normalizedQuery = query.trim().lowercase()
+  return candidates.values
+    .asSequence()
+    .filter { entry ->
+      normalizedQuery.isEmpty() ||
+        listOfNotNull(
+            entry.displayName,
+            entry.derivedTitle,
+            entry.label,
+            entry.key,
+            entry.ownerAgentId,
+            friendlySessionName(entry.key),
+          )
+          .joinToString(" ")
+          .lowercase()
+          .contains(normalizedQuery)
+    }
+    .sortedWith(
+      compareBy<ChatSessionEntry>(
+        { when { it.key == mainKey -> 0; it.key == current -> 1; it.pinned == true -> 2; else -> 3 } },
+        { -(it.lastActivityAt ?: it.updatedAtMs ?: 0L) },
+        { it.key },
+      ),
+    )
+    .toList()
+}
