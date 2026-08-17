@@ -1,8 +1,8 @@
 package ai.openclaw.app.ui
 
 import ai.openclaw.app.GatewayAgentSummary
-import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.GatewayConnectionDisplay
+import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.selectableAgents
