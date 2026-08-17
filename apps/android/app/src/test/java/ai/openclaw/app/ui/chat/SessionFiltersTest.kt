@@ -99,33 +99,6 @@ class SessionFiltersTest {
   }
 
   @Test
-  fun pickerIncludesCanonicalActiveRowsAndKeepsCurrentFirst() {
-    val sessions =
-      listOf(
-        ChatSessionEntry(key = "old-channel", updatedAtMs = 1L),
-        ChatSessionEntry(key = "active-old", updatedAtMs = 2L),
-        ChatSessionEntry(key = "main", updatedAtMs = 3L),
-      )
-
-    val result =
-      resolveSessionPickerChoices(
-        currentSessionKey = "active-old",
-        sessions = sessions,
-        mainSessionKey = "main",
-      ).map { it.key }
-
-    assertEquals(listOf("main", "active-old", "old-channel"), result)
-  }
-
-  @Test
-  fun pickerContentKeepsPendingSearchDistinctFromNoMatches() {
-    assertEquals(SessionPickerContentMode.SearchLoading, sessionPickerContentMode(searchLoading = true, hasChoices = false))
-    assertEquals(SessionPickerContentMode.SearchLoading, sessionPickerContentMode(searchLoading = true, hasChoices = true))
-    assertEquals(SessionPickerContentMode.SearchNoMatches, sessionPickerContentMode(searchLoading = false, hasChoices = false))
-    assertEquals(SessionPickerContentMode.Choices, sessionPickerContentMode(searchLoading = false, hasChoices = true))
-  }
-
-  @Test
   fun isSelectableChatSession_matchesIosRecentSessionFilter() {
     val hidden =
       listOf(

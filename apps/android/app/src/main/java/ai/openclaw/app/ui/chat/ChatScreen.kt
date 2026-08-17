@@ -46,7 +46,6 @@ import ai.openclaw.app.i18n.resolveNativeTextResource
 import ai.openclaw.app.i18n.verbatimText
 import ai.openclaw.app.resolveAgentIdFromMainSessionKey
 import ai.openclaw.app.selectableAgents
-import ai.openclaw.app.ui.SessionFilter
 import ai.openclaw.app.ui.copyGatewayDiagnosticsReport
 import ai.openclaw.app.ui.design.AgentAvatarSource
 import ai.openclaw.app.ui.design.ClawAgentAvatar
@@ -65,9 +64,7 @@ import ai.openclaw.app.ui.gatewayDiagnosticsEndpoint
 import ai.openclaw.app.ui.gatewayStatusForDisplay
 import ai.openclaw.app.ui.localizedUppercase
 import ai.openclaw.app.ui.relativeSessionTime
-import ai.openclaw.app.ui.rememberSessionBrowserSearchState
 import ai.openclaw.app.ui.rememberSystemAnimationsEnabled
-import ai.openclaw.app.ui.resolveSessionBrowserEntries
 import android.os.SystemClock
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -126,7 +123,6 @@ import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Photo
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Stop
@@ -403,7 +399,6 @@ fun ChatScreen(
   val currentPickerOwner by rememberUpdatedState(composerOwner)
   val currentPickerMainSessionKey by rememberUpdatedState(mainSessionKey)
   val sendInFlight = composerOwner in sendStates
-  var showSessionPicker by rememberSaveable { mutableStateOf(false) }
   var showModelPicker by rememberSaveable { mutableStateOf(false) }
   var showBackgroundTasks by rememberSaveable { mutableStateOf(false) }
   var showBranchSwitcher by rememberSaveable { mutableStateOf(false) }
@@ -640,7 +635,6 @@ fun ChatScreen(
   LaunchedEffect(gatewayConnectionDisplay.isConnected) {
     if (!gatewayConnectionDisplay.isConnected) {
       showModelPicker = false
-      showSessionPicker = false
     }
   }
 
@@ -708,10 +702,7 @@ fun ChatScreen(
         viewModel.switchChatSession(entry.key, entry.ownerAgentId)
         viewModel.refreshChatSessions(limit = 100)
       },
-      onOpenSessions = {
-        showSessionPicker = true
-        viewModel.refreshChatSessions(limit = 200)
-      },
+      onOpenSessions = onOpenSessions,
     )
 
     errorText?.takeIf { it.isNotBlank() }?.let { error ->
@@ -957,24 +948,6 @@ fun ChatScreen(
     )
   }
 
-  if (showSessionPicker) {
-    ChatSessionPickerSheet(
-      viewModel = viewModel,
-      sessions = sessions,
-      currentSessionKey = sessionKey,
-      mainSessionKey = mainSessionKey,
-      onDismiss = { showSessionPicker = false },
-      onSelect = { entry ->
-        viewModel.switchChatSession(entry.key, entry.ownerAgentId)
-        showSessionPicker = false
-        viewModel.refreshChatSessions(limit = 200)
-      },
-      onOpenAllSessions = {
-        showSessionPicker = false
-        onOpenSessions()
-      },
-    )
-  }
   if (showBranchSwitcher) {
     BranchSwitcherSheet(
       branches = sessionBranches,
@@ -1086,214 +1059,6 @@ private fun ChatSessionSwitcher(
         ) {
           Icon(imageVector = Icons.Default.MoreHoriz, contentDescription = null, modifier = Modifier.size(16.dp))
           Text(text = nativeString("All"), style = ClawTheme.type.caption, maxLines = 1)
-        }
-      }
-    }
-  }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun ChatSessionPickerSheet(
-  viewModel: MainViewModel,
-  sessions: List<ChatSessionEntry>,
-  currentSessionKey: String,
-  mainSessionKey: String,
-  onDismiss: () -> Unit,
-  onSelect: (ChatSessionEntry) -> Unit,
-  onOpenAllSessions: () -> Unit,
-) {
-  var query by rememberSaveable { mutableStateOf("") }
-  val searchState =
-    rememberSessionBrowserSearchState(
-      viewModel = viewModel,
-      sessions = sessions,
-      query = query,
-      archived = false,
-    )
-  val browserEntries =
-    remember(searchState.entries, currentSessionKey) {
-      resolveSessionBrowserEntries(
-        entries = searchState.entries,
-        currentSessionKey = currentSessionKey,
-        filter = SessionFilter.Recent,
-        recentFirst = true,
-      )
-    }
-  val choices =
-    remember(browserEntries, currentSessionKey, mainSessionKey, searchState.query) {
-      resolveSessionPickerChoices(
-        currentSessionKey = currentSessionKey,
-        sessions = browserEntries,
-        mainSessionKey = mainSessionKey,
-        includeFallbackSessions = searchState.query.isEmpty(),
-      )
-    }
-
-  ModalBottomSheet(
-    onDismissRequest = onDismiss,
-    containerColor = ClawTheme.colors.surface,
-    contentColor = ClawTheme.colors.text,
-  ) {
-    Column(
-      modifier = Modifier.fillMaxWidth().heightIn(max = 640.dp).imePadding(),
-    ) {
-      Text(
-        text = nativeString("Switch chat"),
-        modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
-        style = ClawTheme.type.title,
-        color = ClawTheme.colors.text,
-      )
-      Row(
-        modifier =
-          Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 20.dp, vertical = 4.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .background(ClawTheme.colors.surfaceRaised.copy(alpha = 0.72f))
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-      ) {
-        Icon(
-          imageVector = Icons.Default.Search,
-          contentDescription = null,
-          tint = ClawTheme.colors.textMuted,
-          modifier = Modifier.size(18.dp),
-        )
-        BasicTextField(
-          value = query,
-          onValueChange = { query = it },
-          modifier =
-            Modifier
-              .weight(1f)
-              .semantics { contentDescription = nativeString("Search sessions") },
-          singleLine = true,
-          textStyle = ClawTheme.type.body.copy(color = ClawTheme.colors.text),
-          cursorBrush = SolidColor(ClawTheme.colors.primary),
-          decorationBox = { innerTextField ->
-            if (query.isBlank()) {
-              Text(
-                text = nativeString("Search sessions"),
-                style = ClawTheme.type.body,
-                color = ClawTheme.colors.textMuted,
-              )
-            }
-            innerTextField()
-          },
-        )
-        if (query.isNotBlank()) {
-          IconButton(onClick = { query = "" }) {
-            Icon(
-              imageVector = Icons.Default.Close,
-              contentDescription = nativeString("Clear search"),
-              tint = ClawTheme.colors.textMuted,
-            )
-          }
-        }
-      }
-      HorizontalDivider(
-        modifier = Modifier.padding(top = 8.dp),
-        color = ClawTheme.colors.border,
-        thickness = 1.dp,
-      )
-      val pickerContentMode =
-        sessionPickerContentMode(
-          searchLoading = searchState.loading,
-          hasChoices = choices.isNotEmpty(),
-        )
-      if (pickerContentMode == SessionPickerContentMode.SearchLoading) {
-        ClawLoadingState(
-          title = nativeString("Searching threads"),
-          modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp),
-        )
-      } else if (pickerContentMode == SessionPickerContentMode.SearchNoMatches) {
-        Text(
-          text = nativeString("No matching sessions"),
-          modifier = Modifier.padding(horizontal = 20.dp, vertical = 24.dp),
-          style = ClawTheme.type.body,
-          color = ClawTheme.colors.textMuted,
-        )
-      } else {
-        LazyColumn(
-          modifier = Modifier.fillMaxWidth().weight(1f, fill = false),
-          contentPadding = PaddingValues(bottom = 8.dp),
-        ) {
-          itemsIndexed(choices, key = { _, entry -> entry.key }) { _, entry ->
-            val active = isActiveSessionChoice(entry.key, currentSessionKey, mainSessionKey)
-            val title =
-              entry.displayName?.trim()?.takeIf(String::isNotEmpty)
-                ?: entry.derivedTitle?.trim()?.takeIf(String::isNotEmpty)
-                ?: entry.label?.trim()?.takeIf(String::isNotEmpty)
-                ?: chatSessionChipText(entry = entry, mainSessionKey = mainSessionKey)
-            val metadata =
-              listOfNotNull(
-                entry.label?.trim()?.takeIf { it.isNotEmpty() && it != title },
-                (entry.lastActivityAt ?: entry.updatedAtMs)?.let(::relativeSessionTime),
-                entry.key.takeIf { it != title },
-              ).joinToString(" · ")
-            Surface(
-              onClick = { onSelect(entry) },
-              modifier = Modifier.fillMaxWidth().heightIn(min = ClawTheme.spacing.touchTarget),
-              color = if (active) ClawTheme.colors.surfacePressed else Color.Transparent,
-              contentColor = ClawTheme.colors.text,
-            ) {
-              Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-              ) {
-                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                  Text(
-                    text = title,
-                    style = ClawTheme.type.body,
-                    color = ClawTheme.colors.text,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                  )
-                  Text(
-                    text = metadata.ifBlank { entry.key },
-                    style = ClawTheme.type.caption,
-                    color = ClawTheme.colors.textMuted,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                  )
-                }
-                if (entry.pinned == true) {
-                  Icon(
-                    imageVector = Icons.Default.Star,
-                    contentDescription = nativeString("Pinned"),
-                    tint = ClawTheme.colors.primary,
-                    modifier = Modifier.size(18.dp),
-                  )
-                }
-                if (active) {
-                  Icon(
-                    imageVector = Icons.Default.Check,
-                    contentDescription = nativeString("Current session"),
-                    tint = ClawTheme.colors.primary,
-                    modifier = Modifier.size(20.dp),
-                  )
-                }
-              }
-            }
-          }
-        }
-      }
-      Surface(
-        onClick = onOpenAllSessions,
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp),
-        shape = RoundedCornerShape(ClawTheme.radii.pill),
-        color = ClawTheme.colors.surfaceRaised.copy(alpha = 0.72f),
-        contentColor = ClawTheme.colors.text,
-        border = BorderStroke(1.dp, ClawTheme.colors.border.copy(alpha = 0.7f)),
-      ) {
-        Row(
-          modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
-          verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.Center,
-        ) {
-          Text(text = nativeString("Manage all sessions"), style = ClawTheme.type.body)
         }
       }
     }
