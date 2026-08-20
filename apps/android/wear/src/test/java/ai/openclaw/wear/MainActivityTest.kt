@@ -147,6 +147,13 @@ class MainActivityTest {
   }
 
   @Test
+  fun nestedContextPickerCloseReturnsToSessionPicker() {
+    assertEquals(WearContextPicker.Session, wearContextPickerAfterClose(WearContextPicker.Agent))
+    assertEquals(WearContextPicker.Session, wearContextPickerAfterClose(WearContextPicker.Model))
+    assertNull(wearContextPickerAfterClose(WearContextPicker.Session))
+  }
+
+  @Test
   fun threadFollowTargetsTrailingAnchorAfterLatestContent() {
     assertEquals(-1, wearThreadLatestAnchorIndex(entryCount = 0, thinking = false))
     assertEquals(1, wearThreadLatestAnchorIndex(entryCount = 1, thinking = false))

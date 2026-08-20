@@ -411,13 +411,22 @@ private fun ChatPage(
   var followState by remember(snapshot.activeSessionId) { mutableStateOf(WearThreadFollowState()) }
   var contextPicker by remember { mutableStateOf<WearContextPicker?>(null) }
 
-  fun dismissContextPicker() {
+  fun clearContextPickerSearch() {
     when (contextPicker) {
       WearContextPicker.Session -> onClearSessionSearch()
       WearContextPicker.Model -> onClearModelSearch()
       else -> Unit
     }
+  }
+
+  fun finishContextPicker() {
+    clearContextPickerSearch()
     contextPicker = null
+  }
+
+  fun closeContextPicker() {
+    clearContextPickerSearch()
+    contextPicker = contextPicker?.let(::wearContextPickerAfterClose)
   }
 
   LaunchedEffect(listState, snapshot.activeSessionId) {
@@ -558,20 +567,20 @@ private fun ChatPage(
         picker = picker,
         snapshot = snapshot,
         actionBusy = actionBusy,
-        onDismiss = ::dismissContextPicker,
+        onDismiss = ::closeContextPicker,
         onOpenAgentPicker = { contextPicker = WearContextPicker.Agent },
         onOpenModelPicker = { contextPicker = WearContextPicker.Model },
         onSelectAgent = { agentId ->
           onSelectAgent(agentId)
-          dismissContextPicker()
+          finishContextPicker()
         },
         onSelectSession = { sessionId ->
           onSelectSession(sessionId)
-          dismissContextPicker()
+          finishContextPicker()
         },
         onSelectModel = { modelRef ->
           onSelectModel(modelRef)
-          dismissContextPicker()
+          finishContextPicker()
         },
         onSearchSessions = onSearchSessions,
         onLoadMoreSessionSearch = onLoadMoreSessionSearch,
@@ -1924,14 +1933,21 @@ private fun ConversationContextPicker(
     selected = true,
     enabled = !actionBusy,
     onClick = onOpenContextPicker,
+    modifier = Modifier.padding(horizontal = 12.dp),
   )
 }
 
-private enum class WearContextPicker {
+internal enum class WearContextPicker {
   Agent,
   Session,
   Model,
 }
+
+internal fun wearContextPickerAfterClose(picker: WearContextPicker): WearContextPicker? =
+  when (picker) {
+    WearContextPicker.Agent, WearContextPicker.Model -> WearContextPicker.Session
+    WearContextPicker.Session -> null
+  }
 
 @Composable
 private fun ContextPickerOverlay(
@@ -2107,11 +2123,12 @@ private fun ContextPickerOption(
   selected: Boolean,
   enabled: Boolean,
   onClick: () -> Unit,
+  modifier: Modifier = Modifier,
 ) {
   val colors = OpenClawWearTheme.colors
   Column(
     modifier =
-      Modifier
+      modifier
         .fillMaxWidth()
         .padding(horizontal = 12.dp)
         .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
