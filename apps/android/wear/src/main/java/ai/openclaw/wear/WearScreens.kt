@@ -339,6 +339,14 @@ internal fun OpenClawWearScreens(
             notificationsGranted = notificationsGranted,
             gatewayControlSupported = snapshot.gatewayControlsSupported,
             actionBusy = actionBusy,
+            onSelectAgent = onSelectAgent,
+            onSelectSession = onSelectSession,
+            onSelectModel = onSelectModel,
+            onSearchSessions = onSearchSessions,
+            onLoadMoreSessionSearch = onLoadMoreSessionSearch,
+            onClearSessionSearch = onClearSessionSearch,
+            onSearchModels = onSearchModels,
+            onClearModelSearch = onClearModelSearch,
             onThemeModeChange = onThemeModeChange,
             onAutoSpeakChange = onAutoSpeakChange,
             onRequestNotifications = onRequestNotifications,
@@ -455,42 +463,11 @@ private fun ChatPage(
       listState = listState,
     ) {
       item {
-        ConversationIdentity(
-          snapshot = snapshot,
-          actionBusy = actionBusy,
-          onOpenAgentPicker = { contextPicker = WearContextPicker.Agent },
-          onOpenSessionPicker = { contextPicker = WearContextPicker.Session },
-          onOpenModelPicker = { contextPicker = WearContextPicker.Model },
-        )
-      }
-      item {
         ConversationStatus(
           interaction = interaction,
           speaking = speaking,
           gatewayConnected = snapshot.gatewayState == WearGatewayState.CONNECTED,
         )
-      }
-      item {
-        Row(
-          modifier =
-            Modifier
-              .fillMaxWidth()
-              .padding(horizontal = 12.dp),
-          horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-          ActionButton(
-            label = stringResource(R.string.talk),
-            enabled = inputEnabled && !actionBusy && !speaking,
-            onClick = onTalk,
-            modifier = Modifier.weight(1f),
-          )
-          ActionButton(
-            label = stringResource(R.string.type),
-            enabled = inputEnabled && !actionBusy && !speaking,
-            onClick = onType,
-            modifier = Modifier.weight(1f),
-          )
-        }
       }
       if (canAbort) {
         item {
@@ -530,6 +507,35 @@ private fun ChatPage(
             onClick = if (speaking) onStopSpeaking else onSpeakLatest,
           )
         }
+      }
+      item {
+        Row(
+          modifier =
+            Modifier
+              .fillMaxWidth()
+              .padding(horizontal = 12.dp),
+          horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+          ActionButton(
+            label = stringResource(R.string.talk),
+            enabled = inputEnabled && !actionBusy && !speaking,
+            onClick = onTalk,
+            modifier = Modifier.weight(1f),
+          )
+          ActionButton(
+            label = stringResource(R.string.type),
+            enabled = inputEnabled && !actionBusy && !speaking,
+            onClick = onType,
+            modifier = Modifier.weight(1f),
+          )
+        }
+      }
+      item {
+        ConversationSessionPicker(
+          snapshot = snapshot,
+          actionBusy = actionBusy,
+          onOpenSessionPicker = { contextPicker = WearContextPicker.Session },
+        )
       }
       snapshot.failure?.let { failure ->
         item {
@@ -1449,6 +1455,14 @@ private fun ControlsPage(
   notificationsGranted: Boolean,
   gatewayControlSupported: Boolean,
   actionBusy: Boolean,
+  onSelectAgent: (String) -> Unit,
+  onSelectSession: (String) -> Unit,
+  onSelectModel: (String) -> Unit,
+  onSearchSessions: () -> Unit,
+  onLoadMoreSessionSearch: () -> Unit,
+  onClearSessionSearch: () -> Unit,
+  onSearchModels: () -> Unit,
+  onClearModelSearch: () -> Unit,
   onThemeModeChange: (WearThemeMode) -> Unit,
   onAutoSpeakChange: (Boolean) -> Unit,
   onRequestNotifications: () -> Unit,
@@ -1457,80 +1471,124 @@ private fun ControlsPage(
   onGatewayEnabledChange: (Boolean) -> Unit,
 ) {
   val gatewayConnected = snapshot.gatewayState == WearGatewayState.CONNECTED
-  WearPage(pageLabel = stringResource(R.string.controls)) {
-    item {
-      ConnectionPanel(snapshot = snapshot)
+  var contextPicker by remember { mutableStateOf<WearContextPicker?>(null) }
+
+  fun dismissContextPicker() {
+    when (contextPicker) {
+      WearContextPicker.Session -> onClearSessionSearch()
+      WearContextPicker.Model -> onClearModelSearch()
+      else -> Unit
     }
-    snapshot.failure?.let { failure ->
-      item { InlineError(text = failureDetail(failure)) }
-    }
-    item {
-      SelectionButton(
-        title = stringResource(R.string.gateway),
-        detail =
-          if (!gatewayControlSupported) {
-            stringResource(R.string.update_required)
-          } else if (gatewayConnected) {
-            stringResource(R.string.on)
-          } else {
-            stringResource(R.string.off)
-          },
-        selected = gatewayConnected,
-        enabled = gatewayControlSupported && !actionBusy,
-        onClick = { onGatewayEnabledChange(!gatewayConnected) },
-      )
-    }
-    item {
-      ThemeModeSelector(
-        themeMode = themeMode,
-        onThemeModeChange = onThemeModeChange,
-      )
-    }
-    item {
-      SelectionButton(
-        title = stringResource(R.string.reply_alerts),
-        detail =
-          if (notificationsGranted) {
-            stringResource(R.string.on)
-          } else {
-            stringResource(R.string.enable_alerts)
-          },
-        selected = notificationsGranted,
-        enabled = !notificationsGranted && !actionBusy,
-        onClick = onRequestNotifications,
-      )
-    }
-    if (!notificationsGranted) {
+    contextPicker = null
+  }
+
+  Box(modifier = Modifier.fillMaxSize()) {
+    WearPage(pageLabel = stringResource(R.string.controls)) {
+      item {
+        ConversationAgentModelPicker(
+          snapshot = snapshot,
+          actionBusy = actionBusy,
+          onOpenAgentPicker = { contextPicker = WearContextPicker.Agent },
+          onOpenModelPicker = { contextPicker = WearContextPicker.Model },
+        )
+      }
+      item {
+        ConnectionPanel(snapshot = snapshot)
+      }
+      snapshot.failure?.let { failure ->
+        item { InlineError(text = failureDetail(failure)) }
+      }
+      item {
+        SelectionButton(
+          title = stringResource(R.string.gateway),
+          detail =
+            if (!gatewayControlSupported) {
+              stringResource(R.string.update_required)
+            } else if (gatewayConnected) {
+              stringResource(R.string.on)
+            } else {
+              stringResource(R.string.off)
+            },
+          selected = gatewayConnected,
+          enabled = gatewayControlSupported && !actionBusy,
+          onClick = { onGatewayEnabledChange(!gatewayConnected) },
+        )
+      }
+      item {
+        ThemeModeSelector(
+          themeMode = themeMode,
+          onThemeModeChange = onThemeModeChange,
+        )
+      }
+      item {
+        SelectionButton(
+          title = stringResource(R.string.reply_alerts),
+          detail =
+            if (notificationsGranted) {
+              stringResource(R.string.on)
+            } else {
+              stringResource(R.string.enable_alerts)
+            },
+          selected = notificationsGranted,
+          enabled = !notificationsGranted && !actionBusy,
+          onClick = onRequestNotifications,
+        )
+      }
+      if (!notificationsGranted) {
+        item {
+          SecondaryButton(
+            label = stringResource(R.string.open_notification_settings),
+            enabled = !actionBusy,
+            onClick = onOpenNotificationSettings,
+          )
+        }
+      }
+      item {
+        SelectionButton(
+          title = stringResource(R.string.auto_speak),
+          detail =
+            if (autoSpeak) {
+              stringResource(R.string.on)
+            } else {
+              stringResource(R.string.off)
+            },
+          selected = autoSpeak,
+          enabled = !actionBusy,
+          onClick = { onAutoSpeakChange(!autoSpeak) },
+        )
+      }
+      item {
+        PhoneBoundaryPanel()
+      }
       item {
         SecondaryButton(
-          label = stringResource(R.string.open_notification_settings),
+          label = stringResource(R.string.refresh),
           enabled = !actionBusy,
-          onClick = onOpenNotificationSettings,
+          onClick = onRefresh,
         )
       }
     }
-    item {
-      SelectionButton(
-        title = stringResource(R.string.auto_speak),
-        detail =
-          if (autoSpeak) {
-            stringResource(R.string.on)
-          } else {
-            stringResource(R.string.off)
-          },
-        selected = autoSpeak,
-        enabled = !actionBusy,
-        onClick = { onAutoSpeakChange(!autoSpeak) },
-      )
-    }
-    item {
-      PhoneBoundaryPanel()
-    }
-    item {
-      SecondaryButton(
-        label = stringResource(R.string.refresh),
-        enabled = !actionBusy,
-        onClick = onRefresh,
+    contextPicker?.let { picker ->
+      ContextPickerOverlay(
+        picker = picker,
+        snapshot = snapshot,
+        actionBusy = actionBusy,
+        onDismiss = ::dismissContextPicker,
+        onSelectAgent = { agentId ->
+          onSelectAgent(agentId)
+          dismissContextPicker()
+        },
+        onSelectSession = { sessionId ->
+          onSelectSession(sessionId)
+          dismissContextPicker()
+        },
+        onSelectModel = { modelRef ->
+          onSelectModel(modelRef)
+          dismissContextPicker()
+        },
+        onSearchSessions = onSearchSessions,
+        onLoadMoreSessionSearch = onLoadMoreSessionSearch,
+        onSearchModels = onSearchModels,
       )
     }
   }
@@ -1891,15 +1949,29 @@ private fun OpenClawHeader(pageLabel: String) {
 }
 
 @Composable
-private fun ConversationIdentity(
+private fun ConversationSessionPicker(
+  snapshot: WearConversationSnapshot,
+  actionBusy: Boolean,
+  onOpenSessionPicker: () -> Unit,
+) {
+  val session = snapshot.sessions.firstOrNull(WearSessionSummary::selected) ?: snapshot.sessions.firstOrNull()
+  Panel {
+    ContextPickerRow(
+      label = stringResource(R.string.session),
+      value = session?.title ?: stringResource(R.string.current_session),
+      onClick = onOpenSessionPicker.takeIf { !actionBusy },
+    )
+  }
+}
+
+@Composable
+private fun ConversationAgentModelPicker(
   snapshot: WearConversationSnapshot,
   actionBusy: Boolean,
   onOpenAgentPicker: () -> Unit,
-  onOpenSessionPicker: () -> Unit,
   onOpenModelPicker: () -> Unit,
 ) {
   val agent = snapshot.agents.firstOrNull(WearAgentSummary::selected) ?: snapshot.agents.firstOrNull()
-  val session = snapshot.sessions.firstOrNull(WearSessionSummary::selected) ?: snapshot.sessions.firstOrNull()
   val model = snapshot.models.firstOrNull(WearModelSummary::selected)
   Panel {
     ContextPickerRow(
@@ -1910,12 +1982,6 @@ private fun ConversationIdentity(
           agent?.name ?: stringResource(R.string.agent),
         ).joinToString(" "),
       onClick = onOpenAgentPicker.takeIf { snapshot.agentControlsSupported && !actionBusy },
-    )
-    ContextPickerDivider()
-    ContextPickerRow(
-      label = stringResource(R.string.session),
-      value = session?.title ?: stringResource(R.string.current_session),
-      onClick = onOpenSessionPicker.takeIf { !actionBusy },
     )
     ContextPickerDivider()
     ContextPickerRow(
