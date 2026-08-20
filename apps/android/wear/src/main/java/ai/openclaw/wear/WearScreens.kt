@@ -1903,9 +1903,24 @@ private fun ConversationContextPicker(
     ).joinToString(" ")
   val modelName = model?.name ?: snapshot.selectedModelRef ?: stringResource(R.string.model)
   ContextPickerOption(
-    title = "${stringResource(R.string.session)}: ${session?.title ?: stringResource(R.string.current_session)}",
-    detail = "${stringResource(R.string.agent)}: $agentName",
-    status = "${stringResource(R.string.model)}: $modelName",
+    title =
+      stringResource(
+        R.string.context_label_value,
+        stringResource(R.string.session),
+        session?.title ?: stringResource(R.string.current_session),
+      ),
+    detail =
+      stringResource(
+        R.string.context_label_value,
+        stringResource(R.string.agent),
+        agentName,
+      ),
+    status =
+      stringResource(
+        R.string.context_label_value,
+        stringResource(R.string.model),
+        modelName,
+      ),
     selected = true,
     enabled = !actionBusy,
     onClick = onOpenContextPicker,
