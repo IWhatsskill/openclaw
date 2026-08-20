@@ -117,6 +117,8 @@ internal data class WearSessionList(
   val eventStreamId: String? = null,
   val activeAgentId: String? = null,
   val selectedSessionValid: Boolean = false,
+  val hasMore: Boolean = false,
+  val nextOffset: Int? = null,
 )
 
 internal data class WearModel(
@@ -286,6 +288,7 @@ internal class WearGatewayRepository(
     expectedNodeId: String,
     capabilities: Set<WearProxyCapability>,
     selectedModelRef: String? = null,
+    query: String? = null,
   ): WearModelList {
     capabilities.require(WearProxyCapability.ModelControls)
     val response =
@@ -293,6 +296,7 @@ internal class WearGatewayRepository(
         WearRpcMethod.ModelsList,
         buildJsonObject {
           selectedModelRef?.let { put("selectedModelRef", it) }
+          query?.takeIf(String::isNotBlank)?.let { put("query", it) }
         },
         expectedNodeId,
         requirePreferredNode = true,
@@ -370,13 +374,18 @@ internal class WearGatewayRepository(
     expectedNodeId: String? = null,
     selectedSessionKey: String? = null,
     capabilities: Set<WearProxyCapability> = emptySet(),
+    limit: Int = 30,
+    offset: Int? = null,
+    search: String? = null,
   ): WearSessionList {
     val response =
       requester
         .request(
           WearRpcMethod.SessionsList,
           buildJsonObject {
-            put("limit", 30)
+            put("limit", limit)
+            offset?.let { put("offset", it) }
+            search?.takeIf(String::isNotBlank)?.let { put("search", it) }
             if (WearProxyCapability.SessionSelectionLookup in capabilities) {
               selectedSessionKey?.takeIf(String::isNotBlank)?.let { put("selectedSessionKey", it) }
             }
@@ -394,6 +403,8 @@ internal class WearGatewayRepository(
       phoneNodeId = response.sourceNodeId,
       activeAgentId = result.string("activeAgentId"),
       selectedSessionValid = result.boolean("selectedSessionValid") ?: false,
+      hasMore = result.boolean("hasMore") ?: false,
+      nextOffset = result.long("nextOffset")?.toInt(),
     )
   }
 

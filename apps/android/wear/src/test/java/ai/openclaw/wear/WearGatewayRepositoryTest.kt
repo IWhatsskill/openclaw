@@ -157,7 +157,7 @@ class WearGatewayRepositoryTest {
           when (method) {
             WearRpcMethod.SessionsList ->
               json.parseToJsonElement(
-                """{"sessions":[{"key":"agent:main","agentId":"main","displayName":"Main","updatedAt":7,"hasActiveRun":true,"modelRef":"openai/gpt-test"}],"activeAgentId":"main","selectedSessionValid":true}""",
+                """{"sessions":[{"key":"agent:main","agentId":"main","displayName":"Main","updatedAt":7,"hasActiveRun":true,"modelRef":"openai/gpt-test"}],"activeAgentId":"main","selectedSessionValid":true,"hasMore":true,"nextOffset":35}""",
               )
             WearRpcMethod.ChatHistory ->
               json.parseToJsonElement(
@@ -171,6 +171,8 @@ class WearGatewayRepositoryTest {
       val sessions =
         repository.sessions(
           selectedSessionKey = "agent:main",
+          offset = 5,
+          search = "older",
           capabilities = setOf(WearProxyCapability.SessionSelectionLookup),
         )
       val history = repository.history("agent:main", sessions.phoneNodeId)
@@ -189,7 +191,9 @@ class WearGatewayRepositoryTest {
       assertEquals("working", history.activeText)
       assertEquals("openai/gpt-test", history.selectedModelRef)
       assertEquals(7L, history.eventSequence)
-      assertEquals(setOf("limit", "selectedSessionKey"), requester.calls[0].second.keys)
+      assertTrue(sessions.hasMore)
+      assertEquals(35, sessions.nextOffset)
+      assertEquals(setOf("limit", "offset", "search", "selectedSessionKey"), requester.calls[0].second.keys)
       assertEquals(setOf("sessionKey", "limit", "maxChars"), requester.calls[1].second.keys)
     }
 
@@ -293,6 +297,7 @@ class WearGatewayRepositoryTest {
           when (method) {
             WearRpcMethod.ModelsList -> {
               assertEquals("openai/gpt-a", params.getValue("selectedModelRef").jsonPrimitive.content)
+              assertEquals("anthropic", params.getValue("query").jsonPrimitive.content)
               json.parseToJsonElement(
                 """{"models":[{"ref":"openai/gpt-a","name":"GPT A"},{"ref":"openai/gpt-b","name":"GPT B"}]}""",
               )
@@ -309,7 +314,13 @@ class WearGatewayRepositoryTest {
         }
       val repository = WearGatewayRepository(requester)
 
-      val models = repository.models("phone-a", capabilities, selectedModelRef = "openai/gpt-a")
+      val models =
+        repository.models(
+          "phone-a",
+          capabilities,
+          selectedModelRef = "openai/gpt-a",
+          query = "anthropic",
+        )
       val selected =
         repository.selectModel(
           sessionKey = "agent:main:thread-7",

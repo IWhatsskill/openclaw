@@ -166,6 +166,11 @@ internal fun OpenClawWearScreens(
   onSelectAgent: (String) -> Unit,
   onSelectSession: (String) -> Unit,
   onSelectModel: (String) -> Unit,
+  onSearchSessions: () -> Unit = {},
+  onLoadMoreSessionSearch: () -> Unit = {},
+  onClearSessionSearch: () -> Unit = {},
+  onSearchModels: () -> Unit = {},
+  onClearModelSearch: () -> Unit = {},
   onAgentPulseVisibilityChanged: (Boolean) -> Unit = {},
   onAgentPulseRefresh: () -> Unit = {},
   onRefresh: () -> Unit,
@@ -299,6 +304,11 @@ internal fun OpenClawWearScreens(
             onSelectAgent = onSelectAgent,
             onSelectSession = onSelectSession,
             onSelectModel = onSelectModel,
+            onSearchSessions = onSearchSessions,
+            onLoadMoreSessionSearch = onLoadMoreSessionSearch,
+            onClearSessionSearch = onClearSessionSearch,
+            onSearchModels = onSearchModels,
+            onClearModelSearch = onClearModelSearch,
             onSpeakLatest = onSpeakLatest,
             onStopSpeaking = onStopSpeaking,
           )
@@ -372,6 +382,11 @@ private fun ChatPage(
   onSelectAgent: (String) -> Unit,
   onSelectSession: (String) -> Unit,
   onSelectModel: (String) -> Unit,
+  onSearchSessions: () -> Unit,
+  onLoadMoreSessionSearch: () -> Unit,
+  onClearSessionSearch: () -> Unit,
+  onSearchModels: () -> Unit,
+  onClearModelSearch: () -> Unit,
   onSpeakLatest: () -> Unit,
   onStopSpeaking: () -> Unit,
 ) {
@@ -396,6 +411,16 @@ private fun ChatPage(
       latestAnchorIndex = latestAnchorIndex,
     )
   var followState by remember(snapshot.activeSessionId) { mutableStateOf(WearThreadFollowState()) }
+  var contextPicker by remember { mutableStateOf<WearContextPicker?>(null) }
+
+  fun dismissContextPicker() {
+    when (contextPicker) {
+      WearContextPicker.Session -> onClearSessionSearch()
+      WearContextPicker.Model -> onClearModelSearch()
+      else -> Unit
+    }
+    contextPicker = null
+  }
 
   LaunchedEffect(listState, snapshot.activeSessionId) {
     snapshotFlow {
@@ -433,9 +458,9 @@ private fun ChatPage(
         ConversationIdentity(
           snapshot = snapshot,
           actionBusy = actionBusy,
-          onSelectAgent = onSelectAgent,
-          onSelectSession = onSelectSession,
-          onSelectModel = onSelectModel,
+          onOpenAgentPicker = { contextPicker = WearContextPicker.Agent },
+          onOpenSessionPicker = { contextPicker = WearContextPicker.Session },
+          onOpenModelPicker = { contextPicker = WearContextPicker.Model },
         )
       }
       item {
@@ -517,7 +542,7 @@ private fun ChatPage(
         }
       }
     }
-    if (followState.hasNewContent) {
+    if (followState.hasNewContent && contextPicker == null) {
       NewMessagesAction(
         modifier =
           Modifier
@@ -531,6 +556,29 @@ private fun ChatPage(
           }
         }
       }
+    }
+    contextPicker?.let { picker ->
+      ContextPickerOverlay(
+        picker = picker,
+        snapshot = snapshot,
+        actionBusy = actionBusy,
+        onDismiss = ::dismissContextPicker,
+        onSelectAgent = { agentId ->
+          onSelectAgent(agentId)
+          dismissContextPicker()
+        },
+        onSelectSession = { sessionId ->
+          onSelectSession(sessionId)
+          dismissContextPicker()
+        },
+        onSelectModel = { modelRef ->
+          onSelectModel(modelRef)
+          dismissContextPicker()
+        },
+        onSearchSessions = onSearchSessions,
+        onLoadMoreSessionSearch = onLoadMoreSessionSearch,
+        onSearchModels = onSearchModels,
+      )
     }
   }
 }
@@ -1846,16 +1894,13 @@ private fun OpenClawHeader(pageLabel: String) {
 private fun ConversationIdentity(
   snapshot: WearConversationSnapshot,
   actionBusy: Boolean,
-  onSelectAgent: (String) -> Unit,
-  onSelectSession: (String) -> Unit,
-  onSelectModel: (String) -> Unit,
+  onOpenAgentPicker: () -> Unit,
+  onOpenSessionPicker: () -> Unit,
+  onOpenModelPicker: () -> Unit,
 ) {
-  val agentIndex = snapshot.agents.indexOfFirst(WearAgentSummary::selected)
-  val sessionIndex = snapshot.sessions.indexOfFirst(WearSessionSummary::selected)
-  val modelIndex = snapshot.models.indexOfFirst(WearModelSummary::selected)
-  val agent = snapshot.agents.getOrNull(agentIndex) ?: snapshot.agents.firstOrNull()
-  val session = snapshot.sessions.getOrNull(sessionIndex) ?: snapshot.sessions.firstOrNull()
-  val model = snapshot.models.getOrNull(modelIndex)
+  val agent = snapshot.agents.firstOrNull(WearAgentSummary::selected) ?: snapshot.agents.firstOrNull()
+  val session = snapshot.sessions.firstOrNull(WearSessionSummary::selected) ?: snapshot.sessions.firstOrNull()
+  val model = snapshot.models.firstOrNull(WearModelSummary::selected)
   Panel {
     ContextPickerRow(
       label = stringResource(R.string.agent),
@@ -1864,45 +1909,226 @@ private fun ConversationIdentity(
           agent?.emoji?.takeIf(String::isNotBlank),
           agent?.name ?: stringResource(R.string.agent),
         ).joinToString(" "),
-      previous =
-        snapshot.agents
-          .getOrNull(agentIndex - 1)
-          ?.takeIf { snapshot.agentControlsSupported && !actionBusy }
-          ?.let { previous -> ({ onSelectAgent(previous.id) }) },
-      next =
-        snapshot.agents
-          .getOrNull(if (agentIndex < 0) 0 else agentIndex + 1)
-          ?.takeIf { snapshot.agentControlsSupported && !actionBusy }
-          ?.let { next -> ({ onSelectAgent(next.id) }) },
+      previous = null,
+      next = onOpenAgentPicker.takeIf { snapshot.agentControlsSupported && !actionBusy },
     )
     ContextPickerRow(
       label = stringResource(R.string.session),
       value = session?.title ?: stringResource(R.string.current_session),
-      previous =
-        snapshot.sessions
-          .getOrNull(sessionIndex - 1)
-          ?.takeIf { !actionBusy }
-          ?.let { previous -> ({ onSelectSession(previous.id) }) },
-      next =
-        snapshot.sessions
-          .getOrNull(if (sessionIndex < 0) 0 else sessionIndex + 1)
-          ?.takeIf { !actionBusy }
-          ?.let { next -> ({ onSelectSession(next.id) }) },
+      previous = null,
+      next = onOpenSessionPicker.takeIf { !actionBusy },
     )
     ContextPickerRow(
       label = stringResource(R.string.model),
       value = model?.name ?: snapshot.selectedModelRef ?: stringResource(R.string.model),
-      previous =
-        snapshot.models
-          .getOrNull(modelIndex - 1)
-          ?.takeIf { snapshot.modelControlsSupported && !actionBusy }
-          ?.let { previous -> ({ onSelectModel(previous.ref) }) },
-      next =
-        snapshot.models
-          .getOrNull(if (modelIndex < 0) 0 else modelIndex + 1)
-          ?.takeIf { snapshot.modelControlsSupported && !actionBusy }
-          ?.let { next -> ({ onSelectModel(next.ref) }) },
+      previous = null,
+      next = onOpenModelPicker.takeIf { snapshot.modelControlsSupported && !actionBusy },
     )
+  }
+}
+
+private enum class WearContextPicker {
+  Agent,
+  Session,
+  Model,
+}
+
+@Composable
+private fun ContextPickerOverlay(
+  picker: WearContextPicker,
+  snapshot: WearConversationSnapshot,
+  actionBusy: Boolean,
+  onDismiss: () -> Unit,
+  onSelectAgent: (String) -> Unit,
+  onSelectSession: (String) -> Unit,
+  onSelectModel: (String) -> Unit,
+  onSearchSessions: () -> Unit,
+  onLoadMoreSessionSearch: () -> Unit,
+  onSearchModels: () -> Unit,
+) {
+  BackHandler(onBack = onDismiss)
+  val pageLabel =
+    when (picker) {
+      WearContextPicker.Agent -> stringResource(R.string.agent)
+      WearContextPicker.Session -> stringResource(R.string.session)
+      WearContextPicker.Model -> stringResource(R.string.model)
+    }
+  WearPage(pageLabel = pageLabel) {
+    item {
+      SecondaryButton(
+        label = stringResource(R.string.close),
+        enabled = true,
+        onClick = onDismiss,
+      )
+    }
+    if (picker == WearContextPicker.Session) {
+      item {
+        SecondaryButton(
+          label = stringResource(R.string.search_sessions),
+          enabled = !actionBusy,
+          onClick = onSearchSessions,
+        )
+      }
+      snapshot.sessionSearchQuery?.let { query ->
+        item { PickerQueryLabel(query = query) }
+      }
+    }
+    if (picker == WearContextPicker.Model) {
+      item {
+        SecondaryButton(
+          label = stringResource(R.string.search_models),
+          enabled = !actionBusy,
+          onClick = onSearchModels,
+        )
+      }
+      snapshot.modelSearchQuery?.let { query ->
+        item { PickerQueryLabel(query = query) }
+      }
+    }
+    when (picker) {
+      WearContextPicker.Agent ->
+        snapshot.agents.forEach { agent ->
+          item(key = "agent:${agent.id}") {
+            ContextPickerOption(
+              title = listOfNotNull(agent.emoji?.takeIf(String::isNotBlank), agent.name).joinToString(" "),
+              detail = agent.id,
+              status = null,
+              selected = agent.selected,
+              enabled = !actionBusy,
+              onClick = { onSelectAgent(agent.id) },
+            )
+          }
+        }
+      WearContextPicker.Session -> {
+        val sessions =
+          if (snapshot.sessionSearchQuery == null) snapshot.sessions else snapshot.sessionSearchResults
+        if (sessions.isEmpty()) {
+          item { PickerEmptyResult() }
+        }
+        sessions.forEach { session ->
+          item(key = "session:${session.id}") {
+            val status =
+              listOfNotNull(
+                stringResource(R.string.active_on_phone).takeIf { session.activeOnPhone },
+                stringResource(R.string.open_on_watch).takeIf { session.openOnWatch },
+              ).joinToString(" / ").takeIf(String::isNotEmpty)
+            ContextPickerOption(
+              title = session.title ?: stringResource(R.string.current_session),
+              detail = null,
+              status = status,
+              selected = session.openOnWatch,
+              enabled = !actionBusy,
+              onClick = { onSelectSession(session.id) },
+            )
+          }
+        }
+        if (snapshot.sessionSearchQuery != null && snapshot.sessionSearchHasMore) {
+          item {
+            SecondaryButton(
+              label = stringResource(R.string.load_more),
+              enabled = !actionBusy,
+              onClick = onLoadMoreSessionSearch,
+            )
+          }
+        }
+      }
+      WearContextPicker.Model -> {
+        val models =
+          if (snapshot.modelSearchQuery == null) snapshot.models else snapshot.modelSearchResults
+        if (models.isEmpty()) {
+          item { PickerEmptyResult() }
+        }
+        models.forEach { model ->
+          item(key = "model:${model.ref}") {
+            ContextPickerOption(
+              title = model.name,
+              detail = model.ref,
+              status = null,
+              selected = model.selected,
+              enabled = !actionBusy,
+              onClick = { onSelectModel(model.ref) },
+            )
+          }
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun PickerQueryLabel(query: String) {
+  Text(
+    text = query,
+    color = OpenClawWearTheme.colors.textMuted,
+    fontSize = 11.sp,
+    maxLines = 1,
+    overflow = TextOverflow.Ellipsis,
+  )
+}
+
+@Composable
+private fun PickerEmptyResult() {
+  Text(
+    text = stringResource(R.string.no_matches),
+    color = OpenClawWearTheme.colors.textMuted,
+    fontSize = 12.sp,
+    textAlign = TextAlign.Center,
+  )
+}
+
+@Composable
+private fun ContextPickerOption(
+  title: String,
+  detail: String?,
+  status: String?,
+  selected: Boolean,
+  enabled: Boolean,
+  onClick: () -> Unit,
+) {
+  val colors = OpenClawWearTheme.colors
+  Column(
+    modifier =
+      Modifier
+        .fillMaxWidth()
+        .padding(horizontal = 12.dp)
+        .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+        .then(
+          Modifier.border(
+            width = 1.dp,
+            color = if (selected) colors.primary else colors.border,
+            shape = RoundedCornerShape(14.dp),
+          ),
+        ).padding(horizontal = 12.dp, vertical = 9.dp),
+    horizontalAlignment = Alignment.CenterHorizontally,
+  ) {
+    Text(
+      text = title,
+      color = if (enabled) colors.text else colors.textMuted,
+      fontSize = 12.sp,
+      fontWeight = FontWeight.SemiBold,
+      textAlign = TextAlign.Center,
+      maxLines = 2,
+      overflow = TextOverflow.Ellipsis,
+    )
+    detail?.takeIf(String::isNotBlank)?.let {
+      Text(
+        text = it,
+        color = colors.textMuted,
+        fontSize = 9.sp,
+        textAlign = TextAlign.Center,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+      )
+    }
+    status?.let {
+      Text(
+        text = it,
+        color = colors.primary,
+        fontSize = 9.sp,
+        fontWeight = FontWeight.Bold,
+        textAlign = TextAlign.Center,
+      )
+    }
   }
 }
 

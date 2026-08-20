@@ -254,17 +254,45 @@ class MainActivityTest {
         hasActiveRun = false,
         phoneNodeId = "phone-1",
       )
+    val phoneSession =
+      WearSession(
+        key = "session-2",
+        title = "Phone session",
+        updatedAt = 7,
+        hasActiveRun = false,
+        phoneNodeId = "phone-1",
+      )
     val snapshot =
       WearUiState(
         connected = true,
         phoneNodeId = "phone-1",
-        sessions = listOf(session),
+        phoneActiveSessionKey = phoneSession.key,
+        sessions = listOf(session, phoneSession),
         selectedSession = session,
         failure = WearConversationFailure.ACTION_REJECTED,
       ).toConversationSnapshot()
 
     assertEquals(WearConversationFailure.ACTION_REJECTED, snapshot?.failure)
-    assertNull(snapshot?.sessions?.single()?.title)
+    assertNull(snapshot?.sessions?.first()?.title)
+    assertFalse(snapshot?.sessions?.first()?.activeOnPhone == true)
+    assertTrue(snapshot?.sessions?.first()?.openOnWatch == true)
+    assertTrue(snapshot?.sessions?.last()?.activeOnPhone == true)
+    assertFalse(snapshot?.sessions?.last()?.openOnWatch == true)
+    assertEquals(phoneSession.key, snapshot?.phoneActiveSessionId)
+  }
+
+  @Test
+  fun modelSearchResultsRemainSelectableOutsideTheCompactModelWindow() {
+    val state =
+      WearUiState(
+        models = listOf(WearModel(ref = "openai/gpt-a", name = "GPT A")),
+        modelSearchResults =
+          listOf(WearModel(ref = "anthropic/claude", name = "Claude")),
+      )
+
+    assertTrue(state.containsModelRef("openai/gpt-a"))
+    assertTrue(state.containsModelRef("anthropic/claude"))
+    assertFalse(state.containsModelRef("google/gemini"))
   }
 
   @Test
