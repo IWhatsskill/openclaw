@@ -1909,20 +1909,19 @@ private fun ConversationIdentity(
           agent?.emoji?.takeIf(String::isNotBlank),
           agent?.name ?: stringResource(R.string.agent),
         ).joinToString(" "),
-      previous = null,
-      next = onOpenAgentPicker.takeIf { snapshot.agentControlsSupported && !actionBusy },
+      onClick = onOpenAgentPicker.takeIf { snapshot.agentControlsSupported && !actionBusy },
     )
+    ContextPickerDivider()
     ContextPickerRow(
       label = stringResource(R.string.session),
       value = session?.title ?: stringResource(R.string.current_session),
-      previous = null,
-      next = onOpenSessionPicker.takeIf { !actionBusy },
+      onClick = onOpenSessionPicker.takeIf { !actionBusy },
     )
+    ContextPickerDivider()
     ContextPickerRow(
       label = stringResource(R.string.model),
       value = model?.name ?: snapshot.selectedModelRef ?: stringResource(R.string.model),
-      previous = null,
-      next = onOpenModelPicker.takeIf { snapshot.modelControlsSupported && !actionBusy },
+      onClick = onOpenModelPicker.takeIf { snapshot.modelControlsSupported && !actionBusy },
     )
   }
 }
@@ -2136,80 +2135,50 @@ private fun ContextPickerOption(
 private fun ContextPickerRow(
   label: String,
   value: String,
-  previous: (() -> Unit)?,
-  next: (() -> Unit)?,
+  onClick: (() -> Unit)?,
 ) {
-  Row(
-    modifier = Modifier.fillMaxWidth(),
-    verticalAlignment = Alignment.CenterVertically,
+  val colors = OpenClawWearTheme.colors
+  val enabled = onClick != null
+  Column(
+    modifier =
+      Modifier
+        .fillMaxWidth()
+        .clickable(
+          enabled = enabled,
+          role = Role.Button,
+          onClick = { onClick?.invoke() },
+        ).padding(vertical = 7.dp),
+    horizontalAlignment = Alignment.CenterHorizontally,
   ) {
-    PickerChevron(
-      glyph = "‹",
-      contentDescription = stringResource(R.string.previous_item, label),
-      onClick = previous,
+    Text(
+      text = localizedWearUppercase(label),
+      color = colors.textMuted,
+      fontSize = 10.sp,
+      fontWeight = FontWeight.Bold,
+      letterSpacing = 0.8.sp,
+      maxLines = 1,
     )
-    Column(
-      modifier = Modifier.weight(1f),
-      horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-      Text(
-        text = localizedWearUppercase(label),
-        color = OpenClawWearTheme.colors.textMuted,
-        fontSize = 10.sp,
-        fontWeight = FontWeight.Bold,
-        letterSpacing = 0.8.sp,
-        maxLines = 1,
-      )
-      Text(
-        text = value,
-        color = OpenClawWearTheme.colors.text,
-        fontSize = 12.sp,
-        fontWeight = FontWeight.SemiBold,
-        textAlign = TextAlign.Center,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-      )
-    }
-    PickerChevron(
-      glyph = "›",
-      contentDescription = stringResource(R.string.next_item, label),
-      onClick = next,
+    Text(
+      text = value,
+      color = if (enabled) colors.text else colors.textMuted,
+      fontSize = 12.sp,
+      fontWeight = FontWeight.SemiBold,
+      textAlign = TextAlign.Center,
+      maxLines = 1,
+      overflow = TextOverflow.Ellipsis,
     )
   }
 }
 
 @Composable
-private fun PickerChevron(
-  glyph: String,
-  contentDescription: String,
-  onClick: (() -> Unit)?,
-) {
-  val colors = OpenClawWearTheme.colors
-  val enabled = onClick != null
+private fun ContextPickerDivider() {
   Box(
     modifier =
       Modifier
-        // Foundation clickable expands hit testing to the system minimum touch target.
-        // Compact visual bounds keep picker values readable on 192dp round screens.
-        .width(32.dp)
-        .height(30.dp)
-        .semantics { this.contentDescription = contentDescription }
-        .clickable(
-          enabled = enabled,
-          role = Role.Button,
-          onClick = { onClick?.invoke() },
-        ),
-    contentAlignment = Alignment.Center,
-  ) {
-    Text(
-      text = glyph,
-      color = if (enabled) colors.primary else colors.textMuted.copy(alpha = 0.42f),
-      fontSize = 24.sp,
-      lineHeight = 24.sp,
-      fontWeight = FontWeight.SemiBold,
-      textAlign = TextAlign.Center,
-    )
-  }
+        .fillMaxWidth()
+        .height(1.dp)
+        .background(OpenClawWearTheme.colors.borderStrong.copy(alpha = 0.45f)),
+  )
 }
 
 @Composable
