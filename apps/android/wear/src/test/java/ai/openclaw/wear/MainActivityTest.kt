@@ -80,7 +80,7 @@ class MainActivityTest {
   @Test
   fun chatFollowTracksStreamingGrowthAtLatest() {
     val messages = listOf(WearChatMessage(id = "user-1", role = "user", text = "Status?", timestamp = 1L))
-    val anchor = wearChatLatestAnchorIndex(1, hasStreaming = true, canAbort = false, hasAssistant = false, hasFailure = false)
+    val anchor = wearChatLatestAnchorIndex(1, hasStreaming = true, canAbort = false)
     val first =
       nextWearThreadFollowForContent(
         state = WearThreadFollowState(),
@@ -131,18 +131,18 @@ class MainActivityTest {
   }
 
   @Test
-  fun chatFollowTargetsRenderedTrailingAnchor() {
+  fun chatFollowStopsAtLatestMessageBeforeControls() {
     assertEquals(
       -1,
-      wearChatLatestAnchorIndex(0, hasStreaming = false, canAbort = false, hasAssistant = false, hasFailure = true),
+      wearChatLatestAnchorIndex(0, hasStreaming = false, canAbort = false),
     )
     assertEquals(
-      5,
-      wearChatLatestAnchorIndex(1, hasStreaming = false, canAbort = false, hasAssistant = false, hasFailure = false),
+      3,
+      wearChatLatestAnchorIndex(1, hasStreaming = false, canAbort = false),
     )
     assertEquals(
-      10,
-      wearChatLatestAnchorIndex(2, hasStreaming = true, canAbort = true, hasAssistant = true, hasFailure = true),
+      6,
+      wearChatLatestAnchorIndex(2, hasStreaming = true, canAbort = true),
     )
   }
 

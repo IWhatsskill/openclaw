@@ -339,14 +339,6 @@ internal fun OpenClawWearScreens(
             notificationsGranted = notificationsGranted,
             gatewayControlSupported = snapshot.gatewayControlsSupported,
             actionBusy = actionBusy,
-            onSelectAgent = onSelectAgent,
-            onSelectSession = onSelectSession,
-            onSelectModel = onSelectModel,
-            onSearchSessions = onSearchSessions,
-            onLoadMoreSessionSearch = onLoadMoreSessionSearch,
-            onClearSessionSearch = onClearSessionSearch,
-            onSearchModels = onSearchModels,
-            onClearModelSearch = onClearModelSearch,
             onThemeModeChange = onThemeModeChange,
             onAutoSpeakChange = onAutoSpeakChange,
             onRequestNotifications = onRequestNotifications,
@@ -408,8 +400,6 @@ private fun ChatPage(
       visibleMessageCount = visibleMessages.size,
       hasStreaming = streamingText != null,
       canAbort = canAbort,
-      hasAssistant = hasAssistant,
-      hasFailure = snapshot.failure != null,
     )
   val contentRevision =
     wearChatContentRevision(
@@ -494,6 +484,11 @@ private fun ChatPage(
           }
         }
       }
+      if (latestAnchorIndex >= 0) {
+        item(key = "chat-end") {
+          Spacer(modifier = Modifier.height(1.dp))
+        }
+      }
       if (hasAssistant) {
         item {
           SecondaryButton(
@@ -531,20 +526,15 @@ private fun ChatPage(
         }
       }
       item {
-        ConversationSessionPicker(
+        ConversationContextPicker(
           snapshot = snapshot,
           actionBusy = actionBusy,
-          onOpenSessionPicker = { contextPicker = WearContextPicker.Session },
+          onOpenContextPicker = { contextPicker = WearContextPicker.Session },
         )
       }
       snapshot.failure?.let { failure ->
         item {
           InlineError(text = failureDetail(failure))
-        }
-      }
-      if (latestAnchorIndex >= 0) {
-        item(key = "chat-end") {
-          Spacer(modifier = Modifier.height(1.dp))
         }
       }
     }
@@ -569,6 +559,8 @@ private fun ChatPage(
         snapshot = snapshot,
         actionBusy = actionBusy,
         onDismiss = ::dismissContextPicker,
+        onOpenAgentPicker = { contextPicker = WearContextPicker.Agent },
+        onOpenModelPicker = { contextPicker = WearContextPicker.Model },
         onSelectAgent = { agentId ->
           onSelectAgent(agentId)
           dismissContextPicker()
@@ -1255,13 +1247,11 @@ internal fun wearChatLatestAnchorIndex(
   visibleMessageCount: Int,
   hasStreaming: Boolean,
   canAbort: Boolean,
-  hasAssistant: Boolean,
-  hasFailure: Boolean,
 ): Int {
   if (visibleMessageCount == 0 && !hasStreaming) return -1
   return CHAT_FIXED_ITEM_COUNT +
     visibleMessageCount +
-    listOf(canAbort, hasStreaming, hasAssistant, hasFailure).count { it }
+    listOf(canAbort, hasStreaming).count { it }
 }
 
 internal fun wearThreadLatestAnchorIndex(
@@ -1455,14 +1445,6 @@ private fun ControlsPage(
   notificationsGranted: Boolean,
   gatewayControlSupported: Boolean,
   actionBusy: Boolean,
-  onSelectAgent: (String) -> Unit,
-  onSelectSession: (String) -> Unit,
-  onSelectModel: (String) -> Unit,
-  onSearchSessions: () -> Unit,
-  onLoadMoreSessionSearch: () -> Unit,
-  onClearSessionSearch: () -> Unit,
-  onSearchModels: () -> Unit,
-  onClearModelSearch: () -> Unit,
   onThemeModeChange: (WearThemeMode) -> Unit,
   onAutoSpeakChange: (Boolean) -> Unit,
   onRequestNotifications: () -> Unit,
@@ -1471,124 +1453,81 @@ private fun ControlsPage(
   onGatewayEnabledChange: (Boolean) -> Unit,
 ) {
   val gatewayConnected = snapshot.gatewayState == WearGatewayState.CONNECTED
-  var contextPicker by remember { mutableStateOf<WearContextPicker?>(null) }
 
-  fun dismissContextPicker() {
-    when (contextPicker) {
-      WearContextPicker.Session -> onClearSessionSearch()
-      WearContextPicker.Model -> onClearModelSearch()
-      else -> Unit
+  WearPage(pageLabel = stringResource(R.string.controls)) {
+    item {
+      ConnectionPanel(snapshot = snapshot)
     }
-    contextPicker = null
-  }
-
-  Box(modifier = Modifier.fillMaxSize()) {
-    WearPage(pageLabel = stringResource(R.string.controls)) {
-      item {
-        ConversationAgentModelPicker(
-          snapshot = snapshot,
-          actionBusy = actionBusy,
-          onOpenAgentPicker = { contextPicker = WearContextPicker.Agent },
-          onOpenModelPicker = { contextPicker = WearContextPicker.Model },
-        )
-      }
-      item {
-        ConnectionPanel(snapshot = snapshot)
-      }
-      snapshot.failure?.let { failure ->
-        item { InlineError(text = failureDetail(failure)) }
-      }
-      item {
-        SelectionButton(
-          title = stringResource(R.string.gateway),
-          detail =
-            if (!gatewayControlSupported) {
-              stringResource(R.string.update_required)
-            } else if (gatewayConnected) {
-              stringResource(R.string.on)
-            } else {
-              stringResource(R.string.off)
-            },
-          selected = gatewayConnected,
-          enabled = gatewayControlSupported && !actionBusy,
-          onClick = { onGatewayEnabledChange(!gatewayConnected) },
-        )
-      }
-      item {
-        ThemeModeSelector(
-          themeMode = themeMode,
-          onThemeModeChange = onThemeModeChange,
-        )
-      }
-      item {
-        SelectionButton(
-          title = stringResource(R.string.reply_alerts),
-          detail =
-            if (notificationsGranted) {
-              stringResource(R.string.on)
-            } else {
-              stringResource(R.string.enable_alerts)
-            },
-          selected = notificationsGranted,
-          enabled = !notificationsGranted && !actionBusy,
-          onClick = onRequestNotifications,
-        )
-      }
-      if (!notificationsGranted) {
-        item {
-          SecondaryButton(
-            label = stringResource(R.string.open_notification_settings),
-            enabled = !actionBusy,
-            onClick = onOpenNotificationSettings,
-          )
-        }
-      }
-      item {
-        SelectionButton(
-          title = stringResource(R.string.auto_speak),
-          detail =
-            if (autoSpeak) {
-              stringResource(R.string.on)
-            } else {
-              stringResource(R.string.off)
-            },
-          selected = autoSpeak,
-          enabled = !actionBusy,
-          onClick = { onAutoSpeakChange(!autoSpeak) },
-        )
-      }
-      item {
-        PhoneBoundaryPanel()
-      }
+    snapshot.failure?.let { failure ->
+      item { InlineError(text = failureDetail(failure)) }
+    }
+    item {
+      SelectionButton(
+        title = stringResource(R.string.gateway),
+        detail =
+          if (!gatewayControlSupported) {
+            stringResource(R.string.update_required)
+          } else if (gatewayConnected) {
+            stringResource(R.string.on)
+          } else {
+            stringResource(R.string.off)
+          },
+        selected = gatewayConnected,
+        enabled = gatewayControlSupported && !actionBusy,
+        onClick = { onGatewayEnabledChange(!gatewayConnected) },
+      )
+    }
+    item {
+      ThemeModeSelector(
+        themeMode = themeMode,
+        onThemeModeChange = onThemeModeChange,
+      )
+    }
+    item {
+      SelectionButton(
+        title = stringResource(R.string.reply_alerts),
+        detail =
+          if (notificationsGranted) {
+            stringResource(R.string.on)
+          } else {
+            stringResource(R.string.enable_alerts)
+          },
+        selected = notificationsGranted,
+        enabled = !notificationsGranted && !actionBusy,
+        onClick = onRequestNotifications,
+      )
+    }
+    if (!notificationsGranted) {
       item {
         SecondaryButton(
-          label = stringResource(R.string.refresh),
+          label = stringResource(R.string.open_notification_settings),
           enabled = !actionBusy,
-          onClick = onRefresh,
+          onClick = onOpenNotificationSettings,
         )
       }
     }
-    contextPicker?.let { picker ->
-      ContextPickerOverlay(
-        picker = picker,
-        snapshot = snapshot,
-        actionBusy = actionBusy,
-        onDismiss = ::dismissContextPicker,
-        onSelectAgent = { agentId ->
-          onSelectAgent(agentId)
-          dismissContextPicker()
-        },
-        onSelectSession = { sessionId ->
-          onSelectSession(sessionId)
-          dismissContextPicker()
-        },
-        onSelectModel = { modelRef ->
-          onSelectModel(modelRef)
-          dismissContextPicker()
-        },
-        onSearchSessions = onSearchSessions,
-        onLoadMoreSessionSearch = onLoadMoreSessionSearch,
-        onSearchModels = onSearchModels,
+    item {
+      SelectionButton(
+        title = stringResource(R.string.auto_speak),
+        detail =
+          if (autoSpeak) {
+            stringResource(R.string.on)
+          } else {
+            stringResource(R.string.off)
+          },
+        selected = autoSpeak,
+        enabled = !actionBusy,
+        onClick = { onAutoSpeakChange(!autoSpeak) },
+      )
+    }
+    item {
+      PhoneBoundaryPanel()
+    }
+    item {
+      SecondaryButton(
+        label = stringResource(R.string.refresh),
+        enabled = !actionBusy,
+        onClick = onRefresh,
       )
     }
   }
@@ -1949,47 +1888,28 @@ private fun OpenClawHeader(pageLabel: String) {
 }
 
 @Composable
-private fun ConversationSessionPicker(
+private fun ConversationContextPicker(
   snapshot: WearConversationSnapshot,
   actionBusy: Boolean,
-  onOpenSessionPicker: () -> Unit,
+  onOpenContextPicker: () -> Unit,
 ) {
   val session = snapshot.sessions.firstOrNull(WearSessionSummary::selected) ?: snapshot.sessions.firstOrNull()
-  Panel {
-    ContextPickerRow(
-      label = stringResource(R.string.session),
-      value = session?.title ?: stringResource(R.string.current_session),
-      onClick = onOpenSessionPicker.takeIf { !actionBusy },
-    )
-  }
-}
-
-@Composable
-private fun ConversationAgentModelPicker(
-  snapshot: WearConversationSnapshot,
-  actionBusy: Boolean,
-  onOpenAgentPicker: () -> Unit,
-  onOpenModelPicker: () -> Unit,
-) {
   val agent = snapshot.agents.firstOrNull(WearAgentSummary::selected) ?: snapshot.agents.firstOrNull()
   val model = snapshot.models.firstOrNull(WearModelSummary::selected)
-  Panel {
-    ContextPickerRow(
-      label = stringResource(R.string.agent),
-      value =
-        listOfNotNull(
-          agent?.emoji?.takeIf(String::isNotBlank),
-          agent?.name ?: stringResource(R.string.agent),
-        ).joinToString(" "),
-      onClick = onOpenAgentPicker.takeIf { snapshot.agentControlsSupported && !actionBusy },
-    )
-    ContextPickerDivider()
-    ContextPickerRow(
-      label = stringResource(R.string.model),
-      value = model?.name ?: snapshot.selectedModelRef ?: stringResource(R.string.model),
-      onClick = onOpenModelPicker.takeIf { snapshot.modelControlsSupported && !actionBusy },
-    )
-  }
+  val agentName =
+    listOfNotNull(
+      agent?.emoji?.takeIf(String::isNotBlank),
+      agent?.name ?: stringResource(R.string.agent),
+    ).joinToString(" ")
+  val modelName = model?.name ?: snapshot.selectedModelRef ?: stringResource(R.string.model)
+  ContextPickerOption(
+    title = "${stringResource(R.string.session)}: ${session?.title ?: stringResource(R.string.current_session)}",
+    detail = "${stringResource(R.string.agent)}: $agentName",
+    status = "${stringResource(R.string.model)}: $modelName",
+    selected = true,
+    enabled = !actionBusy,
+    onClick = onOpenContextPicker,
+  )
 }
 
 private enum class WearContextPicker {
@@ -2004,6 +1924,8 @@ private fun ContextPickerOverlay(
   snapshot: WearConversationSnapshot,
   actionBusy: Boolean,
   onDismiss: () -> Unit,
+  onOpenAgentPicker: () -> Unit,
+  onOpenModelPicker: () -> Unit,
   onSelectAgent: (String) -> Unit,
   onSelectSession: (String) -> Unit,
   onSelectModel: (String) -> Unit,
@@ -2027,6 +1949,27 @@ private fun ContextPickerOverlay(
       )
     }
     if (picker == WearContextPicker.Session) {
+      item {
+        val agent = snapshot.agents.firstOrNull(WearAgentSummary::selected) ?: snapshot.agents.firstOrNull()
+        val model = snapshot.models.firstOrNull(WearModelSummary::selected)
+        Panel {
+          ContextPickerRow(
+            label = stringResource(R.string.agent),
+            value =
+              listOfNotNull(
+                agent?.emoji?.takeIf(String::isNotBlank),
+                agent?.name ?: stringResource(R.string.agent),
+              ).joinToString(" "),
+            onClick = onOpenAgentPicker.takeIf { snapshot.agentControlsSupported && !actionBusy },
+          )
+          ContextPickerDivider()
+          ContextPickerRow(
+            label = stringResource(R.string.model),
+            value = model?.name ?: snapshot.selectedModelRef ?: stringResource(R.string.model),
+            onClick = onOpenModelPicker.takeIf { snapshot.modelControlsSupported && !actionBusy },
+          )
+        }
+      }
       item {
         SecondaryButton(
           label = stringResource(R.string.search_sessions),
@@ -2759,6 +2702,6 @@ private fun failureDetail(failure: WearConversationFailure?): String =
     -> stringResource(R.string.try_again)
   }
 
-private const val CHAT_FIXED_ITEM_COUNT = 4
+private const val CHAT_FIXED_ITEM_COUNT = 2
 private const val VISIBLE_MESSAGE_COUNT = 8
 private const val VISIBLE_REALTIME_ENTRY_COUNT = 6
