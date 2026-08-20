@@ -61,7 +61,7 @@ class WearProxyControllerTest {
     }
 
   @Test
-  fun statusAdvertisesModelControlsOnlyWithOperatorAdminScope() =
+  fun statusAdvertisesModelCapabilitiesOnlyWithOperatorAdminScope() =
     runTest {
       var hasOperatorAdminScope = false
       val controller =
@@ -88,8 +88,10 @@ class WearProxyControllerTest {
 
       assertEquals(
         WearProxyCapability.entries
-          .filter { it != WearProxyCapability.ModelControls }
-          .map(WearProxyCapability::wireValue),
+          .filter {
+            it != WearProxyCapability.ModelControls &&
+              it != WearProxyCapability.ModelCatalogSearch
+          }.map(WearProxyCapability::wireValue),
         limitedCapabilities,
       )
       assertEquals(

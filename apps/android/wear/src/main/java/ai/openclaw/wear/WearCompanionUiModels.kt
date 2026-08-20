@@ -56,10 +56,12 @@ internal data class WearConversationSnapshot(
   val sessionSearchQuery: String? = null,
   val sessionSearchResults: List<WearSessionSummary> = emptyList(),
   val sessionSearchHasMore: Boolean = false,
+  val sessionSearchSupported: Boolean = false,
   val models: List<WearModelSummary> = emptyList(),
   val modelSearchQuery: String? = null,
   val modelSearchResults: List<WearModelSummary> = emptyList(),
   val modelControlsSupported: Boolean = false,
+  val modelSearchSupported: Boolean = false,
   val messages: List<WearChatMessage> = emptyList(),
   val streamingAssistantText: String? = null,
   val pendingRunCount: Int = 0,
@@ -136,6 +138,7 @@ internal fun WearUiState.toConversationSnapshot(): WearConversationSnapshot? {
         )
       },
     sessionSearchHasMore = sessionSearchHasMore,
+    sessionSearchSupported = WearProxyCapability.SessionSearchPagination in proxyCapabilities,
     models =
       models.map { model ->
         WearModelSummary(
@@ -145,6 +148,7 @@ internal fun WearUiState.toConversationSnapshot(): WearConversationSnapshot? {
         )
       },
     modelControlsSupported = WearProxyCapability.ModelControls in proxyCapabilities,
+    modelSearchSupported = WearProxyCapability.ModelCatalogSearch in proxyCapabilities,
     modelSearchQuery = modelSearchQuery,
     modelSearchResults =
       modelSearchResults.map { model ->

@@ -140,8 +140,14 @@ internal class WearProxyController(
         "capabilities",
         buildJsonArray {
           WearProxyCapability.entries
-            .filter { capability -> capability != WearProxyCapability.ModelControls || hasOperatorAdminScope() }
-            .forEach { capability -> add(JsonPrimitive(capability.wireValue)) }
+            .filter { capability ->
+              when (capability) {
+                WearProxyCapability.ModelControls,
+                WearProxyCapability.ModelCatalogSearch,
+                -> hasOperatorAdminScope()
+                else -> true
+              }
+            }.forEach { capability -> add(JsonPrimitive(capability.wireValue)) }
         },
       )
       activeAgentId()?.takeIf(String::isNotBlank)?.let { put("activeAgentId", it.takeCodePoints(MAX_AGENT_ID_CHARS)) }

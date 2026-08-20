@@ -332,6 +332,7 @@ internal class WearViewModel(
   }
 
   fun searchSessions(query: String) {
+    if (WearProxyCapability.SessionSearchPagination !in mutableState.value.proxyCapabilities) return
     val normalized = query.trim()
     if (normalized.isEmpty()) return
     loadSessionSearch(normalized, offset = 0, append = false)
@@ -339,6 +340,7 @@ internal class WearViewModel(
 
   fun loadMoreSessionSearch() {
     val current = mutableState.value
+    if (WearProxyCapability.SessionSearchPagination !in current.proxyCapabilities) return
     val query = current.sessionSearchQuery ?: return
     val offset = current.sessionSearchNextOffset ?: return
     if (!current.sessionSearchHasMore) return
@@ -358,6 +360,7 @@ internal class WearViewModel(
   }
 
   fun searchModels(query: String) {
+    if (WearProxyCapability.ModelCatalogSearch !in mutableState.value.proxyCapabilities) return
     val normalized = query.trim()
     if (normalized.isEmpty()) return
     mutableState.value.selectedSession?.let { session -> loadModels(session, normalized) }
@@ -917,6 +920,7 @@ internal class WearViewModel(
     append: Boolean,
   ) {
     val current = mutableState.value
+    if (WearProxyCapability.SessionSearchPagination !in current.proxyCapabilities) return
     val phoneNodeId = current.phoneNodeId ?: return
     if (!current.connected) return
     val routeGeneration = phoneRouteGeneration
@@ -966,6 +970,7 @@ internal class WearViewModel(
     val capabilities = current.proxyCapabilities
     if (
       WearProxyCapability.ModelControls !in capabilities ||
+      (query != null && WearProxyCapability.ModelCatalogSearch !in capabilities) ||
       !wearSessionRequestIsCurrent(session, current.selectedSession, session.phoneNodeId)
     ) {
       return

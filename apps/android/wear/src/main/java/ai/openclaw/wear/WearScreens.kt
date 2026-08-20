@@ -2001,18 +2001,20 @@ private fun ContextPickerOverlay(
           )
         }
       }
-      item {
-        SecondaryButton(
-          label = stringResource(R.string.search_sessions),
-          enabled = !actionBusy,
-          onClick = onSearchSessions,
-        )
-      }
-      snapshot.sessionSearchQuery?.let { query ->
-        item { PickerQueryLabel(query = query) }
+      if (snapshot.sessionSearchSupported) {
+        item {
+          SecondaryButton(
+            label = stringResource(R.string.search_sessions),
+            enabled = !actionBusy,
+            onClick = onSearchSessions,
+          )
+        }
+        snapshot.sessionSearchQuery?.let { query ->
+          item { PickerQueryLabel(query = query) }
+        }
       }
     }
-    if (picker == WearContextPicker.Model) {
+    if (picker == WearContextPicker.Model && snapshot.modelSearchSupported) {
       item {
         SecondaryButton(
           label = stringResource(R.string.search_models),
@@ -2061,7 +2063,11 @@ private fun ContextPickerOverlay(
             )
           }
         }
-        if (snapshot.sessionSearchQuery != null && snapshot.sessionSearchHasMore) {
+        if (
+          snapshot.sessionSearchSupported &&
+          snapshot.sessionSearchQuery != null &&
+          snapshot.sessionSearchHasMore
+        ) {
           item {
             SecondaryButton(
               label = stringResource(R.string.load_more),

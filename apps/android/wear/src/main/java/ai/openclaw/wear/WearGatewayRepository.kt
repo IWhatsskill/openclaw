@@ -296,7 +296,9 @@ internal class WearGatewayRepository(
         WearRpcMethod.ModelsList,
         buildJsonObject {
           selectedModelRef?.let { put("selectedModelRef", it) }
-          query?.takeIf(String::isNotBlank)?.let { put("query", it) }
+          if (WearProxyCapability.ModelCatalogSearch in capabilities) {
+            query?.takeIf(String::isNotBlank)?.let { put("query", it) }
+          }
         },
         expectedNodeId,
         requirePreferredNode = true,
@@ -384,8 +386,10 @@ internal class WearGatewayRepository(
           WearRpcMethod.SessionsList,
           buildJsonObject {
             put("limit", limit)
-            offset?.let { put("offset", it) }
-            search?.takeIf(String::isNotBlank)?.let { put("search", it) }
+            if (WearProxyCapability.SessionSearchPagination in capabilities) {
+              offset?.let { put("offset", it) }
+              search?.takeIf(String::isNotBlank)?.let { put("search", it) }
+            }
             if (WearProxyCapability.SessionSelectionLookup in capabilities) {
               selectedSessionKey?.takeIf(String::isNotBlank)?.let { put("selectedSessionKey", it) }
             }

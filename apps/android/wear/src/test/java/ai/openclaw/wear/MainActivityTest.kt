@@ -303,6 +303,33 @@ class MainActivityTest {
   }
 
   @Test
+  fun pickerSearchVisibilityFollowsNegotiatedCapabilities() {
+    val legacySnapshot =
+      WearUiState(
+        phoneNodeId = "phone-1",
+        proxyCapabilities =
+          setOf(
+            WearProxyCapability.ModelControls,
+            WearProxyCapability.SessionSelectionLookup,
+          ),
+      ).toConversationSnapshot()
+    val currentSnapshot =
+      WearUiState(
+        phoneNodeId = "phone-1",
+        proxyCapabilities =
+          setOf(
+            WearProxyCapability.ModelCatalogSearch,
+            WearProxyCapability.SessionSearchPagination,
+          ),
+      ).toConversationSnapshot()
+
+    assertFalse(legacySnapshot?.modelSearchSupported == true)
+    assertFalse(legacySnapshot?.sessionSearchSupported == true)
+    assertTrue(currentSnapshot?.modelSearchSupported == true)
+    assertTrue(currentSnapshot?.sessionSearchSupported == true)
+  }
+
+  @Test
   fun conversationSnapshotExposesPulseOnlyForConnectedCapablePhone() {
     val pulse =
       WearAgentPulseSnapshot(
