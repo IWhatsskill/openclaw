@@ -334,15 +334,14 @@ function refreshLoginGatePage() {
 type LoginFailureStepSegment = { kind: "text"; value: string } | { kind: "command"; value: string };
 
 function segmentLoginFailureStep(text: string, commands: string[]): LoginFailureStepSegment[] {
-  const uniqueCommands = [...new Set(commands.filter((command) => command.length > 0))];
-  const matches = uniqueCommands
+  const unmatchedCommands = new Set(commands);
+  const matches = [...unmatchedCommands]
     .map((command) => ({ command, index: text.indexOf(command) }))
     .filter((match) => match.index >= 0)
     .toSorted(
       (left, right) => left.index - right.index || right.command.length - left.command.length,
     );
   const segments: LoginFailureStepSegment[] = [];
-  const matchedCommands = new Set<string>();
   let cursor = 0;
 
   for (const match of matches) {
@@ -353,18 +352,15 @@ function segmentLoginFailureStep(text: string, commands: string[]): LoginFailure
       segments.push({ kind: "text", value: text.slice(cursor, match.index) });
     }
     segments.push({ kind: "command", value: match.command });
-    matchedCommands.add(match.command);
+    unmatchedCommands.delete(match.command);
     cursor = match.index + match.command.length;
   }
 
-  if (cursor < text.length || segments.length === 0) {
+  if (cursor < text.length || !segments.length) {
     segments.push({ kind: "text", value: text.slice(cursor) });
   }
-  for (const command of uniqueCommands) {
-    if (matchedCommands.has(command)) {
-      continue;
-    }
-    if (segments.length > 0) {
+  for (const command of unmatchedCommands) {
+    if (segments.length) {
       segments.push({ kind: "text", value: " " });
     }
     segments.push({ kind: "command", value: command });
