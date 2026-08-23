@@ -82,9 +82,9 @@ class SidebarShellLogicTest {
   }
 
   @Test
-  fun agentRosterExcludesSystemAgentsAndKeepsTheSelectedAgentFirst() {
-    val roster =
-      sidebarAgentRoster(
+  fun agentPickerExcludesSystemAgentsDeduplicatesAndKeepsTheSelection() {
+    val state =
+      agentPickerState(
         agents =
           listOf(
             agent("main"),
@@ -95,16 +95,23 @@ class SidebarShellLogicTest {
         selectedAgentId = "ops",
       )
 
-    assertEquals("ops", roster.selected?.id)
-    assertEquals(listOf("main"), roster.others.map(GatewayAgentSummary::id))
+    assertEquals(listOf("main", "ops"), state.agents.map(GatewayAgentSummary::id))
+    assertEquals("ops", state.selected?.id)
   }
 
   @Test
-  fun emptySelectableAgentRosterHasNoSyntheticSelection() {
-    val roster = sidebarAgentRoster(listOf(agent("system", kind = "system")), selectedAgentId = "main")
+  fun agentPickerFallsBackToTheFirstSelectableAgent() {
+    val state = agentPickerState(listOf(agent("main"), agent("ops")), selectedAgentId = "missing")
 
-    assertNull(roster.selected)
-    assertEquals(emptyList<String>(), roster.others.map(GatewayAgentSummary::id))
+    assertEquals("main", state.selected?.id)
+  }
+
+  @Test
+  fun emptyAgentPickerHasNoSyntheticSelection() {
+    val state = agentPickerState(listOf(agent("system", kind = "system")), selectedAgentId = "main")
+
+    assertNull(state.selected)
+    assertEquals(emptyList<String>(), state.agents.map(GatewayAgentSummary::id))
   }
 
   @Test
