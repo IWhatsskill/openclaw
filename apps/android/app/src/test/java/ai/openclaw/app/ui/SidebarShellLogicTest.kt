@@ -146,7 +146,8 @@ class SidebarShellLogicTest {
     val keys = presentation.sections.flatMap { it.entries }.map(ChatSessionEntry::key)
     assertEquals(8, keys.size)
     assertEquals(setOf("pinned", "session-10", "session-9", "session-8", "session-7", "session-6", "session-5", "session-4"), keys.toSet())
-    assertEquals(listOf("Pinned", "Personal", "Work", "Ungrouped"), presentation.sections.map { it.title })
+    assertEquals(listOf("Pinned", "Work", "Ungrouped"), presentation.sections.map { it.title })
+    assertTrue(presentation.sections.all { it.entries.isNotEmpty() })
     assertTrue(presentation.canExpand)
   }
 

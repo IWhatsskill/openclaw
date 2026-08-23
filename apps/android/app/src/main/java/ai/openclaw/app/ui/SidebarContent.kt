@@ -139,7 +139,7 @@ internal fun sidebarSessionPresentation(
   val visibleSessions =
     if (expanded) recentSessions else recentSessions.take(SIDEBAR_SESSION_LIMIT)
   return SidebarSessionPresentation(
-    sections = groupSessionEntries(visibleSessions, knownGroups),
+    sections = groupSessionEntries(visibleSessions, knownGroups).filter { it.entries.isNotEmpty() },
     canExpand = recentSessions.size > SIDEBAR_SESSION_LIMIT,
   )
 }
