@@ -986,10 +986,15 @@ private fun ChatAgentSelector(
   onSelectAgent: (String) -> Unit,
   modifier: Modifier = Modifier,
 ) {
-  val state = agentPickerState(agents, activeAgentId)
+  val state = chatAgentPickerState(activeAgentId = activeAgentId, agents = agents)
   if (state.agents.size <= 1) return
   AgentPicker(state = state, onSelectAgent = onSelectAgent, modifier = modifier)
 }
+
+internal fun chatAgentPickerState(
+  activeAgentId: String,
+  agents: List<GatewayAgentSummary>,
+) = agentPickerState(agents = agents, selectedAgentId = activeAgentId, fallbackToFirst = false)
 
 internal data class ChatSessionPickerState(
   val choices: List<ChatSessionEntry>,

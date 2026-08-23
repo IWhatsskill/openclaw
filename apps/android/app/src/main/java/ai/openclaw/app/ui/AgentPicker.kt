@@ -43,11 +43,12 @@ internal data class AgentPickerState(
 internal fun agentPickerState(
   agents: List<GatewayAgentSummary>,
   selectedAgentId: String?,
+  fallbackToFirst: Boolean = true,
 ): AgentPickerState {
   val selectable = agents.selectableAgents().distinctBy(GatewayAgentSummary::id)
   val selected =
     selectable.firstOrNull { it.id == selectedAgentId?.trim() }
-      ?: selectable.firstOrNull()
+      ?: if (fallbackToFirst) selectable.firstOrNull() else null
   return AgentPickerState(agents = selectable, selected = selected)
 }
 

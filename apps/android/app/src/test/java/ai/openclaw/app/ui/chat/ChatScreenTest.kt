@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui.chat
 
+import ai.openclaw.app.GatewayAgentSummary
 import ai.openclaw.app.PendingAssistantAutoSend
 import ai.openclaw.app.chat.ChatComposerOwner
 import ai.openclaw.app.chat.ChatMessageContent
@@ -148,6 +149,25 @@ class ChatScreenTest {
   fun agentSelectorUsesCanonicalMainSession() {
     assertEquals("scout", selectedChatAgentId("agent:scout:node-phone", "main"))
     assertEquals("main", selectedChatAgentId("main", "main"))
+  }
+
+  @Test
+  fun agentSelectorDoesNotReplaceMissingActiveAgentWithRosterFallback() {
+    val state =
+      chatAgentPickerState(
+        activeAgentId = "missing",
+        agents =
+          listOf(
+            GatewayAgentSummary(id = "main", name = "main", emoji = null, kind = null),
+            GatewayAgentSummary(id = "ops", name = "ops", emoji = null, kind = null),
+          ),
+      )
+
+    assertNull(state.selected)
+    assertEquals(
+      listOf("main", "ops"),
+      state.agents.map(GatewayAgentSummary::id),
+    )
   }
 
   @Test
