@@ -158,15 +158,86 @@ class SessionsScreenGroupingTest {
     assertEquals(listOf(false, true, false), sections.map { it.isCategory })
   }
 
+  @Test
+  fun projectsVisibleChildrenUnderParentsAndPrefersParentSessionKey() {
+    val rows =
+      buildSessionTreeSections(
+        listOf(
+          session("parent"),
+          session("child", parentSessionKey = "parent", spawnedBy = "controller-parent"),
+          session("grandchild", spawnedBy = "child"),
+          session("controller-parent"),
+        ),
+      ).single()
+        .entries
+
+    assertEquals(listOf("parent", "child", "grandchild", "controller-parent"), rows.map { it.session.key })
+    assertEquals(listOf(0, 1, 2, 0), rows.map { it.depth })
+    assertEquals(listOf(true, true, false, false), rows.map { it.hasChildren })
+  }
+
+  @Test
+  fun collapsedParentHidesOnlyItsDescendants() {
+    val entries = listOf(session("parent"), session("child", spawnedBy = "parent"), session("sibling"))
+
+    val collapsed = buildSessionTreeSections(entries, collapsedSessionKeys = setOf("parent")).single().entries
+    val expanded = buildSessionTreeSections(entries).single().entries
+
+    assertEquals(listOf("parent", "sibling"), collapsed.map { it.session.key })
+    assertEquals(listOf(true, false), collapsed.map { it.hasChildren })
+    assertEquals(listOf("parent", "child", "sibling"), expanded.map { it.session.key })
+  }
+
+  @Test
+  fun pinnedAndCategorizedChildrenRemainSectionRoots() {
+    val sections =
+      buildSessionTreeSections(
+        listOf(
+          session("parent"),
+          session("pinned-child", pinned = true, spawnedBy = "parent"),
+          session("grouped-child", category = "Work", spawnedBy = "parent"),
+          session("plain-child", spawnedBy = "parent"),
+        ),
+      )
+
+    assertEquals(listOf("Pinned", "Work", "Ungrouped"), sections.map { it.title })
+    assertEquals(listOf("pinned-child"), sections[0].entries.map { it.session.key })
+    assertEquals(listOf("grouped-child"), sections[1].entries.map { it.session.key })
+    assertEquals(listOf("parent", "plain-child"), sections[2].entries.map { it.session.key })
+    assertEquals(listOf(0, 1), sections[2].entries.map { it.depth })
+  }
+
+  @Test
+  fun danglingAndCyclicParentsRemainVisibleExactlyOnce() {
+    val rows =
+      buildSessionTreeSections(
+        listOf(
+          session("dangling", spawnedBy = "missing"),
+          session("self", parentSessionKey = "self"),
+          session("cycle-a", spawnedBy = "cycle-b"),
+          session("cycle-b", spawnedBy = "cycle-a"),
+        ),
+      ).single()
+        .entries
+
+    assertEquals(listOf("dangling", "self", "cycle-a", "cycle-b"), rows.map { it.session.key })
+    assertEquals(listOf(0, 0, 0, 0), rows.map { it.depth })
+    assertEquals(listOf(false, false, false, false), rows.map { it.hasChildren })
+  }
+
   private fun session(
     key: String,
     category: String? = null,
     pinned: Boolean? = null,
+    parentSessionKey: String? = null,
+    spawnedBy: String? = null,
   ): ChatSessionEntry =
     ChatSessionEntry(
       key = key,
       updatedAtMs = null,
       category = category,
       pinned = pinned,
+      parentSessionKey = parentSessionKey,
+      spawnedBy = spawnedBy,
     )
 }

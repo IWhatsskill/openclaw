@@ -30,6 +30,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
@@ -95,6 +96,10 @@ internal fun SessionsScreen(
   var filter by rememberSaveable { mutableStateOf(SessionFilter.Recent) }
   var compactLayout by rememberSaveable { mutableStateOf(false) }
   var recentFirst by rememberSaveable { mutableStateOf(true) }
+  var collapsedSessionKeys by
+    rememberSaveable(activeGatewayStableId, stateSaver = CollapsedSessionKeysSaver) {
+      mutableStateOf<Set<String>>(emptySet())
+    }
   var sortMenuExpanded by remember { mutableStateOf(false) }
   var renameSessionTarget by
     rememberSaveable(stateSaver = SessionActionTargetSaver) { mutableStateOf<SessionActionTarget?>(null) }
@@ -121,7 +126,12 @@ internal fun SessionsScreen(
       recentFirst = recentFirst,
     )
   val storedGroups by viewModel.sessionCustomGroups.collectAsState()
-  val sections = groupSessionEntries(visibleSessions, knownGroups = storedGroups)
+  val sections =
+    buildSessionTreeSections(
+      entries = visibleSessions,
+      knownGroups = storedGroups,
+      collapsedSessionKeys = collapsedSessionKeys,
+    )
   // Stored group names stay offered as move targets even while they have no members.
   val categories =
     (sessions.mapNotNull { it.category?.trim()?.takeIf(String::isNotEmpty) } + storedGroups)
@@ -314,7 +324,8 @@ internal fun SessionsScreen(
               }
             }
           }
-          items(section.entries, key = { it.key }) { session ->
+          items(section.entries, key = { it.session.key }) { treeEntry ->
+            val session = treeEntry.session
             val active = session.key == chatSessionKey
             SessionRow(
               session = session,
@@ -329,6 +340,17 @@ internal fun SessionsScreen(
               compact = compactLayout,
               archived = session.archived == true,
               categories = categories,
+              depth = treeEntry.depth,
+              hasChildren = treeEntry.hasChildren,
+              expanded = session.key !in collapsedSessionKeys,
+              onToggleExpanded = {
+                collapsedSessionKeys =
+                  if (session.key in collapsedSessionKeys) {
+                    collapsedSessionKeys - session.key
+                  } else {
+                    collapsedSessionKeys + session.key
+                  }
+              },
               onClick = {
                 viewModel.switchChatSession(session.key, session.ownerAgentId)
                 onOpenChat()
@@ -558,6 +580,10 @@ private fun SessionRow(
   compact: Boolean,
   archived: Boolean,
   categories: List<String>,
+  depth: Int,
+  hasChildren: Boolean,
+  expanded: Boolean,
+  onToggleExpanded: () -> Unit,
   onClick: () -> Unit,
   onSetPinned: (Boolean) -> Unit,
   onSetUnread: (Boolean) -> Unit,
@@ -587,10 +613,33 @@ private fun SessionRow(
                   menuExpanded = true
                 },
               ).heightIn(min = 58.dp)
-              .padding(vertical = 5.dp),
+              .padding(start = (depth.coerceAtMost(3) * 18).dp, top = 5.dp, bottom = 5.dp),
           verticalAlignment = Alignment.CenterVertically,
           horizontalArrangement = Arrangement.spacedBy(7.dp),
         ) {
+          Box(modifier = Modifier.size(ClawTheme.spacing.touchTarget), contentAlignment = Alignment.Center) {
+            if (hasChildren) {
+              IconButton(onClick = onToggleExpanded) {
+                Icon(
+                  imageVector =
+                    if (expanded) {
+                      Icons.Default.KeyboardArrowDown
+                    } else {
+                      Icons.AutoMirrored.Filled.KeyboardArrowRight
+                    },
+                  contentDescription =
+                    if (expanded) {
+                      nativeString("Collapse child sessions")
+                    } else {
+                      nativeString("Expand child sessions")
+                    },
+                  modifier = Modifier.size(18.dp),
+                  tint = ClawTheme.colors.textMuted,
+                )
+              }
+            }
+          }
+
           Surface(
             modifier = Modifier.size(32.dp),
             shape = RoundedCornerShape(ClawTheme.radii.control),
@@ -959,6 +1008,88 @@ internal data class SessionSection(
   // Only custom category sections expose group actions; "Pinned"/"Ungrouped" are structural.
   val isCategory: Boolean = false,
 )
+
+internal data class SessionTreeEntry(
+  val session: ChatSessionEntry,
+  val depth: Int,
+  val hasChildren: Boolean,
+)
+
+internal data class SessionTreeSection(
+  val title: String?,
+  val entries: List<SessionTreeEntry>,
+  val isCategory: Boolean = false,
+)
+
+private val CollapsedSessionKeysSaver =
+  Saver<Set<String>, ArrayList<String>>(
+    save = { keys -> ArrayList(keys.sorted()) },
+    restore = { keys -> keys.toSet() },
+  )
+
+/** Projects a flat visible snapshot into section roots and expandable descendants. */
+internal fun buildSessionTreeSections(
+  entries: List<ChatSessionEntry>,
+  knownGroups: List<String> = emptyList(),
+  collapsedSessionKeys: Set<String> = emptySet(),
+): List<SessionTreeSection> {
+  if (entries.isEmpty()) return emptyList()
+  val entriesByKey = entries.associateBy { it.key }
+  val candidateParents =
+    buildMap {
+      entries.forEach { entry ->
+        if (entry.pinned == true || !entry.category.isNullOrBlank()) return@forEach
+        val parentKey =
+          entry.parentSessionKey?.trim()?.takeIf(String::isNotEmpty)
+            ?: entry.spawnedBy?.trim()?.takeIf(String::isNotEmpty)
+        if (parentKey != null && parentKey != entry.key && parentKey in entriesByKey) {
+          put(entry.key, parentKey)
+        }
+      }
+    }
+
+  fun hasParentCycle(startKey: String): Boolean {
+    val seen = mutableSetOf<String>()
+    var key: String? = startKey
+    while (key != null) {
+      if (!seen.add(key)) return true
+      key = candidateParents[key]
+    }
+    return false
+  }
+
+  val parentByKey = candidateParents.filterKeys { key -> !hasParentCycle(key) }
+  val childrenByParent = mutableMapOf<String, MutableList<ChatSessionEntry>>()
+  entries.forEach { entry ->
+    parentByKey[entry.key]?.let { parentKey ->
+      childrenByParent.getOrPut(parentKey) { mutableListOf() }.add(entry)
+    }
+  }
+  val roots = entries.filter { it.key !in parentByKey }
+  val visited = mutableSetOf<String>()
+
+  fun flatten(
+    session: ChatSessionEntry,
+    depth: Int,
+  ): List<SessionTreeEntry> {
+    if (!visited.add(session.key)) return emptyList()
+    val children = childrenByParent[session.key].orEmpty()
+    return buildList {
+      add(SessionTreeEntry(session = session, depth = depth, hasChildren = children.isNotEmpty()))
+      if (session.key !in collapsedSessionKeys) {
+        children.forEach { child -> addAll(flatten(child, depth + 1)) }
+      }
+    }
+  }
+
+  return groupSessionEntries(roots, knownGroups = knownGroups).map { section ->
+    SessionTreeSection(
+      title = section.title,
+      entries = section.entries.flatMap { root -> flatten(root, depth = 0) },
+      isCategory = section.isCategory,
+    )
+  }
+}
 
 /** Immutable row identity retained while a destructive or mutating dialog is open. */
 internal data class SessionActionTarget(
