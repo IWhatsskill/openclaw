@@ -46,6 +46,7 @@ import ai.openclaw.app.i18n.resolveNativeTextResource
 import ai.openclaw.app.i18n.verbatimText
 import ai.openclaw.app.resolveAgentIdFromMainSessionKey
 import ai.openclaw.app.ui.AgentPicker
+import ai.openclaw.app.ui.AgentPickerState
 import ai.openclaw.app.ui.agentPickerState
 import ai.openclaw.app.ui.copyGatewayDiagnosticsReport
 import ai.openclaw.app.ui.design.ClawListItem
@@ -987,7 +988,7 @@ private fun ChatAgentSelector(
   modifier: Modifier = Modifier,
 ) {
   val state = chatAgentPickerState(activeAgentId = activeAgentId, agents = agents)
-  if (state.agents.size <= 1) return
+  if (!shouldShowChatAgentPicker(state)) return
   AgentPicker(state = state, onSelectAgent = onSelectAgent, modifier = modifier)
 }
 
@@ -995,6 +996,8 @@ internal fun chatAgentPickerState(
   activeAgentId: String,
   agents: List<GatewayAgentSummary>,
 ) = agentPickerState(agents = agents, selectedAgentId = activeAgentId, fallbackToFirst = false)
+
+internal fun shouldShowChatAgentPicker(state: AgentPickerState): Boolean = state.agents.isNotEmpty() && (state.agents.size > 1 || state.selected == null)
 
 internal data class ChatSessionPickerState(
   val choices: List<ChatSessionEntry>,

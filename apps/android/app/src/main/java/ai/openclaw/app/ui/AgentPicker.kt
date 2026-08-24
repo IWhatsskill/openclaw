@@ -37,8 +37,11 @@ import androidx.compose.ui.unit.dp
 
 internal data class AgentPickerState(
   val agents: List<GatewayAgentSummary>,
-  val selected: GatewayAgentSummary?,
-)
+  val selectedAgentId: String?,
+) {
+  val selected: GatewayAgentSummary?
+    get() = agents.firstOrNull { it.id == selectedAgentId }
+}
 
 internal fun agentPickerState(
   agents: List<GatewayAgentSummary>,
@@ -46,13 +49,21 @@ internal fun agentPickerState(
   fallbackToFirst: Boolean = true,
 ): AgentPickerState {
   val selectable = agents.selectableAgents().distinctBy(GatewayAgentSummary::id)
-  val selected =
-    selectable.firstOrNull { it.id == selectedAgentId?.trim() }
-      ?: if (fallbackToFirst) selectable.firstOrNull() else null
-  return AgentPickerState(agents = selectable, selected = selected)
+  val requestedAgentId = selectedAgentId?.trim()?.takeIf(String::isNotEmpty)
+  val effectiveAgentId =
+    selectable
+      .firstOrNull { it.id == requestedAgentId }
+      ?.id
+      ?: if (fallbackToFirst) selectable.firstOrNull()?.id else requestedAgentId
+  return AgentPickerState(
+    agents = selectable,
+    selectedAgentId = effectiveAgentId,
+  )
 }
 
 internal fun agentPickerName(agent: GatewayAgentSummary): String = agent.name?.trim()?.takeIf(String::isNotEmpty) ?: agent.id
+
+internal fun agentPickerLabel(state: AgentPickerState): String? = state.selected?.let(::agentPickerName) ?: state.selectedAgentId
 
 @Composable
 internal fun AgentPicker(
@@ -60,7 +71,8 @@ internal fun AgentPicker(
   onSelectAgent: (String) -> Unit,
   modifier: Modifier = Modifier,
 ) {
-  val selected = state.selected ?: return
+  val selectedAgentId = state.selectedAgentId ?: return
+  val label = agentPickerLabel(state) ?: return
   var expanded by remember { mutableStateOf(false) }
 
   Box(modifier = modifier) {
@@ -77,9 +89,9 @@ internal fun AgentPicker(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(7.dp),
       ) {
-        AgentPickerAvatar(agent = selected, size = 24)
+        state.selected?.let { selected -> AgentPickerAvatar(agent = selected, size = 24) }
         Text(
-          text = agentPickerName(selected),
+          text = label,
           style = ClawTheme.type.caption,
           maxLines = 1,
           modifier = Modifier.weight(1f),
@@ -109,7 +121,7 @@ internal fun AgentPicker(
           },
           leadingIcon = { AgentPickerAvatar(agent = agent, size = 24) },
           trailingIcon = {
-            if (agent.id == selected.id) {
+            if (agent.id == selectedAgentId) {
               Icon(imageVector = Icons.Default.Check, contentDescription = null)
             }
           },

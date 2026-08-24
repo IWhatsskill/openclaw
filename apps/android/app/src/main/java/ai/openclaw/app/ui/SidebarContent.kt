@@ -137,7 +137,7 @@ private fun ChatSessionEntry.isDashboardSession(): Boolean {
 
 internal fun sidebarSessionTitle(session: ChatSessionEntry): String = sessionPresentationTitle(session) { session.key }
 
-internal fun sidebarAgentName(agent: GatewayAgentSummary): String = agent.name?.trim()?.takeIf(String::isNotEmpty) ?: agent.id
+internal fun sidebarAgentName(agent: GatewayAgentSummary): String = agentPickerName(agent)
 
 internal data class SidebarPalette(
   val background: Color,

@@ -97,6 +97,7 @@ class SidebarShellLogicTest {
 
     assertEquals(listOf("main", "ops"), state.agents.map(GatewayAgentSummary::id))
     assertEquals("ops", state.selected?.id)
+    assertEquals("ops", state.selectedAgentId)
   }
 
   @Test
@@ -104,6 +105,7 @@ class SidebarShellLogicTest {
     val state = agentPickerState(listOf(agent("main"), agent("ops")), selectedAgentId = "missing")
 
     assertEquals("main", state.selected?.id)
+    assertEquals("main", state.selectedAgentId)
   }
 
   @Test
@@ -111,6 +113,7 @@ class SidebarShellLogicTest {
     val state = agentPickerState(listOf(agent("system", kind = "system")), selectedAgentId = "main")
 
     assertNull(state.selected)
+    assertNull(state.selectedAgentId)
     assertEquals(emptyList<String>(), state.agents.map(GatewayAgentSummary::id))
   }
 

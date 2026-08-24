@@ -6,6 +6,7 @@ import ai.openclaw.app.chat.ChatComposerOwner
 import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.SessionBranch
+import ai.openclaw.app.ui.agentPickerLabel
 import androidx.compose.ui.unit.dp
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -164,10 +165,25 @@ class ChatScreenTest {
       )
 
     assertNull(state.selected)
+    assertEquals("missing", state.selectedAgentId)
+    assertEquals("missing", agentPickerLabel(state))
+    assertTrue(shouldShowChatAgentPicker(state))
     assertEquals(
       listOf("main", "ops"),
       state.agents.map(GatewayAgentSummary::id),
     )
+  }
+
+  @Test
+  fun agentSelectorKeepsUnknownSelectionSwitchableWithOneAvailableAgent() {
+    val state =
+      chatAgentPickerState(
+        activeAgentId = "missing",
+        agents = listOf(GatewayAgentSummary(id = "main", name = "main", emoji = null, kind = null)),
+      )
+
+    assertTrue(shouldShowChatAgentPicker(state))
+    assertEquals("missing", agentPickerLabel(state))
   }
 
   @Test
