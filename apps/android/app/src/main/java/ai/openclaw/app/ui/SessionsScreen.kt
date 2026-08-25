@@ -1084,7 +1084,11 @@ internal data class SessionDescendantState(
     }
 }
 
-internal data class SessionDescendantSignal(val label: String, val icon: ImageVector, val color: Color)
+internal data class SessionDescendantSignal(
+  val label: String,
+  val icon: ImageVector,
+  val color: Color,
+)
 
 internal fun nextSessionStatusExpiry(
   entries: List<ChatSessionEntry>,

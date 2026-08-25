@@ -31,7 +31,11 @@ class SessionsScreenDescendantSignalsTest {
     var iconNames = emptyList<String>()
     composeRule.setContent {
       ClawDesignTheme {
-        iconNames = collapsedState.value?.presentationSignals()?.map { it.icon.name }.orEmpty()
+        iconNames =
+          collapsedState.value
+            ?.presentationSignals()
+            ?.map { it.icon.name }
+            .orEmpty()
         SessionDescendantSignals(collapsedState.value, visible = compact.value)
       }
     }
