@@ -1,6 +1,8 @@
 package ai.openclaw.app.ui
 
+import ai.openclaw.app.chat.ChatSessionAgentStatus
 import ai.openclaw.app.chat.ChatSessionEntry
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -189,6 +191,83 @@ class SessionsScreenGroupingTest {
   }
 
   @Test
+  fun collapsedParentRetainsTransitiveActionableDescendantState() {
+    val rows =
+      buildSessionTreeSections(
+        entries =
+          listOf(
+            session("parent"),
+            session("current", spawnedBy = "parent"),
+            session("running", spawnedBy = "current", hasActiveRun = true),
+            session("unread", spawnedBy = "parent", unread = true),
+            session("failed", spawnedBy = "parent", status = "timeout"),
+            session("attention", spawnedBy = "parent", attention = "approval", attentionExpiresAt = 20_000L),
+            session("expired-attention", spawnedBy = "parent", attention = "question", attentionExpiresAt = 5_000L),
+          ),
+        collapsedSessionKeys = setOf("parent"),
+        currentSessionKey = "current",
+        nowMs = 10_000L,
+      ).single()
+        .entries
+
+    assertEquals(listOf("parent"), rows.map { it.session.key })
+    assertEquals(
+      SessionDescendantState(
+        containsCurrent = true,
+        hasRunning = true,
+        hasUnread = true,
+        hasFailure = true,
+        hasAttention = true,
+      ),
+      rows.single().descendantState,
+    )
+    assertEquals(
+      "Needs attention · Thread failed · Current thread · Running · Unread",
+      rows.single().descendantState.presentationLabel(),
+    )
+  }
+
+  @Test
+  fun sessionStatusExpiryReschedulesAfterEarlyWakeAndSelectsTheNextExpiry() =
+    runBlocking {
+      val entries =
+        listOf(
+          session("first", attention = "question", attentionExpiresAt = 100L),
+          session("second", attention = "approval", attentionExpiresAt = 200L),
+        )
+      var nowMs = 90L
+      val waits = mutableListOf<Long>()
+
+      assertEquals(100L, nextSessionStatusExpiry(entries, nowMs))
+      val reachedAt =
+        awaitSessionStatusExpiry(
+          expiry = 100L,
+          nowMs = { nowMs },
+          wait = { duration ->
+            waits += duration
+            nowMs += if (waits.size == 1) duration - 1L else duration
+          },
+        )
+
+      assertEquals(listOf(10L, 1L), waits)
+      assertEquals(100L, reachedAt)
+      assertEquals(200L, nextSessionStatusExpiry(entries, reachedAt))
+    }
+
+  @Test
+  fun collapsedParentRetainsGatewayRunningDescendantSignalBeforeChildrenLoad() {
+    val parent =
+      buildSessionTreeSections(
+        entries = listOf(session("parent", hasActiveSubagentRun = true)),
+        collapsedSessionKeys = setOf("parent"),
+      ).single()
+        .entries
+        .single()
+
+    assertEquals(true, parent.descendantState.hasRunning)
+  }
+
+  @Test
   fun pinnedAndCategorizedChildrenRemainSectionRoots() {
     val sections =
       buildSessionTreeSections(
@@ -231,6 +310,12 @@ class SessionsScreenGroupingTest {
     pinned: Boolean? = null,
     parentSessionKey: String? = null,
     spawnedBy: String? = null,
+    hasActiveRun: Boolean? = null,
+    hasActiveSubagentRun: Boolean? = null,
+    unread: Boolean? = null,
+    status: String? = null,
+    attention: String? = null,
+    attentionExpiresAt: Long = 0L,
   ): ChatSessionEntry =
     ChatSessionEntry(
       key = key,
@@ -239,5 +324,10 @@ class SessionsScreenGroupingTest {
       pinned = pinned,
       parentSessionKey = parentSessionKey,
       spawnedBy = spawnedBy,
+      hasActiveRun = hasActiveRun,
+      hasActiveSubagentRun = hasActiveSubagentRun,
+      unread = unread,
+      status = status,
+      agentStatus = attention?.let { ChatSessionAgentStatus("Waiting", attentionExpiresAt, it) },
     )
 }

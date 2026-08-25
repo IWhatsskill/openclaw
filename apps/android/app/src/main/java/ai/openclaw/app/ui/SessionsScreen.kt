@@ -32,9 +32,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.StarBorder
@@ -96,6 +98,7 @@ internal fun SessionsScreen(
   var filter by rememberSaveable { mutableStateOf(SessionFilter.Recent) }
   var compactLayout by rememberSaveable { mutableStateOf(false) }
   var recentFirst by rememberSaveable { mutableStateOf(true) }
+  var sessionStatusNowMs by remember { mutableStateOf(System.currentTimeMillis()) }
   var collapsedSessionKeys by
     rememberSaveable(activeGatewayStableId, stateSaver = CollapsedSessionKeysSaver) {
       mutableStateOf<Set<String>>(emptySet())
@@ -125,12 +128,15 @@ internal fun SessionsScreen(
       filter = filter,
       recentFirst = recentFirst,
     )
+  val nextAttentionExpiry = nextSessionStatusExpiry(visibleSessions, sessionStatusNowMs)
   val storedGroups by viewModel.sessionCustomGroups.collectAsState()
   val sections =
     buildSessionTreeSections(
       entries = visibleSessions,
       knownGroups = storedGroups,
       collapsedSessionKeys = collapsedSessionKeys,
+      currentSessionKey = chatSessionKey,
+      nowMs = sessionStatusNowMs,
     )
   // Stored group names stay offered as move targets even while they have no members.
   val categories =
@@ -147,6 +153,12 @@ internal fun SessionsScreen(
   LaunchedEffect(isConnected, filter) {
     if (isConnected) {
       viewModel.refreshChatSessions(limit = 200, archived = filter == SessionFilter.Archived)
+    }
+  }
+
+  LaunchedEffect(nextAttentionExpiry) {
+    nextAttentionExpiry?.let { expiry ->
+      sessionStatusNowMs = awaitSessionStatusExpiry(expiry)
     }
   }
 
@@ -327,14 +339,20 @@ internal fun SessionsScreen(
           items(section.entries, key = { it.session.key }) { treeEntry ->
             val session = treeEntry.session
             val active = session.key == chatSessionKey
+            val descendantsCollapsed =
+              session.key in collapsedSessionKeys && (treeEntry.hasChildren || treeEntry.descendantState.hasActionableState)
+            val collapsedDescendantLabel =
+              treeEntry.descendantState.presentationLabel().takeIf { descendantsCollapsed }
             SessionRow(
               session = session,
               title = sessionPresentationTitle(session) { nativeString("Main thread") },
               subtitle =
-                sessionListSubtitle(
-                  session,
-                  fallback = if (active) nativeString("Current thread") else nativeString("OpenClaw thread"),
-                ),
+                collapsedDescendantLabel
+                  ?: sessionListSubtitle(
+                    session,
+                    fallback = if (active) nativeString("Current thread") else nativeString("OpenClaw thread"),
+                    nowMs = sessionStatusNowMs,
+                  ),
               metadata = (session.lastActivityAt ?: session.updatedAtMs)?.let(::relativeSessionTime) ?: nativeString("now"),
               active = active,
               compact = compactLayout,
@@ -343,6 +361,7 @@ internal fun SessionsScreen(
               depth = treeEntry.depth,
               hasChildren = treeEntry.hasChildren,
               expanded = session.key !in collapsedSessionKeys,
+              collapsedDescendantState = treeEntry.descendantState.takeIf { descendantsCollapsed },
               onToggleExpanded = {
                 collapsedSessionKeys =
                   if (session.key in collapsedSessionKeys) {
@@ -583,6 +602,7 @@ private fun SessionRow(
   depth: Int,
   hasChildren: Boolean,
   expanded: Boolean,
+  collapsedDescendantState: SessionDescendantState?,
   onToggleExpanded: () -> Unit,
   onClick: () -> Unit,
   onSetPinned: (Boolean) -> Unit,
@@ -683,6 +703,7 @@ private fun SessionRow(
                   }
                 }
               }
+              SessionDescendantSignals(collapsedDescendantState, visible = compact)
             }
             if (!compact) {
               Text(text = subtitle, style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted, maxLines = 1)
@@ -1013,7 +1034,95 @@ internal data class SessionTreeEntry(
   val session: ChatSessionEntry,
   val depth: Int,
   val hasChildren: Boolean,
+  val descendantState: SessionDescendantState = SessionDescendantState(),
 )
+
+internal data class SessionDescendantState(
+  val containsCurrent: Boolean = false,
+  val hasRunning: Boolean = false,
+  val hasUnread: Boolean = false,
+  val hasFailure: Boolean = false,
+  val hasAttention: Boolean = false,
+) {
+  val hasActionableState: Boolean
+    get() = containsCurrent || hasRunning || hasUnread || hasFailure || hasAttention
+
+  fun merge(other: SessionDescendantState): SessionDescendantState =
+    SessionDescendantState(
+      containsCurrent = containsCurrent || other.containsCurrent,
+      hasRunning = hasRunning || other.hasRunning,
+      hasUnread = hasUnread || other.hasUnread,
+      hasFailure = hasFailure || other.hasFailure,
+      hasAttention = hasAttention || other.hasAttention,
+    )
+
+  fun presentationLabel(): String? = presentationLabels().takeIf { it.isNotEmpty() }?.joinToString(" · ")
+
+  @Composable
+  fun presentationSignals(): List<SessionDescendantSignal> =
+    buildList {
+      if (hasAttention) {
+        add(SessionDescendantSignal(nativeString("Needs attention"), Icons.Default.ErrorOutline, ClawTheme.colors.warning))
+      }
+      if (hasFailure) add(SessionDescendantSignal(nativeString("Thread failed"), Icons.Default.Close, ClawTheme.colors.danger))
+      if (containsCurrent) {
+        add(SessionDescendantSignal(nativeString("Current thread"), Icons.Default.StarBorder, ClawTheme.colors.success))
+      }
+      if (hasRunning) add(SessionDescendantSignal(nativeString("Running"), Icons.Default.PlayArrow, ClawTheme.colors.success))
+      if (hasUnread) {
+        add(SessionDescendantSignal(nativeString("Unread"), Icons.Outlined.ChatBubbleOutline, ClawTheme.colors.primary))
+      }
+    }
+
+  private fun presentationLabels(): List<String> =
+    buildList {
+      if (hasAttention) add(nativeString("Needs attention"))
+      if (hasFailure) add(nativeString("Thread failed"))
+      if (containsCurrent) add(nativeString("Current thread"))
+      if (hasRunning) add(nativeString("Running"))
+      if (hasUnread) add(nativeString("Unread"))
+    }
+}
+
+internal data class SessionDescendantSignal(val label: String, val icon: ImageVector, val color: Color)
+
+internal fun nextSessionStatusExpiry(
+  entries: List<ChatSessionEntry>,
+  nowMs: Long,
+): Long? = entries.mapNotNull { it.agentStatus?.expiresAt }.filter { it > nowMs }.minOrNull()
+
+internal suspend fun awaitSessionStatusExpiry(
+  expiry: Long,
+  nowMs: () -> Long = System::currentTimeMillis,
+  wait: suspend (Long) -> Unit = { delay(it) },
+): Long {
+  while (true) {
+    val currentTimeMs = nowMs()
+    val remainingMs = expiry - currentTimeMs
+    if (remainingMs <= 0L) return currentTimeMs
+    wait(remainingMs)
+  }
+}
+
+@Composable
+internal fun SessionDescendantSignals(
+  state: SessionDescendantState?,
+  visible: Boolean,
+) {
+  if (!visible) return
+  state?.presentationSignals()?.let { signals ->
+    Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+      signals.forEach { signal ->
+        Icon(
+          imageVector = signal.icon,
+          contentDescription = signal.label,
+          modifier = Modifier.size(13.dp),
+          tint = signal.color,
+        )
+      }
+    }
+  }
+}
 
 internal data class SessionTreeSection(
   val title: String?,
@@ -1032,6 +1141,8 @@ internal fun buildSessionTreeSections(
   entries: List<ChatSessionEntry>,
   knownGroups: List<String> = emptyList(),
   collapsedSessionKeys: Set<String> = emptySet(),
+  currentSessionKey: String = "",
+  nowMs: Long = System.currentTimeMillis(),
 ): List<SessionTreeSection> {
   if (entries.isEmpty()) return emptyList()
   val entriesByKey = entries.associateBy { it.key }
@@ -1067,6 +1178,28 @@ internal fun buildSessionTreeSections(
   }
   val roots = entries.filter { it.key !in parentByKey }
   val visited = mutableSetOf<String>()
+  val descendantStateByKey = mutableMapOf<String, SessionDescendantState>()
+
+  fun ownState(session: ChatSessionEntry): SessionDescendantState {
+    val status = session.status?.trim()?.lowercase()
+    val attention = session.agentStatus?.let { it.expiresAt > nowMs && it.attention != null } == true
+    return SessionDescendantState(
+      containsCurrent = session.key == currentSessionKey,
+      hasRunning = session.hasActiveRun == true || status == "running",
+      hasUnread = session.unread == true,
+      hasFailure = status == "failed" || status == "timeout" || status == "timed_out",
+      hasAttention = attention,
+    )
+  }
+
+  fun descendantState(session: ChatSessionEntry): SessionDescendantState =
+    descendantStateByKey.getOrPut(session.key) {
+      childrenByParent[session.key]
+        .orEmpty()
+        .fold(
+          SessionDescendantState(hasRunning = session.hasActiveSubagentRun == true),
+        ) { state, child -> state.merge(ownState(child)).merge(descendantState(child)) }
+    }
 
   fun flatten(
     session: ChatSessionEntry,
@@ -1075,7 +1208,14 @@ internal fun buildSessionTreeSections(
     if (!visited.add(session.key)) return emptyList()
     val children = childrenByParent[session.key].orEmpty()
     return buildList {
-      add(SessionTreeEntry(session = session, depth = depth, hasChildren = children.isNotEmpty()))
+      add(
+        SessionTreeEntry(
+          session = session,
+          depth = depth,
+          hasChildren = children.isNotEmpty(),
+          descendantState = descendantState(session),
+        ),
+      )
       if (session.key !in collapsedSessionKeys) {
         children.forEach { child -> addAll(flatten(child, depth + 1)) }
       }
