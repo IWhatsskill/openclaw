@@ -9,7 +9,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -77,29 +76,28 @@ internal fun AgentPicker(
   Box(modifier = modifier) {
     Surface(
       onClick = { expanded = true },
-      modifier = Modifier.fillMaxWidth().heightIn(min = ClawTheme.spacing.touchTarget),
+      modifier = Modifier.heightIn(min = ClawTheme.spacing.touchTarget),
       shape = RoundedCornerShape(ClawTheme.radii.pill),
       color = ClawTheme.colors.surfaceRaised.copy(alpha = 0f),
       contentColor = ClawTheme.colors.text,
       border = null,
     ) {
       Row(
-        modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+        modifier = Modifier.padding(horizontal = 5.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(7.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
       ) {
-        state.selected?.let { selected -> AgentPickerAvatar(agent = selected, size = 24) }
+        state.selected?.let { selected -> AgentPickerAvatar(agent = selected, size = 22) }
         Text(
           text = label,
           style = ClawTheme.type.caption,
           maxLines = 1,
-          modifier = Modifier.weight(1f),
           overflow = TextOverflow.Ellipsis,
         )
         Icon(
           imageVector = Icons.Default.KeyboardArrowDown,
           contentDescription = null,
-          modifier = Modifier.size(18.dp),
+          modifier = Modifier.size(15.dp),
         )
       }
     }
