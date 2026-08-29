@@ -95,6 +95,7 @@ import ai.openclaw.app.node.invokeErrorFromThrowable
 import ai.openclaw.app.node.readAndroidPermissionSnapshot
 import ai.openclaw.app.node.resolveGatewayAccentArgb
 import ai.openclaw.app.node.resolveProfileAccentArgb
+import ai.openclaw.app.node.resolvePublishedGatewayAccentArgb
 import ai.openclaw.app.systemagent.SystemAgentChatController
 import ai.openclaw.app.systemagent.SystemAgentChatState
 import ai.openclaw.app.systemagent.SystemAgentGatewayAccess
@@ -5918,7 +5919,7 @@ class NodeRuntime private constructor(
       val root = json.parseToJsonElement(res).asObjectOrNull()
       val config = root?.get("config").asObjectOrNull()
       val profile = fetchProfileAppearancePreferences(gatewayScope)
-      val parsed = profile?.accentArgb ?: resolveGatewayAccentArgb(config)
+      val gatewayFallbackAccentArgb = resolveGatewayAccentArgb(config)
       publishGatewayData(gatewayScope) {
         val pendingKeys = prefs.pendingAppearancePreferenceEntries().keys
         val isFresh: (String) -> Boolean = { key ->
@@ -5928,10 +5929,16 @@ class NodeRuntime private constructor(
         }
         if (isFresh("ui.theme")) profile?.family?.let(prefs::setAppearanceThemeFamily)
         if (isFresh("ui.themeMode")) profile?.mode?.let(prefs::setAppearanceThemeMode)
-        if (isFresh("ui.accent") && profile?.accentPresent == true) {
+        val profileAccentFresh = isFresh("ui.accent")
+        if (profileAccentFresh && profile?.accentPresent == true) {
           prefs.setAppearanceAccentArgb(profile.accentArgb)
         }
-        _gatewayAccentArgb.value = parsed.takeIf { isFresh("ui.accent") }
+        _gatewayAccentArgb.value =
+          resolvePublishedGatewayAccentArgb(
+            profileAccentArgb = profile?.accentArgb,
+            gatewayFallbackAccentArgb = gatewayFallbackAccentArgb,
+            profileAccentFresh = profileAccentFresh,
+          )
       }
     } catch (_: Throwable) {
       // ignore
