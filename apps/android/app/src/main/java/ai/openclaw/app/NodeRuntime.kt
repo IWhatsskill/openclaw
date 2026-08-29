@@ -5894,16 +5894,31 @@ class NodeRuntime private constructor(
     val gatewayScope = captureGatewayDataScope() ?: return
     if (!gatewayConnectionDisplay.value.isConnected) return
     try {
+      val revisionSnapshot = appearancePreferenceKeys.associateWith(prefs::appearancePreferenceRevision)
+      val pendingAtRefreshStart = prefs.pendingAppearancePreferenceEntries()
+      pendingAtRefreshStart.forEach { (key, value) ->
+        if (writeProfileAppearancePreference(gatewayScope, key, value)) {
+          prefs.clearPendingAppearancePreference(key, value)
+        }
+      }
       val res = requestGatewayData(gatewayScope, "config.get", "{}")
       val root = json.parseToJsonElement(res).asObjectOrNull()
       val config = root?.get("config").asObjectOrNull()
       val profile = fetchProfileAppearancePreferences(gatewayScope)
       val parsed = profile?.accentArgb ?: resolveGatewayAccentArgb(config)
       publishGatewayData(gatewayScope) {
-        profile?.family?.let(prefs::setAppearanceThemeFamily)
-        profile?.mode?.let(prefs::setAppearanceThemeMode)
-        if (profile?.accentPresent == true) prefs.setAppearanceAccentArgb(profile.accentArgb)
-        _gatewayAccentArgb.value = parsed
+        val pendingKeys = prefs.pendingAppearancePreferenceEntries().keys
+        val isFresh: (String) -> Boolean = { key ->
+          key !in pendingAtRefreshStart &&
+            key !in pendingKeys &&
+            prefs.appearancePreferenceRevision(key) == revisionSnapshot[key]
+        }
+        if (isFresh("ui.theme")) profile?.family?.let(prefs::setAppearanceThemeFamily)
+        if (isFresh("ui.themeMode")) profile?.mode?.let(prefs::setAppearanceThemeMode)
+        if (isFresh("ui.accent") && profile?.accentPresent == true) {
+          prefs.setAppearanceAccentArgb(profile.accentArgb)
+        }
+        _gatewayAccentArgb.value = parsed.takeIf { isFresh("ui.accent") }
       }
     } catch (_: Throwable) {
       // ignore
@@ -5943,42 +5958,54 @@ class NodeRuntime private constructor(
       null
     }
 
-  /** Writes one normalized appearance preference and preserves local state offline. */
-  suspend fun setProfileAppearancePreference(
+  private fun normalizedAppearancePreferenceValue(
+    key: String,
+    value: String?,
+  ): String? =
+    when (key) {
+      "ui.theme" -> value?.takeIf { candidate -> AppearanceThemeFamily.entries.any { it.rawValue == candidate } }
+      "ui.themeMode" -> value?.takeIf { candidate -> AppearanceThemeMode.entries.any { it.rawValue == candidate } }
+      "ui.accent" -> value?.takeIf { it.matches(Regex("^#[0-9a-fA-F]{6}$")) }
+      else -> null
+    }
+
+  private suspend fun writeProfileAppearancePreference(
+    gatewayScope: GatewayDataScope,
     key: String,
     value: String?,
   ): Boolean {
     if (key !in appearancePreferenceKeys) return false
-    val normalized =
-      when (key) {
-        "ui.theme" -> value?.takeIf { candidate -> AppearanceThemeFamily.entries.any { it.rawValue == candidate } }
-        "ui.themeMode" -> value?.takeIf { candidate -> AppearanceThemeMode.entries.any { it.rawValue == candidate } }
-        "ui.accent" -> value?.takeIf { it.matches(Regex("^#[0-9a-fA-F]{6}$")) }
-        else -> null
-      }
+    val normalized = normalizedAppearancePreferenceValue(key, value)
     if (value != null && normalized == null) return false
-    val gatewayScope = captureGatewayDataScope() ?: return false
-    if (!gatewayConnectionDisplay.value.isConnected) return false
     return try {
       val params =
         buildJsonObject {
           put(
             "entries",
-            buildJsonObject {
-              put(key, normalized?.let(::JsonPrimitive) ?: kotlinx.serialization.json.JsonNull)
-            },
+            buildJsonObject { put(key, normalized?.let(::JsonPrimitive) ?: kotlinx.serialization.json.JsonNull) },
           )
         }
       val res = requestGatewayData(gatewayScope, GatewayMethod.UsersPrefsSet.rawValue, params.toString())
       val root = json.parseToJsonElement(res).asObjectOrNull()
-      if ((root?.get("status") as? JsonPrimitive)?.contentOrNull != "ok") return false
-      if (key == "ui.accent") refreshBrandingFromGateway()
-      true
+      (root?.get("status") as? JsonPrimitive)?.contentOrNull == "ok"
     } catch (cancelled: CancellationException) {
       throw cancelled
     } catch (_: Throwable) {
       false
     }
+  }
+
+  /** Writes one normalized appearance preference; disconnected values remain queued in SecurePrefs. */
+  suspend fun setProfileAppearancePreference(
+    key: String,
+    value: String?,
+  ): Boolean {
+    val gatewayScope = captureGatewayDataScope() ?: return false
+    if (!gatewayConnectionDisplay.value.isConnected) return false
+    if (!writeProfileAppearancePreference(gatewayScope, key, value)) return false
+    prefs.clearPendingAppearancePreference(key, value)
+    if (key == "ui.accent") refreshBrandingFromGateway()
+    return true
   }
 
   /** Lists one directory of the active agent's workspace (read-only RPC). */

@@ -119,9 +119,9 @@ class ChatContextMeterTest {
   }
 
   @Test
-  fun contextPopoverFormatsGatewayLatestRunValuesWithoutInventingData() {
-    assertEquals("18.4k", formatContextLatestRunTokens(18_420L, Locale.US))
-    assertEquals("\u2014", formatContextLatestRunTokens(null, Locale.US))
+  fun contextPopoverFormatsGatewaySessionUsageWithoutInventingData() {
+    assertEquals("18.4k", formatContextUsageTokens(18_420L, Locale.US))
+    assertEquals("\u2014", formatContextUsageTokens(null, Locale.US))
     assertEquals("\u00240.0063", formatContextEstimatedCost(0.0063))
     assertEquals("\u00240.063", formatContextEstimatedCost(0.063))
     assertEquals("\u00241.25", formatContextEstimatedCost(1.25))

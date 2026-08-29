@@ -1283,22 +1283,22 @@ class MainViewModel private constructor(
   }
 
   fun setAppearanceThemeMode(mode: AppearanceThemeMode) {
-    prefs.setAppearanceThemeMode(mode)
+    prefs.setAppearanceThemeMode(mode, pendingSync = true)
     viewModelScope.launch(Dispatchers.Default) {
       runtimeRef.value?.setProfileAppearancePreference("ui.themeMode", mode.rawValue)
     }
   }
 
   fun setAppearanceThemeFamily(family: AppearanceThemeFamily) {
-    prefs.setAppearanceThemeFamily(family)
+    prefs.setAppearanceThemeFamily(family, pendingSync = true)
     viewModelScope.launch(Dispatchers.Default) {
       runtimeRef.value?.setProfileAppearancePreference("ui.theme", family.rawValue)
     }
   }
 
   fun setAppearanceAccentArgb(argb: Long?) {
-    prefs.setAppearanceAccentArgb(argb)
-    val value = argb?.let { String.format("#%06x", it and 0xFFFFFF) }
+    prefs.setAppearanceAccentArgb(argb, pendingSync = true)
+    val value = appearanceAccentPreferenceValue(argb)
     viewModelScope.launch(Dispatchers.Default) {
       runtimeRef.value?.setProfileAppearancePreference("ui.accent", value)
     }

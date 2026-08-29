@@ -6912,7 +6912,7 @@ class ChatController internal constructor(
       endedAt = obj["endedAt"].asLongOrNull(),
       runtimeMs = obj["runtimeMs"].asLongOrNull(),
       outputTokens = obj["outputTokens"].asLongOrNull(),
-      hasLatestRunUsageMetadata =
+      hasSessionUsageMetadata =
         "inputTokens" in obj ||
           "outputTokens" in obj ||
           "estimatedCostUsd" in obj,
@@ -7899,7 +7899,7 @@ internal fun mergeChatSessionEntry(
   replaceActiveRunIds: Boolean = false,
 ): ChatSessionEntry {
   val preserveExistingContextUsage = preserveExistingContextUsageWithoutTotal && next.totalTokens == null
-  val replaceLatestRunUsage = next.hasLatestRunUsageMetadata || next.hasRunMetadata
+  val replaceSessionUsage = next.hasSessionUsageMetadata
   val hasActiveRun = if (next.hasActiveRunMetadata) next.hasActiveRun else existing.hasActiveRun
   val activeRunIds =
     if (replaceActiveRunIds || next.hasActiveRunIdsMetadata) next.activeRunIds else existing.activeRunIds
@@ -7940,7 +7940,7 @@ internal fun mergeChatSessionEntry(
     observerDigest = observerDigest,
     hasObserverDigestMetadata = existing.hasObserverDigestMetadata || next.hasObserverDigestMetadata,
     lastActivityAt = next.lastActivityAt ?: existing.lastActivityAt,
-    inputTokens = if (replaceLatestRunUsage) next.inputTokens else existing.inputTokens,
+    inputTokens = if (replaceSessionUsage) next.inputTokens else existing.inputTokens,
     totalTokens =
       when {
         preserveExistingContextUsage -> existing.totalTokens
@@ -7975,7 +7975,7 @@ internal fun mergeChatSessionEntry(
         else -> null
       },
     estimatedCostUsd =
-      if (replaceLatestRunUsage) next.estimatedCostUsd else existing.estimatedCostUsd,
+      if (replaceSessionUsage) next.estimatedCostUsd else existing.estimatedCostUsd,
     hasContextUsageMetadata =
       when {
         preserveExistingContextUsage -> existing.hasContextUsageMetadata || next.contextTokens != null
@@ -8004,9 +8004,9 @@ internal fun mergeChatSessionEntry(
     endedAt = if (next.hasRunMetadata) next.endedAt else existing.endedAt,
     runtimeMs = if (next.hasRunMetadata) next.runtimeMs else existing.runtimeMs,
     outputTokens =
-      if (replaceLatestRunUsage) next.outputTokens else existing.outputTokens,
-    hasLatestRunUsageMetadata =
-      if (replaceLatestRunUsage) next.hasLatestRunUsageMetadata else existing.hasLatestRunUsageMetadata,
+      if (replaceSessionUsage) next.outputTokens else existing.outputTokens,
+    hasSessionUsageMetadata =
+      if (replaceSessionUsage) next.hasSessionUsageMetadata else existing.hasSessionUsageMetadata,
     hasRunMetadata = existing.hasRunMetadata || next.hasRunMetadata,
   )
 }

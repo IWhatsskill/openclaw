@@ -200,7 +200,7 @@ class ChatControllerSessionPolicyTest {
   }
 
   @Test
-  fun terminalSnapshotReplacesLatestRunUsageAtomically() {
+  fun sessionSnapshotReplacesCumulativeUsageAtomically() {
     val existing =
       ChatSessionEntry(
         key = "agent:main:phone",
@@ -224,11 +224,11 @@ class ChatControllerSessionPolicyTest {
     assertEquals(18_420L, merged.inputTokens)
     assertEquals(840L, merged.outputTokens)
     assertEquals(0.063, merged.estimatedCostUsd)
-    assertTrue(merged.hasLatestRunUsageMetadata)
+    assertTrue(merged.hasSessionUsageMetadata)
   }
 
   @Test
-  fun terminalSnapshotWithoutUsageDoesNotShowPreviousRunAsCurrent() {
+  fun sessionSnapshotWithoutUsagePreservesKnownTotals() {
     val existing =
       ChatSessionEntry(
         key = "agent:main:phone",
@@ -246,10 +246,10 @@ class ChatControllerSessionPolicyTest {
 
     val merged = mergeChatSessionEntry(existing, terminal)
 
-    assertEquals(null, merged.inputTokens)
-    assertEquals(null, merged.outputTokens)
-    assertEquals(null, merged.estimatedCostUsd)
-    assertFalse(merged.hasLatestRunUsageMetadata)
+    assertEquals(10_000L, merged.inputTokens)
+    assertEquals(500L, merged.outputTokens)
+    assertEquals(0.04, merged.estimatedCostUsd)
+    assertTrue(merged.hasSessionUsageMetadata)
   }
 
   @Test
@@ -322,7 +322,7 @@ class ChatControllerSessionPolicyTest {
   }
 
   @Test
-  fun sessionMergeReplacesRunMetadataAsOneSnapshot() {
+  fun sessionMergeReplacesRunMetadataWithoutClearingSessionUsage() {
     val existing =
       ChatSessionEntry(
         key = "agent:main:phone",
@@ -348,7 +348,7 @@ class ChatControllerSessionPolicyTest {
     assertEquals(300L, merged.startedAt)
     assertEquals(null, merged.endedAt)
     assertEquals(null, merged.runtimeMs)
-    assertEquals(null, merged.outputTokens)
+    assertEquals(12L, merged.outputTokens)
   }
 
   @Test

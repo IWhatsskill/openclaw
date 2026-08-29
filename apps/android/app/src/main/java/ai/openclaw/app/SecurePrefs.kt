@@ -90,11 +90,13 @@ class SecurePrefs(
     private const val appearanceThemeModeKey = "appearance.themeMode"
     private const val appearanceThemeFamilyKey = "appearance.themeFamily"
     private const val appearanceAccentArgbKey = "appearance.accentArgb"
+    private const val appearancePendingSyncKeysKey = "appearance.pendingSyncKeys"
     private const val chatModelFavoritesKey = "chat.modelFavorites"
     private const val chatModelRecentsKey = "chat.modelRecents"
     private const val sessionCustomGroupsKey = "sessions.customGroups"
     private const val sidebarPageOrderKey = "sidebar.pageOrder"
     private const val sidebarVisiblePagesKey = "sidebar.visiblePages"
+    private val appearanceSyncKeys = setOf("ui.theme", "ui.themeMode", "ui.accent")
     private const val maxChatModelRecents = 5
     private const val gatewayCustomHeadersKeyPrefix = "gateway.customHeaders."
   }
@@ -253,6 +255,12 @@ class SecurePrefs(
 
   private val _appearanceAccentArgb = MutableStateFlow(plainPrefs.takeIf { it.contains(appearanceAccentArgbKey) }?.getLong(appearanceAccentArgbKey, 0L))
   val appearanceAccentArgb: StateFlow<Long?> = _appearanceAccentArgb
+  private var appearancePendingSyncKeys: Set<String> =
+    plainPrefs
+      .getStringSet(appearancePendingSyncKeysKey, emptySet())
+      .orEmpty()
+      .filterTo(linkedSetOf(), appearanceSyncKeys::contains)
+  private val appearancePreferenceRevisions = appearanceSyncKeys.associateWith { 0L }.toMutableMap()
 
   private val _modelFavorites = MutableStateFlow(loadChatModelRefs(chatModelFavoritesKey))
   val modelFavorites: StateFlow<List<String>> = _modelFavorites
@@ -723,25 +731,97 @@ class SecurePrefs(
     return VoiceWakePreferences.sanitizeTriggerWords(decoded.orEmpty())
   }
 
-  fun setAppearanceThemeMode(mode: AppearanceThemeMode) {
-    plainPrefs.edit { putString(appearanceThemeModeKey, mode.rawValue) }
+  @Synchronized
+  fun setAppearanceThemeMode(
+    mode: AppearanceThemeMode,
+    pendingSync: Boolean = false,
+  ) {
+    val nextPending = pendingAppearanceSyncKeys("ui.themeMode", pendingSync)
+    plainPrefs.edit {
+      putString(appearanceThemeModeKey, mode.rawValue)
+      if (pendingSync) putStringSet(appearancePendingSyncKeysKey, nextPending)
+    }
+    if (pendingSync) {
+      appearancePendingSyncKeys = nextPending
+      incrementAppearancePreferenceRevision("ui.themeMode")
+    }
     _appearanceThemeMode.value = mode
   }
 
-  fun setAppearanceThemeFamily(family: AppearanceThemeFamily) {
-    plainPrefs.edit { putString(appearanceThemeFamilyKey, family.rawValue) }
+  @Synchronized
+  fun setAppearanceThemeFamily(
+    family: AppearanceThemeFamily,
+    pendingSync: Boolean = false,
+  ) {
+    val nextPending = pendingAppearanceSyncKeys("ui.theme", pendingSync)
+    plainPrefs.edit {
+      putString(appearanceThemeFamilyKey, family.rawValue)
+      if (pendingSync) putStringSet(appearancePendingSyncKeysKey, nextPending)
+    }
+    if (pendingSync) {
+      appearancePendingSyncKeys = nextPending
+      incrementAppearancePreferenceRevision("ui.theme")
+    }
     _appearanceThemeFamily.value = family
   }
 
-  fun setAppearanceAccentArgb(argb: Long?) {
+  @Synchronized
+  fun setAppearanceAccentArgb(
+    argb: Long?,
+    pendingSync: Boolean = false,
+  ) {
+    val nextPending = pendingAppearanceSyncKeys("ui.accent", pendingSync)
     plainPrefs.edit {
       if (argb == null) {
         remove(appearanceAccentArgbKey)
       } else {
         putLong(appearanceAccentArgbKey, argb)
       }
+      if (pendingSync) putStringSet(appearancePendingSyncKeysKey, nextPending)
+    }
+    if (pendingSync) {
+      appearancePendingSyncKeys = nextPending
+      incrementAppearancePreferenceRevision("ui.accent")
     }
     _appearanceAccentArgb.value = argb
+  }
+
+  @Synchronized
+  internal fun pendingAppearancePreferenceEntries(): Map<String, String?> =
+    buildMap {
+      if ("ui.theme" in appearancePendingSyncKeys) put("ui.theme", _appearanceThemeFamily.value.rawValue)
+      if ("ui.themeMode" in appearancePendingSyncKeys) put("ui.themeMode", _appearanceThemeMode.value.rawValue)
+      if ("ui.accent" in appearancePendingSyncKeys) put("ui.accent", appearanceAccentPreferenceValue(_appearanceAccentArgb.value))
+    }
+
+  @Synchronized
+  internal fun clearPendingAppearancePreference(
+    key: String,
+    expectedValue: String?,
+  ) {
+    if (key !in appearancePendingSyncKeys) return
+    val currentValue = pendingAppearancePreferenceEntries()[key]
+    if (currentValue != expectedValue) return
+    appearancePendingSyncKeys = appearancePendingSyncKeys - key
+    plainPrefs.edit {
+      if (appearancePendingSyncKeys.isEmpty()) {
+        remove(appearancePendingSyncKeysKey)
+      } else {
+        putStringSet(appearancePendingSyncKeysKey, appearancePendingSyncKeys)
+      }
+    }
+  }
+
+  @Synchronized
+  internal fun appearancePreferenceRevision(key: String): Long = appearancePreferenceRevisions[key] ?: 0L
+
+  private fun pendingAppearanceSyncKeys(
+    key: String,
+    pendingSync: Boolean,
+  ): Set<String> = if (pendingSync) appearancePendingSyncKeys + key else appearancePendingSyncKeys
+
+  private fun incrementAppearancePreferenceRevision(key: String) {
+    appearancePreferenceRevisions[key] = (appearancePreferenceRevisions[key] ?: 0L) + 1L
   }
 
   fun toggleModelFavorite(ref: String) {

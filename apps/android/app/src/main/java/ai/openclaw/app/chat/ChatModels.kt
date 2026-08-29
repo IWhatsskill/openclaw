@@ -404,7 +404,7 @@ data class ChatSessionEntry(
   val endedAt: Long? = null,
   val runtimeMs: Long? = null,
   val outputTokens: Long? = null,
-  val hasLatestRunUsageMetadata: Boolean =
+  val hasSessionUsageMetadata: Boolean =
     inputTokens != null || outputTokens != null || estimatedCostUsd != null,
   val hasRunMetadata: Boolean =
     status != null || startedAt != null || endedAt != null || runtimeMs != null || outputTokens != null,

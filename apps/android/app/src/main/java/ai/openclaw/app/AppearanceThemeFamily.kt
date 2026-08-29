@@ -34,3 +34,5 @@ internal val appearanceAccentPalette: List<Long> =
     0xFF9B7AEF,
     0xFFE96CB7,
   )
+
+internal fun appearanceAccentPreferenceValue(argb: Long?): String? = argb?.let { String.format("#%06x", it and 0xFFFFFF) }

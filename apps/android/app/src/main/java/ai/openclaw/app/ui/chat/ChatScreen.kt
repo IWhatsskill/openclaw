@@ -3281,7 +3281,7 @@ internal fun chatContextSummary(
   )
 }
 
-internal fun formatContextLatestRunTokens(
+internal fun formatContextUsageTokens(
   value: Long?,
   locale: Locale = Locale.getDefault(),
 ): String = value?.takeIf { it >= 0L }?.let { formatCompactTokenCount(it, locale) } ?: "\u2014"
@@ -3386,7 +3386,7 @@ private fun ChatComposerContextRing(
         }
         HorizontalDivider(color = ClawTheme.colors.border)
         Text(
-          text = localizedUppercase(nativeString("Latest run tokens"), currentAppLanguage().languageTag),
+          text = localizedUppercase(nativeString("Usage"), currentAppLanguage().languageTag),
           style = ClawTheme.type.caption.copy(fontSize = 10.5.sp),
           color = ClawTheme.colors.textMuted,
         )
@@ -3396,12 +3396,12 @@ private fun ChatComposerContextRing(
         ) {
           ChatContextStat(
             label = nativeString("Input"),
-            value = formatContextLatestRunTokens(contextUsage.inputTokens),
+            value = formatContextUsageTokens(contextUsage.inputTokens),
             modifier = Modifier.weight(1f),
           )
           ChatContextStat(
             label = nativeString("Output"),
-            value = formatContextLatestRunTokens(contextUsage.outputTokens),
+            value = formatContextUsageTokens(contextUsage.outputTokens),
             modifier = Modifier.weight(1f),
           )
           ChatContextStat(

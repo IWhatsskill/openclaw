@@ -353,6 +353,35 @@ class SecurePrefsTest {
   }
 
   @Test
+  fun pendingAppearanceSyncSurvivesRestartAndClearsOnlyTheMatchingValue() {
+    val context = RuntimeEnvironment.getApplication()
+    context
+      .getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
+      .edit()
+      .clear()
+      .commit()
+    val securePrefs = context.getSharedPreferences("secure-prefs-test-${UUID.randomUUID()}", Context.MODE_PRIVATE)
+    val prefs = SecurePrefs(context, securePrefs)
+
+    prefs.setAppearanceThemeFamily(AppearanceThemeFamily.Tide, pendingSync = true)
+    prefs.setAppearanceAccentArgb(null, pendingSync = true)
+
+    val restored = SecurePrefs(context, securePrefs)
+    assertEquals(
+      mapOf("ui.theme" to "tide", "ui.accent" to null),
+      restored.pendingAppearancePreferenceEntries(),
+    )
+    restored.clearPendingAppearancePreference("ui.theme", expectedValue = "claw")
+    assertTrue("ui.theme" in restored.pendingAppearancePreferenceEntries())
+
+    restored.clearPendingAppearancePreference("ui.theme", expectedValue = "tide")
+    restored.clearPendingAppearancePreference("ui.accent", expectedValue = null)
+
+    assertTrue(restored.pendingAppearancePreferenceEntries().isEmpty())
+    assertTrue(SecurePrefs(context, securePrefs).pendingAppearancePreferenceEntries().isEmpty())
+  }
+
+  @Test
   fun gatewayCredentials_areIndependentAcrossGateways() {
     val context = RuntimeEnvironment.getApplication()
     val securePrefs = context.getSharedPreferences("openclaw.node.secure.test", Context.MODE_PRIVATE)
