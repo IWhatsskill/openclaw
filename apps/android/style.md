@@ -15,7 +15,7 @@ Goal: one coherent visual system across onboarding, settings, and future screens
 
 The Control UI palette is authoritative. The Android app shares its colors with the
 Control UI so one product does not read as two, and keeps its own native geometry:
-compact spacing, phone-sized touch targets, and a bottom navigation bar. Do not copy
+compact spacing, phone-sized touch targets, and the existing sidebar shell. Do not copy
 the Control UI web layout.
 
 Baseline traits:
@@ -101,10 +101,6 @@ Hard rule: avoid ultra-thin weights on light backgrounds.
   taller surfaces use `panel`.
 - Panels are a flat surface plus a 1dp border. Do not add tonal or shadow elevation,
   and do not nest a panel inside a panel.
-- Shell pages open with `ClawPageHeader`: an action row, an optional context eyebrow,
-  then the page name in the accent color on its own full-width line. Product branding
-  does not repeat per page. Header glyphs are offset outward so their edges sit on the
-  page gutter, not the edge of their touch target.
 - One emphasis zone per screen. Prefer a divider or whitespace over another card.
 - Prefer one bordered list over a grid of cards for status and reference data.
 
@@ -116,7 +112,8 @@ Hard rule: avoid ultra-thin weights on light backgrounds.
   a 32dp bordered circle inside it; `ClawPlainIconButton` paints only the 18dp glyph.
 - `ClawDesignTheme` holds Material's own minimum interactive size at 48dp so Material
   controls and Claw controls agree on one floor.
-- Back buttons in action rows use rounded-square shape, not circular by default.
+- Back buttons in action rows use the shared icon-button primitives and retain the
+  same 48dp target.
 
 ## 7. Inputs And Forms
 
@@ -135,8 +132,6 @@ Hard rule: avoid ultra-thin weights on light backgrounds.
 ## 9. Accessibility
 
 - Minimum practical touch target: `48dp`, even where the painted shape is smaller.
-- Bottom navigation is Material's compact short bar and shows every destination label,
-  always, not only the selected one.
 - Do not rely on color alone for status.
 - Preserve high contrast for all text tiers.
 - Add meaningful `contentDescription` for icon-only controls.
@@ -154,7 +149,6 @@ Tokens and shared components:
 
 - `app/src/main/java/ai/openclaw/app/ui/design/ClawTheme.kt` (palette, spacing, radii,
   type, and the Material color-scheme bridge)
-- `app/src/main/java/ai/openclaw/app/ui/MobileUiTokens.kt` (legacy token set, same palette)
 - `app/src/main/java/ai/openclaw/app/ui/design/ClawSurfaces.kt`
 - `app/src/main/java/ai/openclaw/app/ui/design/ClawComponents.kt`
 - `app/src/main/java/ai/openclaw/app/ui/design/ClawNavigation.kt`
@@ -164,6 +158,7 @@ Shell and screens:
 - `app/src/main/java/ai/openclaw/app/ui/SidebarShell.kt`
 - `app/src/main/java/ai/openclaw/app/ui/SidebarContent.kt`
 - `app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt`
+- `app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt`
 - `app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt`
 - `app/src/main/java/ai/openclaw/app/MainViewModel.kt`
 

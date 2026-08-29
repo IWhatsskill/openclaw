@@ -6,13 +6,10 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.RowScope
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBars
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -81,68 +78,6 @@ internal fun ClawTopBar(
       }
     }
     actions?.invoke()
-  }
-}
-
-/**
- * Page header for shell destinations: a toolbar row of actions above a full-width title.
- *
- * The title owns its own line so a long product or page name cannot be squeezed by the
- * status and search actions, which is how the previous single-row header clipped.
- */
-@Composable
-internal fun ClawPageHeader(
-  title: String,
-  modifier: Modifier = Modifier,
-  eyebrow: String? = null,
-  navigation: (@Composable () -> Unit)? = null,
-  actions: (@Composable RowScope.() -> Unit)? = null,
-) {
-  // Icon glyphs are centred in a full touch target, so the toolbar row is nudged
-  // outward by that inset to keep glyph edges on the same gutter as the page title.
-  val glyphInset = (ClawTheme.spacing.touchTarget - ClawTheme.spacing.icon) / 2
-  Column(
-    modifier = modifier.fillMaxWidth(),
-    verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxxs),
-  ) {
-    if (navigation != null || actions != null) {
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs),
-      ) {
-        if (navigation != null) {
-          Box(modifier = Modifier.offset(x = -glyphInset)) { navigation() }
-        }
-        Spacer(modifier = Modifier.weight(1f))
-        if (actions != null) {
-          Row(
-            modifier = Modifier.offset(x = glyphInset),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxxs),
-            content = actions,
-          )
-        }
-      }
-    }
-    if (eyebrow != null) {
-      Text(
-        text = eyebrow,
-        style = ClawTheme.type.caption,
-        color = ClawTheme.colors.textSubtle,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-      )
-    }
-    Text(
-      modifier = Modifier.fillMaxWidth(),
-      text = title,
-      style = ClawTheme.type.display,
-      // Control UI marks the current page with the accent, not with repeated branding.
-      color = ClawTheme.colors.accent,
-      maxLines = 1,
-      overflow = TextOverflow.Ellipsis,
-    )
   }
 }
 
