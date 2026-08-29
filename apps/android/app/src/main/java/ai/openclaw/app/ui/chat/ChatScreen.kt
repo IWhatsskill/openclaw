@@ -66,7 +66,6 @@ import android.os.SystemClock
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -3064,99 +3063,103 @@ private fun ChatInputPill(
           })
         }
       }
-      AnimatedVisibility(
-        visible = auxiliaryControlsVisible || auxiliaryControlsPinned,
+      Box(
         modifier = Modifier.weight(1f),
-        enter = fadeIn() + expandHorizontally(expandFrom = Alignment.Start),
-        exit = fadeOut() + shrinkHorizontally(shrinkTowards = Alignment.Start),
+        contentAlignment = Alignment.CenterEnd,
       ) {
-        Row(
-          modifier = Modifier.fillMaxWidth(),
-          verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.End,
+        androidx.compose.animation.AnimatedVisibility(
+          visible = auxiliaryControlsVisible || auxiliaryControlsPinned,
+          enter = fadeIn() + expandHorizontally(expandFrom = Alignment.Start),
+          exit = fadeOut() + shrinkHorizontally(shrinkTowards = Alignment.Start),
         ) {
-          Box {
-            Surface(
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.End,
+          ) {
+            Box {
+              Surface(
+                onClick = {
+                  revealAuxiliaryControls()
+                  permissionMenuExpanded = true
+                },
+                enabled = permissionPickerEnabled,
+                modifier = Modifier.size(ClawTheme.spacing.touchTarget),
+                shape = CircleShape,
+                color = Color.Transparent,
+                contentColor =
+                  if (permissionMode == ChatPermissionMode.Full) {
+                    ClawTheme.colors.warning
+                  } else {
+                    ClawTheme.colors.textMuted
+                  },
+              ) {
+                Box(contentAlignment = Alignment.Center) {
+                  ChatPermissionIcon(
+                    mode = permissionMode,
+                    contentDescription = nativeString("Permissions: \${mode}", chatPermissionModeLabel(permissionMode)),
+                    modifier = Modifier.size(18.dp),
+                  )
+                }
+              }
+              ChatPermissionMenu(
+                expanded = permissionMenuExpanded,
+                selectedMode = permissionMode,
+                canSelectFull = canSelectFullPermission,
+                onDismissRequest = {
+                  permissionMenuExpanded = false
+                  revealAuxiliaryControls()
+                },
+                onSelect = onPermissionModeChange,
+              )
+            }
+            ChatComposerContextRing(
+              contextUsage = contextUsage,
+              expanded = contextMenuExpanded,
+              onExpandedChange = { expanded ->
+                contextMenuExpanded = expanded
+                revealAuxiliaryControls()
+              },
+            )
+            ChatComposerFooterChip(
+              label = selectedModelLabel,
+              enabled = modelPickerEnabled,
               onClick = {
                 revealAuxiliaryControls()
-                permissionMenuExpanded = true
+                onOpenModelPicker()
               },
-              enabled = permissionPickerEnabled,
-              modifier = Modifier.size(ClawTheme.spacing.touchTarget),
-              shape = CircleShape,
-              color = Color.Transparent,
-              contentColor =
-                if (permissionMode == ChatPermissionMode.Full) {
-                  ClawTheme.colors.warning
-                } else {
-                  ClawTheme.colors.textMuted
-                },
-            ) {
-              Box(contentAlignment = Alignment.Center) {
-                ChatPermissionIcon(
-                  mode = permissionMode,
-                  contentDescription = nativeString("Permissions: \${mode}", chatPermissionModeLabel(permissionMode)),
-                  modifier = Modifier.size(18.dp),
-                )
-              }
-            }
-            ChatPermissionMenu(
-              expanded = permissionMenuExpanded,
-              selectedMode = permissionMode,
-              canSelectFull = canSelectFullPermission,
-              onDismissRequest = {
-                permissionMenuExpanded = false
+              modifier =
+                Modifier
+                  .weight(1f, fill = false)
+                  .widthIn(max = 132.dp)
+                  .testTag("chat-composer-model"),
+            )
+            ChatComposerThinkingChip(
+              fastMode = fastMode,
+              thinkingLevel = thinkingLevel,
+              thinkingOptions = thinkingOptions,
+              enabled = thinkingSupported || modelPickerEnabled,
+              onClick = {
                 revealAuxiliaryControls()
+                onToggleThinkingSelector()
               },
-              onSelect = onPermissionModeChange,
+              modifier = Modifier.testTag("chat-composer-thinking"),
+            )
+            ChatComposerMicButton(
+              dictationActive = dictationActive,
+              dictationEnabled = dictationEnabled,
+              voiceNoteEnabled = recordVoiceNoteEnabled,
+              onToggleDictation = {
+                revealAuxiliaryControls()
+                onToggleDictation()
+              },
+              onStartVoiceNote = {
+                revealAuxiliaryControls()
+                onStartVoiceNote()
+              },
+              modifier = Modifier.testTag("chat-composer-mic"),
             )
           }
-          ChatComposerContextRing(
-            contextUsage = contextUsage,
-            expanded = contextMenuExpanded,
-            onExpandedChange = { expanded ->
-              contextMenuExpanded = expanded
-              revealAuxiliaryControls()
-            },
-          )
-          ChatComposerFooterChip(
-            label = selectedModelLabel,
-            enabled = modelPickerEnabled,
-            onClick = {
-              revealAuxiliaryControls()
-              onOpenModelPicker()
-            },
-            modifier =
-              Modifier
-                .weight(1f, fill = false)
-                .widthIn(max = 132.dp)
-                .testTag("chat-composer-model"),
-          )
-          ChatComposerThinkingChip(
-            fastMode = fastMode,
-            thinkingLevel = thinkingLevel,
-            thinkingOptions = thinkingOptions,
-            enabled = thinkingSupported || modelPickerEnabled,
-            onClick = {
-              revealAuxiliaryControls()
-              onToggleThinkingSelector()
-            },
-            modifier = Modifier.testTag("chat-composer-thinking"),
-          )
-          ChatComposerMicButton(
-            dictationActive = dictationActive,
-            dictationEnabled = dictationEnabled,
-            voiceNoteEnabled = recordVoiceNoteEnabled,
-            onToggleDictation = {
-              revealAuxiliaryControls()
-              onToggleDictation()
-            },
-            onStartVoiceNote = {
-              revealAuxiliaryControls()
-              onStartVoiceNote()
-            },
-            modifier = Modifier.testTag("chat-composer-mic"),
-          )
         }
       }
       when (resolveChatComposerTrailingAction(talkActive = talkActive, runActive = runActive, sendEnabled = sendEnabled)) {

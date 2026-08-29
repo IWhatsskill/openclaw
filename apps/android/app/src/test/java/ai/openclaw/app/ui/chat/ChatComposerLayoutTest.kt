@@ -31,6 +31,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModelStore
 import org.junit.After
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
@@ -130,6 +131,27 @@ class ChatComposerLayoutTest {
         left.second.right <= right.second.left,
       )
     }
+  }
+
+  @Test
+  fun hiddenAuxiliaryToolbarKeepsPrimaryActionAtTrailingEdge() {
+    showChat()
+    composeRule.mainClock.autoAdvance = false
+
+    composeRule.onNode(hasSetTextAction()).performClick()
+    composeRule.mainClock.advanceTimeBy(500L)
+    composeRule.waitForIdle()
+    composeRule.onNodeWithTag("chat-composer-model").assertIsDisplayed()
+    val expandedActionRight =
+      composeRule.onNodeWithContentDescription("Stop").getUnclippedBoundsInRoot().right
+
+    composeRule.mainClock.advanceTimeBy(CHAT_COMPOSER_AUXILIARY_IDLE_MS + 500L)
+    composeRule.waitForIdle()
+    composeRule.onNodeWithTag("chat-composer-model").assertDoesNotExist()
+    val collapsedActionRight =
+      composeRule.onNodeWithContentDescription("Stop").getUnclippedBoundsInRoot().right
+
+    assertEquals(expandedActionRight, collapsedActionRight)
   }
 
   private fun showChat() {
