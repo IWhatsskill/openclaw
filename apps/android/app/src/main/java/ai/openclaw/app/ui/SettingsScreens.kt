@@ -2041,15 +2041,6 @@ private fun AppearanceSettingsScreen(
   val systemLanguageTag = currentSystemLanguageTag(context)
 
   SettingsDetailFrame(title = nativeString("Appearance"), subtitle = nativeString("Theme and translated Android text."), icon = Icons.Default.Palette, onBack = onBack) {
-    SettingsMetricPanel(
-      rows =
-        listOf(
-          SettingsMetric(nativeString("Theme"), themeFamily.displayLabel),
-          SettingsMetric(nativeString("Color mode"), appearanceThemeSummary(themeMode)),
-          SettingsMetric(nativeString("Accent"), accentArgb?.let { String.format("#%06X", it and 0xFFFFFF) } ?: nativeString("Theme default")),
-          SettingsMetric(nativeString("Language"), appLanguageTitle(appLanguage)),
-        ),
-    )
     ClawPanel {
       Column(verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
         Text(text = nativeString("Theme family"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
