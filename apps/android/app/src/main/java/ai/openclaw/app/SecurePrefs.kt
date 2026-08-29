@@ -48,6 +48,8 @@ internal fun sanitizeSidebarPageOrder(pageIds: List<String>): List<String> {
 internal fun sanitizeSidebarVisiblePages(pageIds: List<String>): List<String> {
   val knownIds = defaultSidebarPageOrder.toSet()
   val supplied = pageIds.map(String::trim).filter { it in knownIds }.distinct()
+  // The sidebar UI refuses to unpin its final page. An empty persisted set can
+  // therefore only come from corrupt or external state and recovers to defaults.
   return supplied.ifEmpty { defaultSidebarVisiblePages }
 }
 
