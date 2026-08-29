@@ -58,6 +58,7 @@ import ai.openclaw.app.ui.design.ClawSecondaryButton
 import ai.openclaw.app.ui.design.ClawStatus
 import ai.openclaw.app.ui.design.ClawStatusPill
 import ai.openclaw.app.ui.design.ClawTheme
+import ai.openclaw.app.ui.design.sessionColor
 import ai.openclaw.app.ui.gatewayDiagnosticsEndpoint
 import ai.openclaw.app.ui.gatewayStatusForDisplay
 import ai.openclaw.app.ui.localizedUppercase
@@ -713,6 +714,7 @@ fun ChatScreen(
   ) {
     ChatHeader(
       activeAgentLabel = activeAgentLabel,
+      sessionColor = sessions.firstOrNull { it.key == sessionKey }?.color,
       showSidebarButton = showSidebarButton,
       onOpenSidebar = onOpenSidebar,
       healthOk = healthOk,
@@ -1064,6 +1066,7 @@ internal fun chatHeaderAgentLabel(
 @Composable
 private fun ChatHeader(
   activeAgentLabel: String,
+  sessionColor: String?,
   showSidebarButton: Boolean,
   onOpenSidebar: () -> Unit,
   healthOk: Boolean,
@@ -1116,6 +1119,9 @@ private fun ChatHeader(
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
+      ClawTheme.colors.sessionColor(sessionColor)?.let { color ->
+        Box(modifier = Modifier.size(7.dp).background(color, CircleShape).clearAndSetSemantics {})
+      }
       Text(
         text = activeAgentLabel,
         style = ClawTheme.type.title.copy(fontSize = 15.sp, lineHeight = 20.sp),

@@ -6,6 +6,8 @@ import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.lerp
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Test
 
@@ -19,6 +21,21 @@ class ClawColorsTest {
       assertEquals(family, AppearanceThemeFamily.fromRawValue(family.rawValue.uppercase()))
     }
     assertEquals(AppearanceThemeFamily.Claw, AppearanceThemeFamily.fromRawValue("unknown"))
+  }
+
+  @Test
+  fun sessionColorsAdaptToThemeAndUnsetNamesHaveNoIndicator() {
+    val light = clawColorsForTheme(dark = false, accentArgb = null)
+    val dark = clawColorsForTheme(dark = true, accentArgb = null)
+    for (name in listOf("red", "blue", "green", "yellow", "purple", "orange", "pink", "cyan")) {
+      assertNotNull(light.sessionColor(name))
+      assertNotNull(dark.sessionColor(name))
+      assertNotEquals(light.sessionColor(name), dark.sessionColor(name))
+    }
+    for (name in listOf(null, "", "gray", "grey", "default", "reset", "none", "unknown")) {
+      assertNull(light.sessionColor(name))
+      assertNull(dark.sessionColor(name))
+    }
   }
 
   @Test

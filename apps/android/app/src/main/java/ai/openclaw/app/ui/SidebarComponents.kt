@@ -4,6 +4,8 @@ import ai.openclaw.app.R
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.design.ClawTheme
+import ai.openclaw.app.ui.design.sessionColor
+import ai.openclaw.app.ui.design.sessionColorStripe
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
@@ -348,6 +350,7 @@ internal fun SidebarSessionRow(
     selected = selected,
     stateDescription = sessionStateDescription,
     palette = palette,
+    stripeColor = ClawTheme.colors.sessionColor(session.color),
     onClick = onClick,
     dragKey = session.key,
     onDragCommit = onDragCommit,
@@ -399,6 +402,7 @@ internal fun SidebarRowSurface(
   stateDescription: String? = null,
   palette: SidebarPalette,
   enabled: Boolean = true,
+  stripeColor: Color? = null,
   onClick: () -> Unit,
   dragKey: Any? = null,
   onDragCommit: ((Int) -> Unit)? = null,
@@ -472,7 +476,8 @@ internal fun SidebarRowSurface(
             } else {
               Color.Transparent
             },
-          ).then(
+          ).sessionColorStripe(stripeColor)
+          .then(
             if (selected == null) {
               Modifier.clickable(enabled = enabled, role = Role.Button, onClick = onClick)
             } else {
