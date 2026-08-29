@@ -57,12 +57,11 @@ class ChatScreenTest {
 
   @Test
   fun composerAuxiliaryControlsStayVisibleForActiveInteraction() {
-    assertTrue(chatComposerAuxiliaryControlsPinned(true, false, false, false, false))
-    assertTrue(chatComposerAuxiliaryControlsPinned(false, true, false, false, false))
-    assertTrue(chatComposerAuxiliaryControlsPinned(false, false, true, false, false))
-    assertTrue(chatComposerAuxiliaryControlsPinned(false, false, false, true, false))
-    assertTrue(chatComposerAuxiliaryControlsPinned(false, false, false, false, true))
-    assertFalse(chatComposerAuxiliaryControlsPinned(false, false, false, false, false))
+    assertTrue(chatComposerAuxiliaryControlsPinned(true, false, false, false))
+    assertTrue(chatComposerAuxiliaryControlsPinned(false, true, false, false))
+    assertTrue(chatComposerAuxiliaryControlsPinned(false, false, true, false))
+    assertTrue(chatComposerAuxiliaryControlsPinned(false, false, false, true))
+    assertFalse(chatComposerAuxiliaryControlsPinned(false, false, false, false))
     assertEquals(3_000L, CHAT_COMPOSER_AUXILIARY_IDLE_MS)
   }
 

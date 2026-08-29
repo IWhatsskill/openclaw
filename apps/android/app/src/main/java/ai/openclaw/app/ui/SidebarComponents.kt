@@ -10,6 +10,7 @@ import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
@@ -332,6 +333,8 @@ internal fun SidebarSessionRow(
   selected: Boolean,
   palette: SidebarPalette,
   onClick: () -> Unit,
+  onDragCommit: ((Int) -> Unit)? = null,
+  onDragActiveChange: (Boolean) -> Unit = {},
 ) {
   val sessionStateDescription =
     when {
@@ -346,6 +349,9 @@ internal fun SidebarSessionRow(
     stateDescription = sessionStateDescription,
     palette = palette,
     onClick = onClick,
+    dragKey = session.key,
+    onDragCommit = onDragCommit,
+    onDragActiveChange = onDragActiveChange,
   ) {
     Box(
       modifier =
@@ -388,37 +394,110 @@ internal fun SidebarSessionRow(
 }
 
 @Composable
-private fun SidebarRowSurface(
+internal fun SidebarRowSurface(
   selected: Boolean?,
   stateDescription: String? = null,
   palette: SidebarPalette,
+  enabled: Boolean = true,
   onClick: () -> Unit,
+  dragKey: Any? = null,
+  onDragCommit: ((Int) -> Unit)? = null,
+  onDragActiveChange: (Boolean) -> Unit = {},
+  contentPadding: PaddingValues = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
   content: @Composable RowScope.() -> Unit,
 ) {
-  Row(
+  val dragThresholdPx = with(LocalDensity.current) { 48.dp.toPx() }
+  val haptic = LocalHapticFeedback.current
+  val currentOnDragCommit by rememberUpdatedState(onDragCommit)
+  val currentOnDragActiveChange by rememberUpdatedState(onDragActiveChange)
+  var dragOffset by remember(dragKey) { mutableFloatStateOf(0f) }
+  var dragging by remember(dragKey) { mutableStateOf(false) }
+  val finishDrag = {
+    val commit = currentOnDragCommit
+    if (commit != null && abs(dragOffset) >= dragThresholdPx) {
+      commit(if (dragOffset < 0f) -1 else 1)
+    }
+    dragOffset = 0f
+    dragging = false
+    currentOnDragActiveChange(false)
+  }
+  val dragModifier =
+    if (!enabled || onDragCommit == null) {
+      Modifier
+    } else {
+      Modifier.pointerInput(dragKey, dragThresholdPx) {
+        detectDragGesturesAfterLongPress(
+          onDragStart = {
+            dragOffset = 0f
+            dragging = true
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            currentOnDragActiveChange(true)
+          },
+          onDragEnd = finishDrag,
+          onDragCancel = {
+            dragOffset = 0f
+            dragging = false
+            currentOnDragActiveChange(false)
+          },
+        ) { change, dragAmount ->
+          change.consume()
+          dragOffset += dragAmount.y
+        }
+      }
+    }
+
+  Box(
     modifier =
       Modifier
         .fillMaxWidth()
-        .heightIn(min = 48.dp)
-        .clip(RoundedCornerShape(10.dp))
-        .background(if (selected == true) palette.selection else Color.Transparent)
-        .then(
-          if (selected == null) {
-            Modifier.clickable(role = Role.Button, onClick = onClick)
-          } else {
-            Modifier.selectable(selected = selected, role = Role.Button, onClick = onClick)
-          },
-        ).then(
-          if (stateDescription == null) {
-            Modifier
-          } else {
-            Modifier.semantics { this.stateDescription = stateDescription }
-          },
-        ).padding(horizontal = 12.dp, vertical = 8.dp),
-    verticalAlignment = Alignment.CenterVertically,
-    horizontalArrangement = Arrangement.spacedBy(10.dp),
-    content = content,
-  )
+        .zIndex(if (dragging) 1f else 0f)
+        .graphicsLayer {
+          translationY = dragOffset
+          scaleX = if (dragging) 1.015f else 1f
+          scaleY = if (dragging) 1.015f else 1f
+          shadowElevation = if (dragging) 10.dp.toPx() else 0f
+        },
+  ) {
+    Row(
+      modifier =
+        Modifier
+          .fillMaxWidth()
+          .heightIn(min = 48.dp)
+          .clip(RoundedCornerShape(10.dp))
+          .background(
+            if (selected == true) {
+              palette.selection
+            } else if (dragging) {
+              palette.elevated
+            } else {
+              Color.Transparent
+            },
+          ).then(
+            if (selected == null) {
+              Modifier.clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+            } else {
+              Modifier.selectable(enabled = enabled, selected = selected, role = Role.Button, onClick = onClick)
+            },
+          ).then(
+            if (stateDescription == null) {
+              Modifier
+            } else {
+              Modifier.semantics { this.stateDescription = stateDescription }
+            },
+          ).then(dragModifier)
+          .padding(contentPadding),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(10.dp),
+      content = content,
+    )
+    if (dragging) {
+      HorizontalDivider(
+        color = ClawTheme.colors.primary,
+        thickness = 2.dp,
+        modifier = Modifier.align(if (dragOffset < 0f) Alignment.TopCenter else Alignment.BottomCenter),
+      )
+    }
+  }
 }
 
 internal fun sidebarSessionSubtitle(

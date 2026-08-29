@@ -57,6 +57,7 @@ class SidebarCatalogGroupingTest {
     assertNull(host.workspaces.last().path)
     assertFalse(host.workspaces.any { workspace -> workspace.sessions.any(SessionCatalogEntry::archived) })
   }
+
   @Test
   fun fullyArchivedHostDoesNotLeaveAnEmptyHeading() {
     val hosts =
@@ -82,7 +83,6 @@ class SidebarCatalogGroupingTest {
 
     assertTrue(hosts.isEmpty())
   }
-
 
   private fun entry(
     threadId: String,

@@ -46,6 +46,16 @@ class SidebarShellLogicTest {
   }
 
   @Test
+  fun sessionDragMutatesOnlyTowardARealSidebarDestination() {
+    assertEquals(true, sidebarSessionPinnedAfterDrag(SidebarSessionDragSource.Codex, direction = 1))
+    assertNull(sidebarSessionPinnedAfterDrag(SidebarSessionDragSource.Codex, direction = -1))
+    assertEquals(false, sidebarSessionPinnedAfterDrag(SidebarSessionDragSource.Pinned, direction = 1))
+    assertNull(sidebarSessionPinnedAfterDrag(SidebarSessionDragSource.Pinned, direction = -1))
+    assertEquals(true, sidebarSessionPinnedAfterDrag(SidebarSessionDragSource.Recent, direction = -1))
+    assertNull(sidebarSessionPinnedAfterDrag(SidebarSessionDragSource.Recent, direction = 1))
+  }
+
+  @Test
   fun pinnedItemVisibilityKeepsCanonicalOrderAndAtLeastOnePage() {
     assertEquals(
       listOf("settings", "home", "threads"),

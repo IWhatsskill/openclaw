@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui.design
 
+import ai.openclaw.app.AppearanceThemeFamily
 import ai.openclaw.app.R
 import androidx.compose.material3.LocalMinimumInteractiveComponentSize
 import androidx.compose.material3.MaterialTheme
@@ -43,6 +44,7 @@ internal data class ClawColors(
   val accent: Color,
   val accentSoft: Color,
   val accentBorder: Color,
+  val userMessageSurface: Color,
   val border: Color,
   val borderStrong: Color,
   val text: Color,
@@ -125,6 +127,7 @@ private val ClawDarkColors =
     accent = Color(0xFFFF5C5C),
     accentSoft = Color(0x1AFF5C5C),
     accentBorder = Color(0xFFD13C3C),
+    userMessageSurface = Color(0xFFFF5C5C).copy(alpha = 0.12f).compositeOver(Color(0xFF0E1015)),
     border = Color(0xFF1E2028),
     borderStrong = Color(0xFF2E3040),
     text = Color(0xFFF4F4F5),
@@ -155,6 +158,7 @@ private val ClawLightColors =
     accent = Color(0xFFC23434),
     accentSoft = Color(0x1AC23434),
     accentBorder = Color(0xFFA32C2C),
+    userMessageSurface = Color(0x26C23434).compositeOver(Color(0xFFF7F7F9)),
     border = Color(0xFFE4E4EA),
     borderStrong = Color(0xFFCFCFD8),
     text = Color(0xFF101014),
@@ -174,16 +178,108 @@ private val ClawLightColors =
     codeBorder = Color(0xFFE4E4EA),
   )
 
-internal fun clawColorsForTheme(
+private data class WebThemePalette(
+  val canvas: Long,
+  val surface: Long,
+  val raised: Long,
+  val pressed: Long,
+  val accent: Long,
+  val border: Long,
+  val borderStrong: Long,
+  val text: Long,
+  val muted: Long,
+  val primary: Long,
+  val primaryText: Long,
+  val secondary: Long,
+)
+
+private fun webThemePalette(
+  family: AppearanceThemeFamily,
   dark: Boolean,
-  accentArgb: Long?,
+): WebThemePalette? =
+  when (family) {
+    AppearanceThemeFamily.Claw -> null
+    AppearanceThemeFamily.Knot ->
+      if (dark) {
+        WebThemePalette(0xFF080808, 0xFF111113, 0xFF141416, 0xFF1A1A1E, 0xFFE5243B, 0xFF202026, 0xFF303038, 0xFFC6C6CB, 0xFF8A8A94, 0xFFD92A3F, 0xFFFAFAFA, 0xFFB8BDC4)
+      } else {
+        WebThemePalette(0xFFF9F9FB, 0xFFF2F2F5, 0xFFFFFFFF, 0xFFEAEAEF, 0xFFC41E30, 0xFFE2E2E8, 0xFFCCCCD4, 0xFF3A3A42, 0xFF68676F, 0xFFC41E30, 0xFFFFFFFF, 0xFF5A626E)
+      }
+    AppearanceThemeFamily.Dash ->
+      if (dark) {
+        WebThemePalette(0xFF1A1210, 0xFF221A16, 0xFF28201C, 0xFF302822, 0xFFCF8B4D, 0xFF362A1C, 0xFF4C3E2C, 0xFFD8C8B8, 0xFFA18F80, 0xFFCF8B4D, 0xFF1A1210, 0xFFDCB878)
+      } else {
+        WebThemePalette(0xFFF7F2EC, 0xFFF0E8E0, 0xFFFFFFFF, 0xFFE8DDD2, 0xFF8A512C, 0xFFDDD0C2, 0xFFC8B8A6, 0xFF4A3828, 0xFF725D4D, 0xFF8A512C, 0xFFFFFFFF, 0xFF7D6027)
+      }
+    AppearanceThemeFamily.Absolutely ->
+      if (dark) {
+        WebThemePalette(0xFF1C1C1A, 0xFF232320, 0xFF292825, 0xFF302F2B, 0xFFD97757, 0xFF2E2C27, 0xFF3D3A33, 0xFFE4DFD4, 0xFFABA498, 0xFFD97757, 0xFF241F1B, 0xFFB8926A)
+      } else {
+        WebThemePalette(0xFFFAF9F5, 0xFFF3F1E9, 0xFFFFFFFF, 0xFFEDEAE0, 0xFFA8452A, 0xFFE3DFD2, 0xFFCDC7B6, 0xFF3D3A33, 0xFF6B655B, 0xFFA8452A, 0xFFFFFFFF, 0xFF8A6A44)
+      }
+    AppearanceThemeFamily.Tide ->
+      if (dark) {
+        WebThemePalette(0xFF10151B, 0xFF161D25, 0xFF1B232C, 0xFF212B36, 0xFF5AB6D8, 0xFF222C37, 0xFF33414F, 0xFFC9D2DA, 0xFF9DABB9, 0xFF5AB6D8, 0xFF0B1116, 0xFF7F9BB5)
+      } else {
+        WebThemePalette(0xFFF7F9FB, 0xFFEEF2F7, 0xFFFFFFFF, 0xFFE8EDF2, 0xFF1F6F8F, 0xFFDFE5EC, 0xFFC5CFD9, 0xFF333C45, 0xFF5F6B76, 0xFF1F6F8F, 0xFFFFFFFF, 0xFF3D6D88)
+      }
+    AppearanceThemeFamily.Beacon ->
+      if (dark) {
+        WebThemePalette(0xFF000000, 0xFF0A0A0A, 0xFF141414, 0xFF1C1C1C, 0xFFFFC233, 0xFF4A4A4A, 0xFF6E6E6E, 0xFFFFFFFF, 0xFFC9C9C9, 0xFFFFC233, 0xFF000000, 0xFF8ECDFF)
+      } else {
+        WebThemePalette(0xFFFFFFFF, 0xFFF4F4F4, 0xFFFFFFFF, 0xFFEDEDED, 0xFF6E4A00, 0xFF8A8A8A, 0xFF5A5A5A, 0xFF000000, 0xFF3A3A3A, 0xFF6E4A00, 0xFFFFFFFF, 0xFF09428D)
+      }
+    AppearanceThemeFamily.Phosphor ->
+      if (dark) {
+        WebThemePalette(0xFF0A0F0A, 0xFF0E150E, 0xFF121A12, 0xFF18221A, 0xFF4ADE80, 0xFF1D291F, 0xFF2C3D2F, 0xFFCFE0CF, 0xFF93AC95, 0xFF4ADE80, 0xFF07120A, 0xFF8FD6A5)
+      } else {
+        WebThemePalette(0xFFF4F7F4, 0xFFECF1EC, 0xFFFFFFFF, 0xFFE4EBE5, 0xFF10693A, 0xFFDBE4DC, 0xFFBFCDC1, 0xFF2A352B, 0xFF566B58, 0xFF10693A, 0xFFFFFFFF, 0xFF2F6B47)
+      }
+  }
+
+private fun familyColors(
+  dark: Boolean,
+  family: AppearanceThemeFamily,
 ): ClawColors {
   val base = if (dark) ClawDarkColors else ClawLightColors
+  val palette = webThemePalette(family, dark) ?: return base
+  val canvas = Color(palette.canvas)
+  val accent = Color(palette.accent)
+  return base.copy(
+    canvas = canvas,
+    surface = Color(palette.surface),
+    surfaceRaised = Color(palette.raised),
+    surfacePressed = Color(palette.pressed),
+    accent = accent,
+    accentSoft = accent.copy(alpha = if (dark) 0.12f else 0.10f),
+    accentBorder = accent.copy(alpha = if (dark) 0.55f else 0.65f),
+    userMessageSurface = accent.copy(alpha = if (dark) 0.12f else 0.15f).compositeOver(canvas),
+    border = Color(palette.border),
+    borderStrong = Color(palette.borderStrong),
+    text = Color(palette.text),
+    textMuted = Color(palette.muted),
+    textSubtle = Color(palette.muted).copy(alpha = 0.82f),
+    primary = Color(palette.primary),
+    primaryText = Color(palette.primaryText),
+    secondary = Color(palette.secondary),
+    codeBg = canvas,
+    codeText = Color(palette.text),
+    codeBorder = Color(palette.border),
+  )
+}
+
+internal fun clawColorsForTheme(
+  dark: Boolean,
+  family: AppearanceThemeFamily = AppearanceThemeFamily.Claw,
+  accentArgb: Long?,
+): ClawColors {
+  val base = familyColors(dark = dark, family = family)
   val accent = accentArgb?.let(::Color) ?: return base
   return base.copy(
     accent = accent,
     accentSoft = accent.copy(alpha = if (dark) 0.25f else 0.08f).compositeOver(base.canvas),
     accentBorder = lerp(accent, Color.Black, 0.12f),
+    userMessageSurface = accent.copy(alpha = if (dark) 0.12f else 0.15f).compositeOver(base.canvas),
   )
 }
 
@@ -223,10 +319,11 @@ internal object ClawTheme {
 @Composable
 internal fun ClawDesignTheme(
   dark: Boolean = true,
+  family: AppearanceThemeFamily = AppearanceThemeFamily.Claw,
   accentArgb: Long? = null,
   content: @Composable () -> Unit,
 ) {
-  val colors = clawColorsForTheme(dark = dark, accentArgb = accentArgb)
+  val colors = clawColorsForTheme(dark = dark, family = family, accentArgb = accentArgb)
   val typography = clawTypography(clawFontFamily)
 
   val spacing = ClawSpacing()

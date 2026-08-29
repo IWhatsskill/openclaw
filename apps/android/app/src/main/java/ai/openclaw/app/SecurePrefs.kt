@@ -88,6 +88,8 @@ class SecurePrefs(
     private const val voiceWakeEnabledKey = "voiceWake.enabled"
     private const val voiceWakeWordsKey = "voiceWake.triggerWords"
     private const val appearanceThemeModeKey = "appearance.themeMode"
+    private const val appearanceThemeFamilyKey = "appearance.themeFamily"
+    private const val appearanceAccentArgbKey = "appearance.accentArgb"
     private const val chatModelFavoritesKey = "chat.modelFavorites"
     private const val chatModelRecentsKey = "chat.modelRecents"
     private const val sessionCustomGroupsKey = "sessions.customGroups"
@@ -244,6 +246,13 @@ class SecurePrefs(
   private val _appearanceThemeMode =
     MutableStateFlow(AppearanceThemeMode.fromRawValue(plainPrefs.getString(appearanceThemeModeKey, null)))
   val appearanceThemeMode: StateFlow<AppearanceThemeMode> = _appearanceThemeMode
+
+  private val _appearanceThemeFamily =
+    MutableStateFlow(AppearanceThemeFamily.fromRawValue(plainPrefs.getString(appearanceThemeFamilyKey, null)))
+  val appearanceThemeFamily: StateFlow<AppearanceThemeFamily> = _appearanceThemeFamily
+
+  private val _appearanceAccentArgb = MutableStateFlow(plainPrefs.takeIf { it.contains(appearanceAccentArgbKey) }?.getLong(appearanceAccentArgbKey, 0L))
+  val appearanceAccentArgb: StateFlow<Long?> = _appearanceAccentArgb
 
   private val _modelFavorites = MutableStateFlow(loadChatModelRefs(chatModelFavoritesKey))
   val modelFavorites: StateFlow<List<String>> = _modelFavorites
@@ -717,6 +726,22 @@ class SecurePrefs(
   fun setAppearanceThemeMode(mode: AppearanceThemeMode) {
     plainPrefs.edit { putString(appearanceThemeModeKey, mode.rawValue) }
     _appearanceThemeMode.value = mode
+  }
+
+  fun setAppearanceThemeFamily(family: AppearanceThemeFamily) {
+    plainPrefs.edit { putString(appearanceThemeFamilyKey, family.rawValue) }
+    _appearanceThemeFamily.value = family
+  }
+
+  fun setAppearanceAccentArgb(argb: Long?) {
+    plainPrefs.edit {
+      if (argb == null) {
+        remove(appearanceAccentArgbKey)
+      } else {
+        putLong(appearanceAccentArgbKey, argb)
+      }
+    }
+    _appearanceAccentArgb.value = argb
   }
 
   fun toggleModelFavorite(ref: String) {

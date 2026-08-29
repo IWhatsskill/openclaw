@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui.design
 
+import ai.openclaw.app.AppearanceThemeFamily
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.lerp
@@ -9,6 +10,17 @@ import org.junit.Assert.assertSame
 import org.junit.Test
 
 class ClawColorsTest {
+  @Test
+  fun officialThemeFamiliesExposeTheirDarkPreviewPaletteAndParseWireValues() {
+    for (family in AppearanceThemeFamily.entries) {
+      val colors = clawColorsForTheme(dark = true, family = family, accentArgb = null)
+      assertEquals(Color(family.previewCanvasArgb), colors.canvas)
+      assertEquals(Color(family.previewAccentArgb), colors.accent)
+      assertEquals(family, AppearanceThemeFamily.fromRawValue(family.rawValue.uppercase()))
+    }
+    assertEquals(AppearanceThemeFamily.Claw, AppearanceThemeFamily.fromRawValue("unknown"))
+  }
+
   @Test
   fun nullAccentPreservesHardcodedDarkAndLightPalettes() {
     val expectedAccents =
@@ -43,8 +55,12 @@ class ClawColorsTest {
       assertNotEquals(base.accentSoft, colors.accentSoft)
       assertNotEquals(base.accentBorder, colors.accentBorder)
       assertEquals(
+        accent.copy(alpha = if (dark) 0.12f else 0.15f).compositeOver(base.canvas),
+        colors.userMessageSurface,
+      )
+      assertEquals(
         base.copy(accent = colors.accent, accentSoft = colors.accentSoft, accentBorder = colors.accentBorder),
-        colors,
+        colors.copy(userMessageSurface = base.userMessageSurface),
       )
     }
   }

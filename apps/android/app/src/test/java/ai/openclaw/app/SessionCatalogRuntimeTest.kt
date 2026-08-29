@@ -1,7 +1,7 @@
 package ai.openclaw.app
 
-import android.content.Context
 import ai.openclaw.app.gateway.GatewayEndpoint
+import android.content.Context
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -49,7 +49,11 @@ class SessionCatalogRuntimeTest {
       runBlocking {
         val params = withTimeout(2_000) { requestParams.await() }
         val progressId =
-          Json.parseToJsonElement(params).jsonObject["progressId"]?.jsonPrimitive?.content
+          Json
+            .parseToJsonElement(params)
+            .jsonObject["progressId"]
+            ?.jsonPrimitive
+            ?.content
         assertTrue(!progressId.isNullOrBlank())
         withTimeout(2_000) {
           while (runtime.sessionCatalogState.value.loading) delay(10)

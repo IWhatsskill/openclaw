@@ -186,6 +186,15 @@ private const val USAGE_INCOMPLETE_RETRY_LIMIT = 3
 private const val OperatorAdminScope = "operator.admin"
 private const val OperatorPairingScope = "operator.pairing"
 
+private data class GatewayAppearancePreferences(
+  val family: AppearanceThemeFamily?,
+  val mode: AppearanceThemeMode?,
+  val accentPresent: Boolean,
+  val accentArgb: Long?,
+)
+
+private val appearancePreferenceKeys = setOf("ui.theme", "ui.themeMode", "ui.accent")
+
 private data class SessionCatalogProgressOwner(
   val progressId: String,
   val agentId: String?,
@@ -5888,8 +5897,12 @@ class NodeRuntime private constructor(
       val res = requestGatewayData(gatewayScope, "config.get", "{}")
       val root = json.parseToJsonElement(res).asObjectOrNull()
       val config = root?.get("config").asObjectOrNull()
-      val parsed = fetchProfileAccentArgb(gatewayScope) ?: resolveGatewayAccentArgb(config)
+      val profile = fetchProfileAppearancePreferences(gatewayScope)
+      val parsed = profile?.accentArgb ?: resolveGatewayAccentArgb(config)
       publishGatewayData(gatewayScope) {
+        profile?.family?.let(prefs::setAppearanceThemeFamily)
+        profile?.mode?.let(prefs::setAppearanceThemeMode)
+        if (profile?.accentPresent == true) prefs.setAppearanceAccentArgb(profile.accentArgb)
         _gatewayAccentArgb.value = parsed
       }
     } catch (_: Throwable) {
@@ -5898,18 +5911,29 @@ class NodeRuntime private constructor(
   }
 
   /**
-   * Caller's per-profile accent (users.prefs.get). Null covers profile-less
-   * connections (no_durable_identity), older gateways without the method, and
-   * malformed stored values, so the gateway accent stays the fallback. Inner
-   * try: a failed profile fetch must not discard the config accent.
+   * Reads only profile-storable appearance values from the official users.prefs
+   * contract. Missing or malformed fields remain device-local fallbacks.
    */
-  private suspend fun fetchProfileAccentArgb(gatewayScope: GatewayDataScope): Long? =
+  private suspend fun fetchProfileAppearancePreferences(gatewayScope: GatewayDataScope): GatewayAppearancePreferences? =
     try {
+      val keys = JsonArray(appearancePreferenceKeys.map(::JsonPrimitive))
       val res =
-        requestGatewayData(gatewayScope, GatewayMethod.UsersPrefsGet.rawValue, """{"keys":["ui.accent"]}""")
+        requestGatewayData(
+          gatewayScope,
+          GatewayMethod.UsersPrefsGet.rawValue,
+          buildJsonObject { put("keys", keys) }.toString(),
+        )
       val root = json.parseToJsonElement(res).asObjectOrNull()
       if ((root?.get("status") as? JsonPrimitive)?.contentOrNull == "ok") {
-        resolveProfileAccentArgb(root.get("entries").asObjectOrNull())
+        val entries = root.get("entries").asObjectOrNull()
+        val familyRaw = entries?.get("ui.theme").asStringOrNull()
+        val modeRaw = entries?.get("ui.themeMode").asStringOrNull()
+        GatewayAppearancePreferences(
+          family = AppearanceThemeFamily.entries.firstOrNull { it.rawValue == familyRaw },
+          mode = AppearanceThemeMode.entries.firstOrNull { it.rawValue == modeRaw },
+          accentPresent = entries?.containsKey("ui.accent") == true,
+          accentArgb = resolveProfileAccentArgb(entries),
+        )
       } else {
         null
       }
@@ -5918,6 +5942,44 @@ class NodeRuntime private constructor(
     } catch (_: Throwable) {
       null
     }
+
+  /** Writes one normalized appearance preference and preserves local state offline. */
+  suspend fun setProfileAppearancePreference(
+    key: String,
+    value: String?,
+  ): Boolean {
+    if (key !in appearancePreferenceKeys) return false
+    val normalized =
+      when (key) {
+        "ui.theme" -> value?.takeIf { candidate -> AppearanceThemeFamily.entries.any { it.rawValue == candidate } }
+        "ui.themeMode" -> value?.takeIf { candidate -> AppearanceThemeMode.entries.any { it.rawValue == candidate } }
+        "ui.accent" -> value?.takeIf { it.matches(Regex("^#[0-9a-fA-F]{6}$")) }
+        else -> null
+      }
+    if (value != null && normalized == null) return false
+    val gatewayScope = captureGatewayDataScope() ?: return false
+    if (!gatewayConnectionDisplay.value.isConnected) return false
+    return try {
+      val params =
+        buildJsonObject {
+          put(
+            "entries",
+            buildJsonObject {
+              put(key, normalized?.let(::JsonPrimitive) ?: kotlinx.serialization.json.JsonNull)
+            },
+          )
+        }
+      val res = requestGatewayData(gatewayScope, GatewayMethod.UsersPrefsSet.rawValue, params.toString())
+      val root = json.parseToJsonElement(res).asObjectOrNull()
+      if ((root?.get("status") as? JsonPrimitive)?.contentOrNull != "ok") return false
+      if (key == "ui.accent") refreshBrandingFromGateway()
+      true
+    } catch (cancelled: CancellationException) {
+      throw cancelled
+    } catch (_: Throwable) {
+      false
+    }
+  }
 
   /** Lists one directory of the active agent's workspace (read-only RPC). */
   suspend fun listWorkspaceFiles(

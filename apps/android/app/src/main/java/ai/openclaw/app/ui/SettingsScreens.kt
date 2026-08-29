@@ -2,6 +2,7 @@ package ai.openclaw.app.ui
 
 import ai.openclaw.app.AndroidLicenseNotice
 import ai.openclaw.app.AppLanguage
+import ai.openclaw.app.AppearanceThemeFamily
 import ai.openclaw.app.AppearanceThemeMode
 import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.CronEditorDraftState
@@ -23,6 +24,7 @@ import ai.openclaw.app.NotificationPackageFilterMode
 import ai.openclaw.app.SensitiveFeatureConfig
 import ai.openclaw.app.VoiceCaptureMode
 import ai.openclaw.app.appLanguageRowSubtitle
+import ai.openclaw.app.appearanceAccentPalette
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.currentAppLanguage
 import ai.openclaw.app.currentSystemLanguageTag
@@ -88,12 +90,14 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -135,6 +139,7 @@ import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -150,6 +155,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -2027,6 +2034,8 @@ private fun AppearanceSettingsScreen(
   onBack: () -> Unit,
 ) {
   val themeMode by viewModel.appearanceThemeMode.collectAsState()
+  val themeFamily by viewModel.appearanceThemeFamily.collectAsState()
+  val accentArgb by viewModel.appearanceAccentArgb.collectAsState()
   val context = LocalContext.current
   var appLanguage by remember { mutableStateOf(currentAppLanguage()) }
   val systemLanguageTag = currentSystemLanguageTag(context)
@@ -2035,20 +2044,63 @@ private fun AppearanceSettingsScreen(
     SettingsMetricPanel(
       rows =
         listOf(
-          SettingsMetric(nativeString("Theme"), appearanceThemeSummary(themeMode)),
+          SettingsMetric(nativeString("Theme"), themeFamily.displayLabel),
+          SettingsMetric(nativeString("Color mode"), appearanceThemeSummary(themeMode)),
+          SettingsMetric(nativeString("Accent"), accentArgb?.let { String.format("#%06X", it and 0xFFFFFF) } ?: nativeString("Theme default")),
           SettingsMetric(nativeString("Language"), appLanguageTitle(appLanguage)),
-          SettingsMetric(nativeString("Contrast"), nativeString("High")),
-          SettingsMetric(nativeString("Typography"), nativeString("Readable")),
         ),
     )
     ClawPanel {
       Column(verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
-        Text(text = nativeString("Theme"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
+        Text(text = nativeString("Theme family"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
+        AppearanceThemeFamily.entries.chunked(2).forEach { rowFamilies ->
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs),
+          ) {
+            rowFamilies.forEach { family ->
+              AppearanceThemeFamilyCard(
+                family = family,
+                selected = family == themeFamily,
+                onClick = { viewModel.setAppearanceThemeFamily(family) },
+                modifier = Modifier.weight(1f),
+              )
+            }
+            if (rowFamilies.size == 1) Spacer(modifier = Modifier.weight(1f))
+          }
+        }
+        Text(
+          text = nativeString("Color mode"),
+          style = ClawTheme.type.section,
+          color = ClawTheme.colors.text,
+          modifier = Modifier.padding(top = ClawTheme.spacing.xxs),
+        )
         ClawSegmentedControl(
           options = appearanceThemeOptions(),
           selected = appearanceThemeSummary(themeMode),
           onSelect = { selected -> viewModel.setAppearanceThemeMode(appearanceThemeModeForLabel(selected)) },
         )
+        Text(
+          text = nativeString("Accent color"),
+          style = ClawTheme.type.section,
+          color = ClawTheme.colors.text,
+          modifier = Modifier.padding(top = ClawTheme.spacing.xxs),
+        )
+        (listOf<Long?>(null) + appearanceAccentPalette).chunked(5).forEach { accentRow ->
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs),
+          ) {
+            accentRow.forEach { candidate ->
+              AppearanceAccentSwatch(
+                argb = candidate,
+                previewArgb = candidate ?: themeFamily.previewAccentArgb,
+                selected = candidate == accentArgb,
+                onClick = { viewModel.setAppearanceAccentArgb(candidate) },
+              )
+            }
+          }
+        }
       }
     }
     ClawPanel {
@@ -2066,6 +2118,83 @@ private fun AppearanceSettingsScreen(
             },
           )
         }
+      }
+    }
+  }
+}
+
+@Composable
+private fun AppearanceThemeFamilyCard(
+  family: AppearanceThemeFamily,
+  selected: Boolean,
+  onClick: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  val shape = RoundedCornerShape(ClawTheme.radii.control)
+  Column(
+    modifier =
+      modifier
+        .heightIn(min = 72.dp)
+        .clip(shape)
+        .background(if (selected) ClawTheme.colors.surfacePressed else ClawTheme.colors.surface)
+        .border(1.dp, if (selected) ClawTheme.colors.primary else ClawTheme.colors.borderStrong, shape)
+        .clickable(onClick = onClick)
+        .padding(ClawTheme.spacing.xs),
+    verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs),
+  ) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+      Row(
+        modifier = Modifier.weight(1f),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+      ) {
+        listOf(family.previewAccentArgb, family.previewSecondaryArgb, family.previewCanvasArgb).forEach { color ->
+          Box(
+            modifier =
+              Modifier
+                .size(13.dp)
+                .clip(CircleShape)
+                .background(Color(color))
+                .border(1.dp, ClawTheme.colors.borderStrong, CircleShape),
+          )
+        }
+      }
+      if (selected) {
+        Icon(
+          imageVector = Icons.Default.Check,
+          contentDescription = nativeString("Selected"),
+          tint = ClawTheme.colors.primary,
+          modifier = Modifier.size(18.dp),
+        )
+      }
+    }
+    Text(text = family.displayLabel, style = ClawTheme.type.label, color = ClawTheme.colors.text)
+  }
+}
+
+@Composable
+private fun AppearanceAccentSwatch(
+  argb: Long?,
+  previewArgb: Long,
+  selected: Boolean,
+  onClick: () -> Unit,
+) {
+  IconButton(onClick = onClick, modifier = Modifier.size(48.dp)) {
+    Box(
+      modifier =
+        Modifier
+          .size(34.dp)
+          .clip(CircleShape)
+          .background(Color(previewArgb))
+          .border(if (selected) 3.dp else 1.dp, if (selected) ClawTheme.colors.text else ClawTheme.colors.borderStrong, CircleShape),
+      contentAlignment = Alignment.Center,
+    ) {
+      if (selected) {
+        Icon(
+          imageVector = Icons.Default.Check,
+          contentDescription = if (argb == null) nativeString("Theme default selected") else nativeString("Accent selected"),
+          tint = ClawTheme.colors.canvas,
+          modifier = Modifier.size(18.dp),
+        )
       }
     }
   }

@@ -263,6 +263,7 @@ class ChatController internal constructor(
   private val thinkingRequestSequence = AtomicLong(0)
   private val latestThinkingIntents = ConcurrentHashMap<SessionSettingsKey, ThinkingIntent>()
   private val latestAcceptedThinkingStates = ConcurrentHashMap<SessionSettingsKey, AcceptedThinkingState>()
+
   private data class FastModeIntent(
     val requestId: Long,
     val requested: ChatFastMode?,
@@ -2286,8 +2287,8 @@ class ChatController internal constructor(
     settingsKey: SessionSettingsKey,
     intent: FastModeIntent,
     queuedMutation: QueuedSessionSettingsMutation,
-  ): Boolean {
-    return runSessionSettingsMutation(queuedMutation) { requestLease ->
+  ): Boolean =
+    runSessionSettingsMutation(queuedMutation) { requestLease ->
       val rollbackState =
         latestAcceptedFastModeStates[settingsKey]
           ?: _sessions.value.firstOrNull { it.key == sessionKey }.fastModeState()
@@ -2322,7 +2323,6 @@ class ChatController internal constructor(
         false
       }
     }
-  }
 
   private suspend fun setSessionThinkingLevelAwait(
     sessionKey: String,

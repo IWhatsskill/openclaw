@@ -264,14 +264,12 @@ internal fun resolveChatComposerTrailingAction(
 internal const val CHAT_COMPOSER_AUXILIARY_IDLE_MS = 3_000L
 
 internal fun chatComposerAuxiliaryControlsPinned(
-  editorFocused: Boolean,
   menuExpanded: Boolean,
   dictationActive: Boolean,
   talkActive: Boolean,
   touchExplorationEnabled: Boolean,
 ): Boolean =
-  editorFocused ||
-    menuExpanded ||
+  menuExpanded ||
     dictationActive ||
     talkActive ||
     touchExplorationEnabled
@@ -1691,9 +1689,9 @@ internal fun ChatBubble(
       Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(if (isUser) CHAT_BUBBLE_CORNER_RADIUS_DP.dp else 0.dp),
-        color = if (isUser) ClawTheme.colors.accentSoft else Color.Transparent,
+        color = if (isUser) ClawTheme.colors.userMessageSurface else Color.Transparent,
         contentColor = ClawTheme.colors.text,
-        border = if (isUser) BorderStroke(1.dp, ClawTheme.colors.accentBorder) else null,
+        border = null,
         tonalElevation = 0.dp,
         shadowElevation = 0.dp,
       ) {
@@ -2435,10 +2433,21 @@ private fun ChatThinkingLevelSelector(
           modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
           verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-          Text(
-            text = nativeString("Effort"),
-            style = ClawTheme.type.caption.copy(fontWeight = FontWeight.SemiBold),
-          )
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+          ) {
+            Text(
+              text = nativeString("Effort"),
+              style = ClawTheme.type.caption.copy(fontWeight = FontWeight.SemiBold),
+            )
+            Text(
+              text = selectedLabel,
+              style = ClawTheme.type.caption.copy(fontWeight = FontWeight.SemiBold),
+              color = ClawTheme.colors.textMuted,
+            )
+          }
           ChatThinkingEffortSlider(
             options = options,
             selectedId = selectedId,
@@ -2928,7 +2937,6 @@ private fun ChatInputPill(
   var attachmentMenuExpanded by rememberSaveable { mutableStateOf(false) }
   var permissionMenuExpanded by rememberSaveable { mutableStateOf(false) }
   var contextMenuExpanded by rememberSaveable { mutableStateOf(false) }
-  var editorFocused by remember { mutableStateOf(false) }
   var auxiliaryControlsVisible by rememberSaveable { mutableStateOf(false) }
   var interactionGeneration by remember { mutableIntStateOf(0) }
   val touchExplorationEnabled =
@@ -2944,7 +2952,6 @@ private fun ChatInputPill(
       modelPickerExpanded
   val auxiliaryControlsPinned =
     chatComposerAuxiliaryControlsPinned(
-      editorFocused = editorFocused,
       menuExpanded = menuExpanded,
       dictationActive = dictationActive,
       talkActive = talkActive,
@@ -3001,7 +3008,6 @@ private fun ChatInputPill(
             Modifier
               .fillMaxWidth()
               .onFocusChanged { focusState ->
-                editorFocused = focusState.isFocused
                 if (focusState.isFocused) revealAuxiliaryControls()
               }.onPreInterceptKeyBeforeSoftKeyboard { event ->
                 hardwareEnterHandler.handle(

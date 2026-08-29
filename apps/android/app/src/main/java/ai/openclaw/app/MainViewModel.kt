@@ -444,6 +444,8 @@ class MainViewModel private constructor(
     }
     prefs.setOnboardingCompleted(true)
     prefs.setAppearanceThemeMode(AppearanceThemeMode.Dark)
+    prefs.setAppearanceThemeFamily(AppearanceThemeFamily.Claw)
+    prefs.setAppearanceAccentArgb(null)
     prefs.setDisplayName("Pixel")
     prefs.setSpeakerEnabled(true)
     prefs.setVoiceWakeEnabled(scene == AndroidScreenshotScene.VoiceWake)
@@ -632,6 +634,8 @@ class MainViewModel private constructor(
   val voiceWakeWordsSaving: StateFlow<Boolean> = runtimeState(initial = false) { it.voiceWakeWordsSaving }
   val voiceWakeWordsNoticeText: StateFlow<String?> = runtimeState(initial = null) { it.voiceWakeWordsNoticeText }
   val appearanceThemeMode: StateFlow<AppearanceThemeMode> = prefs.appearanceThemeMode
+  val appearanceThemeFamily: StateFlow<AppearanceThemeFamily> = prefs.appearanceThemeFamily
+  val appearanceAccentArgb: StateFlow<Long?> = prefs.appearanceAccentArgb
   val voiceCaptureMode: StateFlow<VoiceCaptureMode> = runtimeState(initial = VoiceCaptureMode.Off) { it.voiceCaptureMode }
   val activeAudioInputDevicePreference: StateFlow<String?> =
     runtimeState(initial = null) { it.activeAudioInputDevicePreference }
@@ -1280,6 +1284,24 @@ class MainViewModel private constructor(
 
   fun setAppearanceThemeMode(mode: AppearanceThemeMode) {
     prefs.setAppearanceThemeMode(mode)
+    viewModelScope.launch(Dispatchers.Default) {
+      runtimeRef.value?.setProfileAppearancePreference("ui.themeMode", mode.rawValue)
+    }
+  }
+
+  fun setAppearanceThemeFamily(family: AppearanceThemeFamily) {
+    prefs.setAppearanceThemeFamily(family)
+    viewModelScope.launch(Dispatchers.Default) {
+      runtimeRef.value?.setProfileAppearancePreference("ui.theme", family.rawValue)
+    }
+  }
+
+  fun setAppearanceAccentArgb(argb: Long?) {
+    prefs.setAppearanceAccentArgb(argb)
+    val value = argb?.let { String.format("#%06x", it and 0xFFFFFF) }
+    viewModelScope.launch(Dispatchers.Default) {
+      runtimeRef.value?.setProfileAppearancePreference("ui.accent", value)
+    }
   }
 
   fun refreshGatewayConnection() {

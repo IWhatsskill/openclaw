@@ -84,9 +84,7 @@ internal fun fastModeProviderSupportedForSelection(
 internal fun fastModeSupportedForSelection(
   providerSupported: Boolean,
   hasConfiguredFastModeOverride: Boolean,
-): Boolean {
-  return providerSupported || hasConfiguredFastModeOverride
-}
+): Boolean = providerSupported || hasConfiguredFastModeOverride
 
 internal fun chatModelPickerSections(
   catalog: List<GatewayModelSummary>,

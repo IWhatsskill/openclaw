@@ -1,7 +1,7 @@
 package ai.openclaw.app
 
-import android.content.Context
 import ai.openclaw.app.gateway.GatewayEndpoint
+import android.content.Context
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
