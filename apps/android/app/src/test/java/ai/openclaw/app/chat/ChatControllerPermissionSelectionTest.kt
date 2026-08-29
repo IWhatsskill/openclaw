@@ -72,18 +72,18 @@ class ChatControllerPermissionSelectionTest {
     }
 
   @Test
-  fun fastModeSelectionUsesSessionPatchAndResolvedState() =
+  fun fastModeSelectionParsesBooleanSessionAndResolvedState() =
     runTest {
       val patches = mutableListOf<String>()
       val controller =
         createScriptedChatController {
           respond(
             "sessions.list",
-            """{"sessions":[{"key":"main","fastMode":"off","effectiveFastMode":"off"}]}""",
+            """{"sessions":[{"key":"main","fastMode":false,"effectiveFastMode":false}]}""",
           )
           respond("sessions.patch") { paramsJson ->
             patches += paramsJson.orEmpty()
-            """{"resolved":{"fastMode":"on","effectiveFastMode":"on"}}"""
+            """{"resolved":{"fastMode":true,"effectiveFastMode":true}}"""
           }
         }
 
