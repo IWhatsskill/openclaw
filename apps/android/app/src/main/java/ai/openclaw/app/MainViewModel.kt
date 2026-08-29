@@ -7,6 +7,7 @@ import ai.openclaw.app.chat.ChatComposerOwner
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatPendingToolCall
+import ai.openclaw.app.chat.ChatPermissionMode
 import ai.openclaw.app.chat.ChatProgressCard
 import ai.openclaw.app.chat.ChatQuestionDraft
 import ai.openclaw.app.chat.ChatQuestionPrompt
@@ -536,6 +537,12 @@ class MainViewModel private constructor(
   val modelFavorites: StateFlow<List<String>> = prefs.modelFavorites
   val modelRecents: StateFlow<List<String>> = prefs.modelRecents
   val sessionCustomGroups: StateFlow<List<String>> = prefs.sessionCustomGroups
+  val sidebarPageOrder: StateFlow<List<String>> = prefs.sidebarPageOrder
+  val sidebarVisiblePages: StateFlow<List<String>> = prefs.sidebarVisiblePages
+  val sessionCatalogAvailable: StateFlow<Boolean> =
+    runtimeState(initial = false) { it.sessionCatalogAvailable }
+  val sessionCatalogState: StateFlow<SessionCatalogState> =
+    runtimeState(initial = SessionCatalogState()) { it.sessionCatalogState }
   val talkSetupReadiness: StateFlow<GatewayTalkSetupReadiness> =
     runtimeState(initial = GatewayTalkSetupReadiness.unverified()) { it.talkSetupReadiness }
   val gatewayDefaultAgentId: StateFlow<String?> = runtimeState(initial = null) { it.gatewayDefaultAgentId }
@@ -663,6 +670,8 @@ class MainViewModel private constructor(
     runtimeState(initial = defaultChatThinkingLevelSelection) { it.chatThinkingLevelSelection }
   val chatSelectedModelRef: StateFlow<String?> = runtimeState(initial = null) { it.chatSelectedModelRef }
   val chatModelCatalog: StateFlow<List<GatewayModelSummary>> = runtimeState(initial = emptyList()) { it.chatModelCatalog }
+  val chatPendingSessionSettingsKeys: StateFlow<Set<String>> =
+    runtimeState(initial = emptySet()) { it.chatPendingSessionSettingsKeys }
   val chatStreamingAssistantText: StateFlow<String?> = runtimeState(initial = null) { it.chatStreamingAssistantText }
   val chatPendingToolCalls: StateFlow<List<ChatPendingToolCall>> = runtimeState(initial = emptyList()) { it.chatPendingToolCalls }
   val chatSubagentActivities: StateFlow<Map<String, ai.openclaw.app.chat.ChatSubagentActivity>> =
@@ -1670,11 +1679,30 @@ class MainViewModel private constructor(
     ensureRuntime().setChatThinkingLevel(level)
   }
 
+  fun setChatSessionFastMode(
+    sessionKey: String,
+    enabled: Boolean,
+    clearOverride: Boolean = false,
+  ) {
+    ensureRuntime().setChatSessionFastMode(
+      sessionKey = sessionKey,
+      enabled = enabled,
+      clearOverride = clearOverride,
+    )
+  }
+
   fun setChatSessionModel(
     sessionKey: String,
     modelRef: String?,
   ) {
     ensureRuntime().setChatSessionModel(sessionKey = sessionKey, modelRef = modelRef)
+  }
+
+  fun setChatSessionPermissionMode(
+    sessionKey: String,
+    permissionMode: ChatPermissionMode?,
+  ) {
+    ensureRuntime().setChatSessionPermissionMode(sessionKey = sessionKey, permissionMode = permissionMode)
   }
 
   fun toggleModelFavorite(ref: String) {
@@ -1697,6 +1725,29 @@ class MainViewModel private constructor(
     ownerAgentId: String? = null,
   ) {
     ensureRuntime().switchChatSession(sessionKey, ownerAgentId)
+  }
+
+  fun refreshSessionCatalog(agentId: String?) {
+    ensureRuntime().refreshSessionCatalog(agentId)
+  }
+
+  fun loadMoreSessionCatalog(catalogId: String) {
+    ensureRuntime().loadMoreSessionCatalog(catalogId)
+  }
+
+  fun continueSessionCatalogEntry(
+    entry: SessionCatalogEntry,
+    onCompleted: (Boolean) -> Unit = {},
+  ) {
+    viewModelScope.launch { onCompleted(ensureRuntime().continueSessionCatalogEntry(entry)) }
+  }
+
+  fun setSidebarPageOrder(pageIds: List<String>) {
+    prefs.setSidebarPageOrder(pageIds)
+  }
+
+  fun setSidebarVisiblePages(pageIds: List<String>) {
+    prefs.setSidebarVisiblePages(pageIds)
   }
 
   /** Reads the authoritative flows at commit time so stale Compose callbacks cannot cross chats. */

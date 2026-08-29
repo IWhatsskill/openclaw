@@ -11,6 +11,7 @@ import ai.openclaw.app.chat.ChatController
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatPendingToolCall
+import ai.openclaw.app.chat.ChatPermissionMode
 import ai.openclaw.app.chat.ChatProgressCard
 import ai.openclaw.app.chat.ChatQuestionDraft
 import ai.openclaw.app.chat.ChatQuestionPrompt
@@ -184,6 +185,11 @@ private const val USAGE_INCOMPLETE_RETRY_DELAY_MS = 5_000L
 private const val USAGE_INCOMPLETE_RETRY_LIMIT = 3
 private const val OperatorAdminScope = "operator.admin"
 private const val OperatorPairingScope = "operator.pairing"
+
+private data class SessionCatalogProgressOwner(
+  val progressId: String,
+  val agentId: String?,
+)
 
 internal const val WEAR_AGENT_PULSE_PHONE_BUDGET_MILLIS = 8_000L
 
@@ -1267,6 +1273,16 @@ class NodeRuntime private constructor(
   val skillsRefreshing: StateFlow<Boolean> = _skillsRefreshing.asStateFlow()
   private val _skillsErrorText = MutableStateFlow<NativeText?>(null)
   val skillsErrorText: StateFlow<String?> = _skillsErrorText.resolveOptionalNativeText()
+  private val _sessionCatalogAvailable = MutableStateFlow(false)
+  val sessionCatalogAvailable: StateFlow<Boolean> = _sessionCatalogAvailable.asStateFlow()
+  private val _sessionCatalogState = MutableStateFlow(SessionCatalogState())
+  val sessionCatalogState: StateFlow<SessionCatalogState> = _sessionCatalogState.asStateFlow()
+  private val sessionCatalogRefreshSeq = AtomicLong(0)
+  private val sessionCatalogContinueSeq = AtomicLong(0)
+  private val sessionCatalogSelectionSeq = AtomicLong(0)
+  private val sessionCatalogContinueMutex = Mutex()
+  private val sessionCatalogProgressOwner = AtomicReference<SessionCatalogProgressOwner?>(null)
+  private var sessionCatalogProgressiveListSupported = true
   private val _clawHubSkillMethodsAvailable = MutableStateFlow(false)
   val clawHubSkillMethodsAvailable: StateFlow<Boolean> = _clawHubSkillMethodsAvailable.asStateFlow()
   private val systemAgentChatSupported = MutableStateFlow<Boolean?>(null)
@@ -1724,6 +1740,11 @@ class NodeRuntime private constructor(
     _skillsSummary.value = GatewaySkillsSummary(skills = emptyList())
     _skillsRefreshing.value = false
     _skillsErrorText.value = null
+    sessionCatalogRefreshSeq.incrementAndGet()
+    sessionCatalogContinueSeq.incrementAndGet()
+    sessionCatalogProgressOwner.set(null)
+    sessionCatalogProgressiveListSupported = true
+    _sessionCatalogState.value = SessionCatalogState()
     _skillMutationKeys.value = emptySet()
     clawHubSkillSearchSeq.incrementAndGet()
     clawHubSkillReviewSeq.incrementAndGet()
@@ -2567,6 +2588,28 @@ class NodeRuntime private constructor(
 
   fun refreshSkills() = launchGatewayRefresh { refreshSkillsFromGateway() }
 
+  fun refreshSessionCatalog(agentId: String?) = launchGatewayRefresh { refreshSessionCatalogFromGateway(agentId) }
+
+  fun loadMoreSessionCatalog(catalogId: String) = launchGatewayRefresh { loadMoreSessionCatalogFromGateway(catalogId) }
+
+  suspend fun continueSessionCatalogEntry(entry: SessionCatalogEntry): Boolean {
+    if (!sessionCatalogContinueMutex.tryLock()) return false
+    return try {
+      entry.sessionKey?.let {
+        switchChatSession(it, entry.agentId)
+        return true
+      }
+      if (!entry.canContinue) {
+        _sessionCatalogState.value =
+          _sessionCatalogState.value.copy(errorText = nativeString("This Codex session cannot be continued."))
+        return false
+      }
+      continueSessionCatalogEntryFromGateway(entry)
+    } finally {
+      sessionCatalogContinueMutex.unlock()
+    }
+  }
+
   fun setSkillEnabled(
     skillKey: String,
     enabled: Boolean,
@@ -2873,6 +2916,7 @@ class NodeRuntime private constructor(
   val chatThinkingLevelSelection: StateFlow<ChatThinkingLevelSelection> = chat.thinkingLevelSelection
   val chatSelectedModelRef: StateFlow<String?> = chat.selectedModelRef
   val chatModelCatalog: StateFlow<List<GatewayModelSummary>> = chat.modelCatalog
+  val chatPendingSessionSettingsKeys: StateFlow<Set<String>> = chat.pendingSessionSettingsKeys
   val chatStreamingAssistantText: StateFlow<String?> = chat.streamingAssistantText
   val chatPendingToolCalls: StateFlow<List<ChatPendingToolCall>> = chat.pendingToolCalls
   val chatSubagentActivities: StateFlow<Map<String, ai.openclaw.app.chat.ChatSubagentActivity>> = chat.subagentActivities
@@ -5007,6 +5051,18 @@ class NodeRuntime private constructor(
     chat.setThinkingLevel(level)
   }
 
+  fun setChatSessionFastMode(
+    sessionKey: String,
+    enabled: Boolean,
+    clearOverride: Boolean = false,
+  ) {
+    chat.setSessionFastMode(
+      sessionKey = sessionKey,
+      enabled = enabled,
+      clearOverride = clearOverride,
+    )
+  }
+
   fun setChatSessionModel(
     sessionKey: String,
     modelRef: String?,
@@ -5014,10 +5070,18 @@ class NodeRuntime private constructor(
     chat.setSessionModel(sessionKey = sessionKey, modelRef = modelRef)
   }
 
+  fun setChatSessionPermissionMode(
+    sessionKey: String,
+    permissionMode: ChatPermissionMode?,
+  ) {
+    chat.setSessionPermissionMode(sessionKey = sessionKey, permissionMode = permissionMode)
+  }
+
   fun switchChatSession(
     sessionKey: String,
     ownerAgentId: String? = null,
   ) {
+    retirePendingSessionCatalogContinuation()
     stopMessageSpeech()
     chat.switchSession(sessionKey, ownerAgentId)
   }
@@ -5058,6 +5122,7 @@ class NodeRuntime private constructor(
   fun selectChatAgent(agentId: String) {
     val normalizedAgentId = agentId.trim()
     if (normalizedAgentId.isEmpty()) return
+    retirePendingSessionCatalogContinuation()
     stopMessageSpeech()
     // Agent selection owns every main-session consumer; switching chat alone would
     // leave Talk mode bound to the previous agent.
@@ -5075,6 +5140,7 @@ class NodeRuntime private constructor(
   }
 
   fun startNewChat(worktree: Boolean = false) {
+    retirePendingSessionCatalogContinuation()
     stopMessageSpeech()
     chat.startNewChat(worktree = worktree)
   }
@@ -5182,6 +5248,34 @@ class NodeRuntime private constructor(
       // The gateway targets this event at connections bound to the caller's own
       // profile; receipt means our profile appearance changed on another device.
       scope.launch { refreshBrandingFromGateway() }
+    }
+    if (event == "sessions.catalog.host") {
+      val owner = sessionCatalogProgressOwner.get()
+      val progress =
+        payloadJson
+          ?.takeIf(String::isNotBlank)
+          ?.let { payload -> runCatching { parseSessionCatalogHostProgress(payload, json) }.getOrNull() }
+      if (
+        owner != null &&
+        progress != null &&
+        progress.progressId == owner.progressId &&
+        (owner.agentId == null || progress.agentId == owner.agentId)
+      ) {
+        captureGatewayDataScope()?.let { gatewayScope ->
+          publishGatewayData(gatewayScope) {
+            val current = _sessionCatalogState.value
+            _sessionCatalogState.value =
+              current.copy(
+                catalogs =
+                  mergeSessionCatalogHostProgress(
+                    current = current.catalogs,
+                    progress = progress,
+                    preserveExpandedHostIds = current.expandedHostIds,
+                  ),
+              )
+          }
+        }
+      }
     }
     handleExecApprovalGatewayEvent(event = event, payloadJson = payloadJson)
     micCapture.handleGatewayEvent(event, payloadJson)
@@ -5509,6 +5603,243 @@ class NodeRuntime private constructor(
     } finally {
       publishGatewayData(gatewayScope) { refreshing.value = false }
     }
+  }
+
+  private suspend fun refreshSessionCatalogFromGateway(agentId: String?) {
+    val normalizedAgentId = agentId?.trim()?.takeIf(String::isNotEmpty)
+    if (!sessionCatalogAvailable.value) {
+      sessionCatalogProgressOwner.set(null)
+      _sessionCatalogState.value = SessionCatalogState(agentId = normalizedAgentId)
+      return
+    }
+
+    val current = _sessionCatalogState.value
+    if (current.loading && current.agentId == normalizedAgentId) return
+    val requestSeq = sessionCatalogRefreshSeq.incrementAndGet()
+    val gatewayScope = captureGatewayDataScope()
+    if (gatewayScope == null || !operatorConnected) {
+      sessionCatalogProgressOwner.set(null)
+      _sessionCatalogState.value =
+        SessionCatalogState(
+          agentId = normalizedAgentId,
+          errorText = nativeString("Connect the gateway to load Codex homes."),
+        )
+      return
+    }
+    publishGatewayData(gatewayScope) {
+      val previous = _sessionCatalogState.value
+      _sessionCatalogState.value =
+        previous.copy(
+          loading = true,
+          catalogs = if (previous.agentId == normalizedAgentId) previous.catalogs else emptyList(),
+          expandedHostIds = if (previous.agentId == normalizedAgentId) previous.expandedHostIds else emptySet(),
+          errorText = null,
+          agentId = normalizedAgentId,
+          loadingMoreCatalogIds = emptySet(),
+        )
+    }
+    val progressOwner =
+      if (sessionCatalogProgressiveListSupported) {
+        SessionCatalogProgressOwner(
+          progressId = UUID.randomUUID().toString(),
+          agentId = normalizedAgentId,
+        ).also(sessionCatalogProgressOwner::set)
+      } else {
+        null
+      }
+    try {
+      val response =
+        try {
+          requestGatewayData(
+            gatewayScope,
+            "sessions.catalog.list",
+            sessionCatalogListParams(normalizedAgentId, progressOwner?.progressId),
+          )
+        } catch (err: GatewayRequestRejected) {
+          if (
+            progressOwner == null ||
+            !isLegacySessionCatalogProgressRejection(
+              code = err.gatewayError.code,
+              message = err.gatewayError.message,
+            )
+          ) {
+            throw err
+          }
+          sessionCatalogProgressOwner.compareAndSet(progressOwner, null)
+          sessionCatalogProgressiveListSupported = false
+          requestGatewayData(
+            gatewayScope,
+            "sessions.catalog.list",
+            sessionCatalogListParams(normalizedAgentId),
+          )
+        }
+      val freshCatalogs = parseSessionCatalogs(response, normalizedAgentId, json)
+      publishGatewayData(gatewayScope) {
+        if (sessionCatalogRefreshSeq.get() == requestSeq) {
+          val currentState = _sessionCatalogState.value
+          _sessionCatalogState.value =
+            currentState.copy(
+              loading = false,
+              catalogs =
+                reconcileSessionCatalogRefresh(
+                  fresh = freshCatalogs,
+                  previous = currentState.catalogs,
+                  preserveExpandedHostIds = currentState.expandedHostIds,
+                ),
+              errorText = null,
+              agentId = normalizedAgentId,
+              loadingMoreCatalogIds = emptySet(),
+            )
+        }
+      }
+    } catch (err: CancellationException) {
+      throw err
+    } catch (_: Throwable) {
+      publishGatewayData(gatewayScope) {
+        if (sessionCatalogRefreshSeq.get() == requestSeq) {
+          _sessionCatalogState.value =
+            _sessionCatalogState.value.copy(
+              loading = false,
+              errorText = nativeString("Could not load Codex homes."),
+              loadingMoreCatalogIds = emptySet(),
+            )
+        }
+      }
+    } finally {
+      sessionCatalogProgressOwner.compareAndSet(progressOwner, null)
+    }
+  }
+
+  private suspend fun loadMoreSessionCatalogFromGateway(catalogId: String) {
+    val normalizedCatalogId = catalogId.trim()
+    if (normalizedCatalogId.isEmpty()) return
+    val current = _sessionCatalogState.value
+    if (normalizedCatalogId in current.loadingMoreCatalogIds) return
+    val catalog = current.catalogs.firstOrNull { it.id == normalizedCatalogId } ?: return
+    val cursors =
+      catalog.hosts
+        .mapNotNull { host ->
+          host.nextCursor?.takeIf(String::isNotEmpty)?.let { host.hostId to it }
+        }.toMap()
+    if (cursors.isEmpty()) return
+    val requestSeq = sessionCatalogRefreshSeq.get()
+    val gatewayScope = captureGatewayDataScope() ?: return
+    publishGatewayData(gatewayScope) {
+      _sessionCatalogState.value =
+        _sessionCatalogState.value.copy(
+          loadingMoreCatalogIds =
+            _sessionCatalogState.value.loadingMoreCatalogIds + normalizedCatalogId,
+          errorText = null,
+        )
+    }
+    try {
+      val response =
+        requestGatewayData(
+          gatewayScope,
+          "sessions.catalog.list",
+          sessionCatalogPageParams(current.agentId, normalizedCatalogId, cursors),
+        )
+      val page = parseSessionCatalogs(response, current.agentId, json).firstOrNull { it.id == normalizedCatalogId }
+      publishGatewayData(gatewayScope) {
+        if (sessionCatalogRefreshSeq.get() == requestSeq) {
+          val latest = _sessionCatalogState.value
+          val nextCatalogs =
+            if (page == null) {
+              latest.catalogs
+            } else {
+              latest.catalogs.map { existing ->
+                if (existing.id == normalizedCatalogId) mergeSessionCatalogPage(existing, page) else existing
+              }
+            }
+          _sessionCatalogState.value =
+            latest.copy(
+              catalogs = nextCatalogs,
+              expandedHostIds =
+                latest.expandedHostIds +
+                  page
+                    ?.hosts
+                    .orEmpty()
+                    .filter { it.errorText == null }
+                    .map { sessionCatalogHostKey(normalizedCatalogId, it.hostId) },
+              loadingMoreCatalogIds = latest.loadingMoreCatalogIds - normalizedCatalogId,
+            )
+        }
+      }
+    } catch (err: CancellationException) {
+      throw err
+    } catch (_: Throwable) {
+      publishGatewayData(gatewayScope) {
+        if (sessionCatalogRefreshSeq.get() == requestSeq) {
+          val latest = _sessionCatalogState.value
+          _sessionCatalogState.value =
+            latest.copy(
+              loadingMoreCatalogIds = latest.loadingMoreCatalogIds - normalizedCatalogId,
+              errorText = nativeString("Could not load more Codex sessions."),
+            )
+        }
+      }
+    }
+  }
+
+  private suspend fun continueSessionCatalogEntryFromGateway(entry: SessionCatalogEntry): Boolean {
+    val requestSeq = sessionCatalogContinueSeq.incrementAndGet()
+    val selectionSeq = sessionCatalogSelectionSeq.get()
+    val gatewayScope = captureGatewayDataScope()
+    if (gatewayScope == null || !operatorConnected) {
+      _sessionCatalogState.value =
+        _sessionCatalogState.value.copy(errorText = nativeString("Connect the gateway to open this session."))
+      return false
+    }
+    publishGatewayData(gatewayScope) {
+      _sessionCatalogState.value =
+        _sessionCatalogState.value.copy(
+          continuingEntryId = entry.locatorId,
+          errorText = null,
+        )
+    }
+    try {
+      val response =
+        requestGatewayData(
+          gatewayScope,
+          "sessions.catalog.continue",
+          sessionCatalogContinueParams(entry),
+        )
+      val sessionKey = parseSessionCatalogContinueResult(response, json)
+      var opened = false
+      val published =
+        publishGatewayData(gatewayScope) {
+          if (sessionCatalogContinueSeq.get() == requestSeq) {
+            _sessionCatalogState.value = _sessionCatalogState.value.copy(continuingEntryId = null)
+            if (sessionCatalogSelectionSeq.compareAndSet(selectionSeq, selectionSeq + 1)) {
+              stopMessageSpeech()
+              chat.switchSession(sessionKey, entry.agentId)
+              opened = true
+            }
+          }
+        }
+      return published && opened
+    } catch (err: CancellationException) {
+      throw err
+    } catch (_: Throwable) {
+      publishGatewayData(gatewayScope) {
+        if (sessionCatalogContinueSeq.get() == requestSeq) {
+          _sessionCatalogState.value =
+            _sessionCatalogState.value.copy(
+              continuingEntryId = null,
+              errorText = nativeString("Could not open this Codex session."),
+            )
+        }
+      }
+      return false
+    }
+  }
+
+  private fun retirePendingSessionCatalogContinuation() {
+    sessionCatalogSelectionSeq.incrementAndGet()
+    if (_sessionCatalogState.value.continuingEntryId == null) return
+    sessionCatalogContinueSeq.incrementAndGet()
+    _sessionCatalogState.value =
+      _sessionCatalogState.value.copy(continuingEntryId = null)
   }
 
   /** Publishes approval state only while the response's operator socket still owns the method catalog. */
@@ -7505,6 +7836,7 @@ class NodeRuntime private constructor(
       gatewayAdvertisedMethods = methods
       gatewayApprovalRpcFamily = selectGatewayApprovalRpcFamily(advertisedMethods)
       _clawHubSkillMethodsAvailable.value = supportsClawHubSkillManagement(advertisedMethods)
+      _sessionCatalogAvailable.value = GatewayMethod.SessionsCatalogList.rawValue in advertisedMethods
       _desktopObserveAvailable.value = GatewayMethod.DesktopObserve.rawValue in advertisedMethods
       systemAgentChatSupported.value = GatewayMethod.OpenclawChat.rawValue in advertisedMethods
       gatewayMethodsEpoch += 1

@@ -1,10 +1,12 @@
 package ai.openclaw.app.ui
 
+import ai.openclaw.app.R
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.design.ClawTheme
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,9 +21,12 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.NavigationDrawerItem
@@ -30,12 +35,25 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.heading
@@ -45,6 +63,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
+import kotlin.math.abs
 
 @Composable
 internal fun sidebarSearchLabel(): String = nativeString("Search sessions")
@@ -113,6 +133,66 @@ internal fun SidebarSectionTitle(
 }
 
 @Composable
+internal fun SidebarCollapsibleHeader(
+  label: String,
+  expanded: Boolean,
+  palette: SidebarPalette,
+  onClick: () -> Unit,
+  modifier: Modifier = Modifier,
+  icon: ImageVector? = null,
+  iconPainter: Painter? = null,
+  iconTint: Color = palette.text,
+) {
+  Row(
+    modifier =
+      modifier
+        .fillMaxWidth()
+        .heightIn(min = 44.dp)
+        .clip(RoundedCornerShape(10.dp))
+        .clickable(role = Role.Button, onClick = onClick)
+        .padding(horizontal = 8.dp),
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(8.dp),
+  ) {
+    Icon(
+      imageVector =
+        if (expanded) {
+          Icons.Default.KeyboardArrowDown
+        } else {
+          Icons.AutoMirrored.Filled.KeyboardArrowRight
+        },
+      contentDescription = null,
+      tint = palette.muted,
+      modifier = Modifier.size(18.dp),
+    )
+    icon?.let {
+      Icon(
+        imageVector = it,
+        contentDescription = null,
+        tint = palette.text,
+        modifier = Modifier.size(18.dp),
+      )
+    }
+    iconPainter?.let {
+      Icon(
+        painter = it,
+        contentDescription = null,
+        tint = iconTint,
+        modifier = Modifier.size(18.dp),
+      )
+    }
+    Text(
+      text = label,
+      style = ClawTheme.type.body.copy(fontSize = 13.sp),
+      color = palette.text,
+      modifier = Modifier.weight(1f),
+      maxLines = 1,
+      overflow = TextOverflow.Ellipsis,
+    )
+  }
+}
+
+@Composable
 internal fun SidebarActionRow(
   label: String,
   icon: ImageVector,
@@ -136,38 +216,114 @@ internal fun SidebarActionRow(
 internal fun SidebarNavigationRow(
   destination: SidebarDestination,
   selected: Boolean,
+  pinned: Boolean? = null,
   palette: SidebarPalette,
   onClick: () -> Unit,
+  onMove: (Int) -> Unit,
+  onDragActiveChange: (Boolean) -> Unit,
 ) {
-  NavigationDrawerItem(
-    label = {
-      Text(
-        text = destination.localizedLabel(),
-        style = ClawTheme.type.body,
-        maxLines = 1,
+  val thresholdPx = with(LocalDensity.current) { 48.dp.toPx() }
+  val haptic = LocalHapticFeedback.current
+  val currentOnMove by rememberUpdatedState(onMove)
+  val currentOnDragActiveChange by rememberUpdatedState(onDragActiveChange)
+  val pinStateDescription =
+    pinned?.let { nativeString(if (it) "Pinned" else "Not pinned") }
+  var dragOffset by remember(destination) { mutableFloatStateOf(0f) }
+  var dragging by remember(destination) { mutableStateOf(false) }
+  val finishDrag = {
+    dragOffset = 0f
+    dragging = false
+    currentOnDragActiveChange(false)
+  }
+
+  Box(
+    modifier =
+      Modifier
+        .fillMaxWidth()
+        .zIndex(if (dragging) 1f else 0f)
+        .graphicsLayer {
+          translationY = dragOffset
+          scaleX = if (dragging) 1.015f else 1f
+          scaleY = if (dragging) 1.015f else 1f
+          shadowElevation = if (dragging) 10.dp.toPx() else 0f
+        },
+  ) {
+    NavigationDrawerItem(
+      label = {
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          Text(
+            text = destination.localizedLabel(),
+            style = ClawTheme.type.body,
+            modifier = Modifier.weight(1f),
+            maxLines = 1,
+          )
+          if (pinned == true) {
+            Icon(
+              painter = painterResource(R.drawable.ic_web_check),
+              contentDescription = nativeString("Pinned"),
+              tint = palette.text,
+              modifier = Modifier.size(18.dp),
+            )
+          }
+        }
+      },
+      selected = selected,
+      onClick = onClick,
+      icon = {
+        Icon(
+          imageVector = destination.icon,
+          contentDescription = null,
+          modifier = Modifier.size(20.dp),
+        )
+      },
+      modifier =
+        Modifier
+          .fillMaxWidth()
+          .heightIn(min = 48.dp)
+          .semantics {
+            if (pinStateDescription != null) stateDescription = pinStateDescription
+          }.pointerInput(destination, thresholdPx) {
+            detectDragGesturesAfterLongPress(
+              onDragStart = {
+                dragOffset = 0f
+                dragging = true
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                currentOnDragActiveChange(true)
+              },
+              onDragEnd = finishDrag,
+              onDragCancel = finishDrag,
+            ) { change, dragAmount ->
+              change.consume()
+              dragOffset += dragAmount.y
+              if (abs(dragOffset) >= thresholdPx) {
+                val direction = if (dragOffset < 0f) -1 else 1
+                currentOnMove(direction)
+                dragOffset -= direction * thresholdPx
+              }
+            }
+          },
+      shape = RoundedCornerShape(10.dp),
+      colors =
+        NavigationDrawerItemDefaults.colors(
+          selectedContainerColor = palette.selection,
+          unselectedContainerColor = if (dragging) palette.elevated else Color.Transparent,
+          selectedIconColor = palette.text,
+          unselectedIconColor = palette.text,
+          selectedTextColor = palette.text,
+          unselectedTextColor = palette.text,
+        ),
+    )
+    if (dragging) {
+      HorizontalDivider(
+        color = ClawTheme.colors.primary,
+        thickness = 2.dp,
+        modifier = Modifier.align(if (dragOffset < 0f) Alignment.TopCenter else Alignment.BottomCenter),
       )
-    },
-    selected = selected,
-    onClick = onClick,
-    icon = {
-      Icon(
-        imageVector = destination.icon,
-        contentDescription = null,
-        modifier = Modifier.size(20.dp),
-      )
-    },
-    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-    shape = RoundedCornerShape(10.dp),
-    colors =
-      NavigationDrawerItemDefaults.colors(
-        selectedContainerColor = palette.selection,
-        unselectedContainerColor = Color.Transparent,
-        selectedIconColor = palette.text,
-        unselectedIconColor = palette.text,
-        selectedTextColor = palette.text,
-        unselectedTextColor = palette.text,
-      ),
-  )
+    }
+  }
 }
 
 @Composable

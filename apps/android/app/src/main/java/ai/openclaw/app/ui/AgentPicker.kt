@@ -5,7 +5,6 @@ import ai.openclaw.app.selectableAgents
 import ai.openclaw.app.ui.design.ClawAgentAvatar
 import ai.openclaw.app.ui.design.ClawTheme
 import ai.openclaw.app.ui.design.agentAvatarSource
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -80,9 +79,9 @@ internal fun AgentPicker(
       onClick = { expanded = true },
       modifier = Modifier.fillMaxWidth().heightIn(min = ClawTheme.spacing.touchTarget),
       shape = RoundedCornerShape(ClawTheme.radii.pill),
-      color = ClawTheme.colors.surfaceRaised.copy(alpha = 0.72f),
+      color = ClawTheme.colors.surfaceRaised.copy(alpha = 0f),
       contentColor = ClawTheme.colors.text,
-      border = BorderStroke(1.dp, ClawTheme.colors.border.copy(alpha = 0.7f)),
+      border = null,
     ) {
       Row(
         modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),

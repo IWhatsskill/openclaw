@@ -101,6 +101,37 @@ class ChatComposerLayoutTest {
     }
   }
 
+  @Test
+  fun narrowToolbarKeepsModelEffortMicAndPrimaryActionVisible() {
+    showChat()
+    composeRule.onNode(hasSetTextAction()).performClick()
+    composeRule.waitForIdle()
+
+    val viewport = composeRule.onNodeWithTag("chat-viewport").getUnclippedBoundsInRoot()
+    val controls =
+      listOf(
+        "model" to composeRule.onNodeWithTag("chat-composer-model"),
+        "effort" to composeRule.onNodeWithTag("chat-composer-thinking"),
+        "mic" to composeRule.onNodeWithTag("chat-composer-mic"),
+        "stop" to composeRule.onNodeWithContentDescription("Stop"),
+      )
+    val controlBounds =
+      controls.map { (name, node) ->
+        node.assertIsDisplayed()
+        val bounds = node.getUnclippedBoundsInRoot()
+        assertTrue("$name must retain width: $bounds", bounds.right > bounds.left)
+        assertTrue("$name must stay inside the viewport: $bounds inside $viewport", bounds.left >= viewport.left)
+        assertTrue("$name must stay inside the viewport: $bounds inside $viewport", bounds.right <= viewport.right)
+        name to bounds
+      }
+    controlBounds.zipWithNext().forEach { (left, right) ->
+      assertTrue(
+        "${left.first} must not overlap ${right.first}: ${left.second} vs ${right.second}",
+        left.second.right <= right.second.left,
+      )
+    }
+  }
+
   private fun showChat() {
     val viewModel = MainViewModel(app, prefs, SavedStateHandle())
     viewModelStore.put("chat", viewModel)
@@ -115,7 +146,6 @@ class ChatComposerLayoutTest {
             showSidebarButton = true,
             onOpenSidebar = {},
             onToggleTalk = {},
-            onOpenSessions = {},
             onOpenDashboard = {},
             onOpenGatewaySettings = {},
           )

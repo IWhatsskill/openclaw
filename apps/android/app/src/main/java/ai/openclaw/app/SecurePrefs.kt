@@ -35,6 +35,22 @@ data class GatewayCredentials(
     )
 }
 
+internal val defaultSidebarPageOrder = listOf("settings", "work", "home", "skills", "threads")
+internal val defaultSidebarVisiblePages = defaultSidebarPageOrder
+
+internal fun sanitizeSidebarPageOrder(pageIds: List<String>): List<String> {
+  val knownIds = defaultSidebarPageOrder.toSet()
+  val supplied =
+    pageIds.map(String::trim).filter { it in knownIds }.distinct()
+  return supplied + defaultSidebarPageOrder.filterNot(supplied::contains)
+}
+
+internal fun sanitizeSidebarVisiblePages(pageIds: List<String>): List<String> {
+  val knownIds = defaultSidebarPageOrder.toSet()
+  val supplied = pageIds.map(String::trim).filter { it in knownIds }.distinct()
+  return supplied.ifEmpty { defaultSidebarVisiblePages }
+}
+
 /**
  * Reactive settings facade for Android node preferences and encrypted gateway credentials.
  */
@@ -73,6 +89,8 @@ class SecurePrefs(
     private const val chatModelFavoritesKey = "chat.modelFavorites"
     private const val chatModelRecentsKey = "chat.modelRecents"
     private const val sessionCustomGroupsKey = "sessions.customGroups"
+    private const val sidebarPageOrderKey = "sidebar.pageOrder"
+    private const val sidebarVisiblePagesKey = "sidebar.visiblePages"
     private const val maxChatModelRecents = 5
     private const val gatewayCustomHeadersKeyPrefix = "gateway.customHeaders."
   }
@@ -235,6 +253,12 @@ class SecurePrefs(
   // persist server-side via the session category field (mirrors web localStorage).
   private val _sessionCustomGroups = MutableStateFlow(loadChatModelRefs(sessionCustomGroupsKey))
   val sessionCustomGroups: StateFlow<List<String>> = _sessionCustomGroups
+
+  private val _sidebarPageOrder = MutableStateFlow(loadSidebarPageOrder())
+  val sidebarPageOrder: StateFlow<List<String>> = _sidebarPageOrder
+
+  private val _sidebarVisiblePages = MutableStateFlow(loadSidebarVisiblePages())
+  val sidebarVisiblePages: StateFlow<List<String>> = _sidebarVisiblePages
 
   fun setLastDiscoveredStableId(value: String) {
     val trimmed = value.trim()
@@ -720,6 +744,18 @@ class SecurePrefs(
     _sessionCustomGroups.value = sanitized
   }
 
+  fun setSidebarPageOrder(pageIds: List<String>) {
+    val sanitized = sanitizeSidebarPageOrder(pageIds)
+    persistChatModelRefs(sidebarPageOrderKey, sanitized)
+    _sidebarPageOrder.value = sanitized
+  }
+
+  fun setSidebarVisiblePages(pageIds: List<String>) {
+    val sanitized = sanitizeSidebarVisiblePages(pageIds)
+    persistChatModelRefs(sidebarVisiblePagesKey, sanitized)
+    _sidebarVisiblePages.value = sanitized
+  }
+
   private fun persistChatModelRefs(
     key: String,
     refs: List<String>,
@@ -772,6 +808,15 @@ class SecurePrefs(
     plainPrefs.edit { putBoolean(cameraEnabledKey, migratedValue) }
     return migratedValue
   }
+
+  private fun loadSidebarPageOrder(): List<String> = sanitizeSidebarPageOrder(loadChatModelRefs(sidebarPageOrderKey))
+
+  private fun loadSidebarVisiblePages(): List<String> =
+    if (!plainPrefs.contains(sidebarVisiblePagesKey)) {
+      defaultSidebarVisiblePages
+    } else {
+      sanitizeSidebarVisiblePages(loadChatModelRefs(sidebarVisiblePagesKey))
+    }
 
   private fun loadChatModelRefs(key: String): List<String> {
     val raw = plainPrefs.getString(key, null)?.trim()

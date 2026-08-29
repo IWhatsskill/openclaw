@@ -169,6 +169,90 @@ class ChatControllerSessionPolicyTest {
   }
 
   @Test
+  fun compactionSnapshotUpdatesContextAndPreservesLatestRunUsage() {
+    val existing =
+      ChatSessionEntry(
+        key = "agent:main:phone",
+        updatedAtMs = 1L,
+        inputTokens = 109_800L,
+        totalTokens = 109_800L,
+        totalTokensFresh = true,
+        contextTokens = 272_000L,
+        estimatedCostUsd = 0.063,
+        outputTokens = 1_240L,
+      )
+    val compacted =
+      ChatSessionEntry(
+        key = "agent:main:phone",
+        updatedAtMs = 2L,
+        totalTokens = 24_700L,
+        totalTokensFresh = true,
+        contextTokens = 272_000L,
+      )
+
+    val merged = mergeChatSessionEntry(existing, compacted)
+
+    assertEquals(24_700L, merged.totalTokens)
+    assertEquals(true, merged.totalTokensFresh)
+    assertEquals(109_800L, merged.inputTokens)
+    assertEquals(1_240L, merged.outputTokens)
+    assertEquals(0.063, merged.estimatedCostUsd)
+  }
+
+  @Test
+  fun terminalSnapshotReplacesLatestRunUsageAtomically() {
+    val existing =
+      ChatSessionEntry(
+        key = "agent:main:phone",
+        updatedAtMs = 1L,
+        inputTokens = 10_000L,
+        outputTokens = 500L,
+        estimatedCostUsd = 0.04,
+      )
+    val terminal =
+      ChatSessionEntry(
+        key = "agent:main:phone",
+        updatedAtMs = 2L,
+        status = "done",
+        inputTokens = 18_420L,
+        outputTokens = 840L,
+        estimatedCostUsd = 0.063,
+      )
+
+    val merged = mergeChatSessionEntry(existing, terminal)
+
+    assertEquals(18_420L, merged.inputTokens)
+    assertEquals(840L, merged.outputTokens)
+    assertEquals(0.063, merged.estimatedCostUsd)
+    assertTrue(merged.hasLatestRunUsageMetadata)
+  }
+
+  @Test
+  fun terminalSnapshotWithoutUsageDoesNotShowPreviousRunAsCurrent() {
+    val existing =
+      ChatSessionEntry(
+        key = "agent:main:phone",
+        updatedAtMs = 1L,
+        inputTokens = 10_000L,
+        outputTokens = 500L,
+        estimatedCostUsd = 0.04,
+      )
+    val terminal =
+      ChatSessionEntry(
+        key = "agent:main:phone",
+        updatedAtMs = 2L,
+        status = "done",
+      )
+
+    val merged = mergeChatSessionEntry(existing, terminal)
+
+    assertEquals(null, merged.inputTokens)
+    assertEquals(null, merged.outputTokens)
+    assertEquals(null, merged.estimatedCostUsd)
+    assertFalse(merged.hasLatestRunUsageMetadata)
+  }
+
+  @Test
   fun sessionMergePreservesMissingSessionListMetadata() {
     val existing =
       ChatSessionEntry(
