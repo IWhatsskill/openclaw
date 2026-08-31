@@ -14,12 +14,31 @@ import androidx.security.crypto.MasterKey
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import java.util.UUID
+
+data class AppearancePreferenceScope(
+  val gatewayStableId: String,
+  val profileId: String?,
+) {
+  init {
+    require(gatewayStableId.isNotBlank())
+    require(profileId == null || profileId.isNotBlank())
+  }
+}
+
+@Serializable
+private data class PendingAppearancePreference(
+  val gatewayStableId: String? = null,
+  val profileId: String? = null,
+  val key: String,
+  val value: String? = null,
+)
 
 @Serializable
 data class GatewayCredentials(
@@ -33,6 +52,24 @@ data class GatewayCredentials(
       bootstrapToken = bootstrapToken?.trim()?.takeIf { it.isNotEmpty() },
       password = password?.trim()?.takeIf { it.isNotEmpty() },
     )
+}
+
+internal val defaultSidebarPageOrder = listOf("settings", "work", "home", "skills", "threads")
+internal val defaultSidebarVisiblePages = defaultSidebarPageOrder
+
+internal fun sanitizeSidebarPageOrder(pageIds: List<String>): List<String> {
+  val knownIds = defaultSidebarPageOrder.toSet()
+  val supplied =
+    pageIds.map(String::trim).filter { it in knownIds }.distinct()
+  return supplied + defaultSidebarPageOrder.filterNot(supplied::contains)
+}
+
+internal fun sanitizeSidebarVisiblePages(pageIds: List<String>): List<String> {
+  val knownIds = defaultSidebarPageOrder.toSet()
+  val supplied = pageIds.map(String::trim).filter { it in knownIds }.distinct()
+  // The sidebar UI refuses to unpin its final page. An empty persisted set can
+  // therefore only come from corrupt or external state and recovers to defaults.
+  return supplied.ifEmpty { defaultSidebarVisiblePages }
 }
 
 /**
@@ -70,9 +107,19 @@ class SecurePrefs(
     private const val voiceWakeEnabledKey = "voiceWake.enabled"
     private const val voiceWakeWordsKey = "voiceWake.triggerWords"
     private const val appearanceThemeModeKey = "appearance.themeMode"
+    private const val appearanceThemeFamilyKey = "appearance.themeFamily"
+    private const val appearanceAccentArgbKey = "appearance.accentArgb"
+    private const val legacyAppearancePendingSyncKeysKey = "appearance.pendingSyncKeys"
+    private const val appearancePendingPreferencesKey = "appearance.pendingPreferences"
+    private const val appearanceLocalOnlyKeysKey = "appearance.localOnlyKeys"
+    private const val appearanceSyncMigrationVersionKey = "appearance.syncMigrationVersion"
+    private const val currentAppearanceSyncMigrationVersion = 1
     private const val chatModelFavoritesKey = "chat.modelFavorites"
     private const val chatModelRecentsKey = "chat.modelRecents"
     private const val sessionCustomGroupsKey = "sessions.customGroups"
+    private const val sidebarPageOrderKey = "sidebar.pageOrder"
+    private const val sidebarVisiblePagesKey = "sidebar.visiblePages"
+    private val appearanceSyncKeys = setOf("ui.theme", "ui.themeMode", "ui.accent")
     private const val maxChatModelRecents = 5
     private const val gatewayCustomHeadersKeyPrefix = "gateway.customHeaders."
   }
@@ -225,6 +272,20 @@ class SecurePrefs(
     MutableStateFlow(AppearanceThemeMode.fromRawValue(plainPrefs.getString(appearanceThemeModeKey, null)))
   val appearanceThemeMode: StateFlow<AppearanceThemeMode> = _appearanceThemeMode
 
+  private val _appearanceThemeFamily =
+    MutableStateFlow(AppearanceThemeFamily.fromRawValue(plainPrefs.getString(appearanceThemeFamilyKey, null)))
+  val appearanceThemeFamily: StateFlow<AppearanceThemeFamily> = _appearanceThemeFamily
+
+  private val _appearanceAccentArgb = MutableStateFlow(plainPrefs.takeIf { it.contains(appearanceAccentArgbKey) }?.getLong(appearanceAccentArgbKey, 0L))
+  val appearanceAccentArgb: StateFlow<Long?> = _appearanceAccentArgb
+  private var pendingAppearancePreferences: List<PendingAppearancePreference> = loadPendingAppearancePreferences()
+  private var localOnlyAppearancePreferenceKeys: Set<String> = loadLocalOnlyAppearancePreferenceKeys()
+  private val appearancePreferenceRevisions = appearanceSyncKeys.associateWith { 0L }.toMutableMap()
+
+  init {
+    migrateAppearancePreferenceSyncState()
+  }
+
   private val _modelFavorites = MutableStateFlow(loadChatModelRefs(chatModelFavoritesKey))
   val modelFavorites: StateFlow<List<String>> = _modelFavorites
 
@@ -235,6 +296,12 @@ class SecurePrefs(
   // persist server-side via the session category field (mirrors web localStorage).
   private val _sessionCustomGroups = MutableStateFlow(loadChatModelRefs(sessionCustomGroupsKey))
   val sessionCustomGroups: StateFlow<List<String>> = _sessionCustomGroups
+
+  private val _sidebarPageOrder = MutableStateFlow(loadSidebarPageOrder())
+  val sidebarPageOrder: StateFlow<List<String>> = _sidebarPageOrder
+
+  private val _sidebarVisiblePages = MutableStateFlow(loadSidebarVisiblePages())
+  val sidebarVisiblePages: StateFlow<List<String>> = _sidebarVisiblePages
 
   fun setLastDiscoveredStableId(value: String) {
     val trimmed = value.trim()
@@ -688,9 +755,360 @@ class SecurePrefs(
     return VoiceWakePreferences.sanitizeTriggerWords(decoded.orEmpty())
   }
 
-  fun setAppearanceThemeMode(mode: AppearanceThemeMode) {
+  private fun loadPendingAppearancePreferences(): List<PendingAppearancePreference> {
+    val stored = plainPrefs.getString(appearancePendingPreferencesKey, null)
+    val decoded =
+      stored?.let {
+        runCatching { json.decodeFromString<List<PendingAppearancePreference>>(it) }.getOrNull()
+      }
+    if (decoded != null) {
+      return deduplicatePendingAppearancePreferences(
+        decoded.filter { preference ->
+          preference.key in appearanceSyncKeys &&
+            (preference.gatewayStableId == null || preference.gatewayStableId.isNotBlank()) &&
+            (preference.profileId == null || preference.profileId.isNotBlank())
+        },
+      )
+    }
+    return plainPrefs
+      .getStringSet(legacyAppearancePendingSyncKeysKey, emptySet())
+      .orEmpty()
+      .filter(appearanceSyncKeys::contains)
+      .map { key -> PendingAppearancePreference(key = key, value = currentAppearancePreferenceValue(key)) }
+  }
+
+  @Synchronized
+  fun setAppearanceThemeMode(
+    mode: AppearanceThemeMode,
+    pendingSync: Boolean = false,
+    pendingScope: AppearancePreferenceScope? = null,
+    retainLocal: Boolean = false,
+  ) {
+    require(!pendingSync || !retainLocal)
+    val key = "ui.themeMode"
+    val nextPending =
+      when {
+        pendingSync -> enqueuePendingAppearancePreference(key, mode.rawValue, pendingScope)
+        retainLocal -> pendingAppearancePreferences.filterNot { it.key == key }
+        else -> pendingAppearancePreferences
+      }
+    val nextLocalOnly = updatedLocalOnlyAppearancePreferenceKeys(key, pendingSync, retainLocal)
+    plainPrefs.edit {
+      putString(appearanceThemeModeKey, mode.rawValue)
+      if (pendingSync || retainLocal) {
+        persistPendingAppearancePreferences(this, nextPending)
+        persistLocalOnlyAppearancePreferenceKeys(this, nextLocalOnly)
+      }
+    }
+    if (pendingSync || retainLocal) {
+      pendingAppearancePreferences = nextPending
+      localOnlyAppearancePreferenceKeys = nextLocalOnly
+      incrementAppearancePreferenceRevision(key)
+    }
+    _appearanceThemeMode.value = mode
+  }
+
+  @Synchronized
+  fun setAppearanceThemeFamily(
+    family: AppearanceThemeFamily,
+    pendingSync: Boolean = false,
+    pendingScope: AppearancePreferenceScope? = null,
+    retainLocal: Boolean = false,
+  ) {
+    require(!pendingSync || !retainLocal)
+    val key = "ui.theme"
+    val nextPending =
+      when {
+        pendingSync -> enqueuePendingAppearancePreference(key, family.rawValue, pendingScope)
+        retainLocal -> pendingAppearancePreferences.filterNot { it.key == key }
+        else -> pendingAppearancePreferences
+      }
+    val nextLocalOnly = updatedLocalOnlyAppearancePreferenceKeys(key, pendingSync, retainLocal)
+    plainPrefs.edit {
+      putString(appearanceThemeFamilyKey, family.rawValue)
+      if (pendingSync || retainLocal) {
+        persistPendingAppearancePreferences(this, nextPending)
+        persistLocalOnlyAppearancePreferenceKeys(this, nextLocalOnly)
+      }
+    }
+    if (pendingSync || retainLocal) {
+      pendingAppearancePreferences = nextPending
+      localOnlyAppearancePreferenceKeys = nextLocalOnly
+      incrementAppearancePreferenceRevision(key)
+    }
+    _appearanceThemeFamily.value = family
+  }
+
+  @Synchronized
+  fun setAppearanceAccentArgb(
+    argb: Long?,
+    pendingSync: Boolean = false,
+    pendingScope: AppearancePreferenceScope? = null,
+    retainLocal: Boolean = false,
+  ) {
+    require(!pendingSync || !retainLocal)
+    val key = "ui.accent"
+    val value = appearanceAccentPreferenceValue(argb)
+    val nextPending =
+      when {
+        pendingSync -> enqueuePendingAppearancePreference(key, value, pendingScope)
+        retainLocal -> pendingAppearancePreferences.filterNot { it.key == key }
+        else -> pendingAppearancePreferences
+      }
+    val nextLocalOnly = updatedLocalOnlyAppearancePreferenceKeys(key, pendingSync, retainLocal)
+    plainPrefs.edit {
+      if (argb == null) {
+        remove(appearanceAccentArgbKey)
+      } else {
+        putLong(appearanceAccentArgbKey, argb)
+      }
+      if (pendingSync || retainLocal) {
+        persistPendingAppearancePreferences(this, nextPending)
+        persistLocalOnlyAppearancePreferenceKeys(this, nextLocalOnly)
+      }
+    }
+    if (pendingSync || retainLocal) {
+      pendingAppearancePreferences = nextPending
+      localOnlyAppearancePreferenceKeys = nextLocalOnly
+      incrementAppearancePreferenceRevision(key)
+    }
+    _appearanceAccentArgb.value = argb
+  }
+
+  @Synchronized
+  internal fun applyAppearanceThemeModeFromGateway(
+    mode: AppearanceThemeMode,
+    expectedRevision: Long,
+  ): Boolean {
+    if (!gatewayAppearancePreferenceMayApply("ui.themeMode", expectedRevision)) return false
     plainPrefs.edit { putString(appearanceThemeModeKey, mode.rawValue) }
     _appearanceThemeMode.value = mode
+    return true
+  }
+
+  @Synchronized
+  internal fun applyAppearanceThemeFamilyFromGateway(
+    family: AppearanceThemeFamily,
+    expectedRevision: Long,
+  ): Boolean {
+    if (!gatewayAppearancePreferenceMayApply("ui.theme", expectedRevision)) return false
+    plainPrefs.edit { putString(appearanceThemeFamilyKey, family.rawValue) }
+    _appearanceThemeFamily.value = family
+    return true
+  }
+
+  @Synchronized
+  internal fun applyAppearanceAccentArgbFromGateway(
+    argb: Long?,
+    expectedRevision: Long,
+  ): Boolean {
+    if (!gatewayAppearancePreferenceMayApply("ui.accent", expectedRevision)) return false
+    plainPrefs.edit {
+      if (argb == null) {
+        remove(appearanceAccentArgbKey)
+      } else {
+        putLong(appearanceAccentArgbKey, argb)
+      }
+    }
+    _appearanceAccentArgb.value = argb
+    return true
+  }
+
+  private fun gatewayAppearancePreferenceMayApply(
+    key: String,
+    expectedRevision: Long,
+  ): Boolean =
+    appearancePreferenceRevisions[key] == expectedRevision &&
+      key !in localOnlyAppearancePreferenceKeys
+
+  @Synchronized
+  internal fun isAppearancePreferenceLocalOnly(key: String): Boolean = key in localOnlyAppearancePreferenceKeys
+
+  @Synchronized
+  internal fun promotePendingAppearancePreferencesToLocal(gatewayStableId: String) {
+    val belongsToGateway: (PendingAppearancePreference) -> Boolean = { preference ->
+      preference.gatewayStableId == null ||
+        preference.gatewayStableId == gatewayStableId
+    }
+    val promotedKeys =
+      pendingAppearancePreferences
+        .filter(belongsToGateway)
+        .mapTo(mutableSetOf(), PendingAppearancePreference::key)
+    if (promotedKeys.isEmpty()) return
+    val nextPending = pendingAppearancePreferences.filterNot(belongsToGateway)
+    val nextLocalOnly = localOnlyAppearancePreferenceKeys + promotedKeys
+    plainPrefs.edit {
+      persistPendingAppearancePreferences(this, nextPending)
+      persistLocalOnlyAppearancePreferenceKeys(this, nextLocalOnly)
+    }
+    pendingAppearancePreferences = nextPending
+    localOnlyAppearancePreferenceKeys = nextLocalOnly
+  }
+
+  @Synchronized
+  internal fun pendingAppearancePreferenceEntries(
+    scope: AppearancePreferenceScope? = null,
+    adoptUnscoped: Boolean = false,
+  ): Map<String, String?> {
+    if (scope != null && adoptUnscoped) {
+      val adopted =
+        deduplicatePendingAppearancePreferences(
+          pendingAppearancePreferences.map { preference ->
+            when {
+              preference.gatewayStableId == null ->
+                preference.copy(
+                  gatewayStableId = scope.gatewayStableId,
+                  profileId = scope.profileId,
+                )
+              preference.gatewayStableId == scope.gatewayStableId &&
+                preference.profileId == null &&
+                scope.profileId != null ->
+                preference.copy(profileId = scope.profileId)
+              else -> preference
+            }
+          },
+        )
+      if (adopted != pendingAppearancePreferences) {
+        plainPrefs.edit { persistPendingAppearancePreferences(this, adopted) }
+        pendingAppearancePreferences = adopted
+      }
+    }
+    return pendingAppearancePreferences
+      .filter { it.matches(scope) }
+      .associate { it.key to it.value }
+  }
+
+  @Synchronized
+  internal fun clearPendingAppearancePreference(
+    key: String,
+    expectedValue: String?,
+    scope: AppearancePreferenceScope? = null,
+  ) {
+    val current =
+      pendingAppearancePreferences.lastOrNull { preference ->
+        preference.key == key && preference.matches(scope)
+      } ?: return
+    if (current.value != expectedValue) return
+    val next =
+      pendingAppearancePreferences.filterNot { preference ->
+        preference.key == key && preference.matches(scope)
+      }
+    plainPrefs.edit { persistPendingAppearancePreferences(this, next) }
+    pendingAppearancePreferences = next
+  }
+
+  @Synchronized
+  internal fun appearancePreferenceRevision(key: String): Long = appearancePreferenceRevisions[key] ?: 0L
+
+  private fun enqueuePendingAppearancePreference(
+    key: String,
+    value: String?,
+    scope: AppearancePreferenceScope?,
+  ): List<PendingAppearancePreference> =
+    deduplicatePendingAppearancePreferences(
+      pendingAppearancePreferences +
+        PendingAppearancePreference(
+          gatewayStableId = scope?.gatewayStableId,
+          profileId = scope?.profileId,
+          key = key,
+          value = value,
+        ),
+    )
+
+  private fun deduplicatePendingAppearancePreferences(
+    preferences: List<PendingAppearancePreference>,
+  ): List<PendingAppearancePreference> {
+    val byOwnerAndKey =
+      linkedMapOf<Triple<String?, String?, String>, PendingAppearancePreference>()
+    preferences.forEach { preference ->
+      byOwnerAndKey[Triple(preference.gatewayStableId, preference.profileId, preference.key)] = preference
+    }
+    return byOwnerAndKey.values.toList()
+  }
+
+  private fun PendingAppearancePreference.matches(scope: AppearancePreferenceScope?): Boolean =
+    if (scope == null) {
+      gatewayStableId == null
+    } else {
+      gatewayStableId == scope.gatewayStableId && profileId == scope.profileId
+    }
+
+  private fun loadLocalOnlyAppearancePreferenceKeys(): Set<String> =
+    plainPrefs
+      .getStringSet(appearanceLocalOnlyKeysKey, emptySet())
+      .orEmpty()
+      .filterTo(mutableSetOf(), appearanceSyncKeys::contains)
+
+  private fun migrateAppearancePreferenceSyncState() {
+    val storedVersion = plainPrefs.getInt(appearanceSyncMigrationVersionKey, 0)
+    if (storedVersion >= currentAppearanceSyncMigrationVersion) return
+    val shouldMigrateThemeMode =
+      plainPrefs.contains(appearanceThemeModeKey) &&
+        pendingAppearancePreferences.none { it.key == "ui.themeMode" } &&
+        "ui.themeMode" !in localOnlyAppearancePreferenceKeys
+    val nextPending =
+      if (shouldMigrateThemeMode) {
+        enqueuePendingAppearancePreference(
+          key = "ui.themeMode",
+          value = _appearanceThemeMode.value.rawValue,
+          scope = null,
+        )
+      } else {
+        pendingAppearancePreferences
+      }
+    plainPrefs.edit {
+      if (nextPending != pendingAppearancePreferences) {
+        persistPendingAppearancePreferences(this, nextPending)
+      }
+      putInt(appearanceSyncMigrationVersionKey, currentAppearanceSyncMigrationVersion)
+    }
+    pendingAppearancePreferences = nextPending
+  }
+
+  private fun updatedLocalOnlyAppearancePreferenceKeys(
+    key: String,
+    pendingSync: Boolean,
+    retainLocal: Boolean,
+  ): Set<String> =
+    when {
+      pendingSync -> localOnlyAppearancePreferenceKeys - key
+      retainLocal -> localOnlyAppearancePreferenceKeys + key
+      else -> localOnlyAppearancePreferenceKeys
+    }
+
+  private fun persistPendingAppearancePreferences(
+    editor: SharedPreferences.Editor,
+    preferences: List<PendingAppearancePreference>,
+  ) {
+    if (preferences.isEmpty()) {
+      editor.remove(appearancePendingPreferencesKey)
+    } else {
+      editor.putString(appearancePendingPreferencesKey, json.encodeToString(preferences))
+    }
+    editor.remove(legacyAppearancePendingSyncKeysKey)
+  }
+
+  private fun persistLocalOnlyAppearancePreferenceKeys(
+    editor: SharedPreferences.Editor,
+    keys: Set<String>,
+  ) {
+    if (keys.isEmpty()) {
+      editor.remove(appearanceLocalOnlyKeysKey)
+    } else {
+      editor.putStringSet(appearanceLocalOnlyKeysKey, keys)
+    }
+  }
+
+  private fun currentAppearancePreferenceValue(key: String): String? =
+    when (key) {
+      "ui.theme" -> _appearanceThemeFamily.value.rawValue
+      "ui.themeMode" -> _appearanceThemeMode.value.rawValue
+      "ui.accent" -> appearanceAccentPreferenceValue(_appearanceAccentArgb.value)
+      else -> null
+    }
+
+  private fun incrementAppearancePreferenceRevision(key: String) {
+    appearancePreferenceRevisions[key] = (appearancePreferenceRevisions[key] ?: 0L) + 1L
   }
 
   fun toggleModelFavorite(ref: String) {
@@ -718,6 +1136,18 @@ class SecurePrefs(
     val sanitized = groups.map(String::trim).filter { it.isNotEmpty() }.distinct()
     persistChatModelRefs(sessionCustomGroupsKey, sanitized)
     _sessionCustomGroups.value = sanitized
+  }
+
+  fun setSidebarPageOrder(pageIds: List<String>) {
+    val sanitized = sanitizeSidebarPageOrder(pageIds)
+    persistChatModelRefs(sidebarPageOrderKey, sanitized)
+    _sidebarPageOrder.value = sanitized
+  }
+
+  fun setSidebarVisiblePages(pageIds: List<String>) {
+    val sanitized = sanitizeSidebarVisiblePages(pageIds)
+    persistChatModelRefs(sidebarVisiblePagesKey, sanitized)
+    _sidebarVisiblePages.value = sanitized
   }
 
   private fun persistChatModelRefs(
@@ -772,6 +1202,15 @@ class SecurePrefs(
     plainPrefs.edit { putBoolean(cameraEnabledKey, migratedValue) }
     return migratedValue
   }
+
+  private fun loadSidebarPageOrder(): List<String> = sanitizeSidebarPageOrder(loadChatModelRefs(sidebarPageOrderKey))
+
+  private fun loadSidebarVisiblePages(): List<String> =
+    if (!plainPrefs.contains(sidebarVisiblePagesKey)) {
+      defaultSidebarVisiblePages
+    } else {
+      sanitizeSidebarVisiblePages(loadChatModelRefs(sidebarVisiblePagesKey))
+    }
 
   private fun loadChatModelRefs(key: String): List<String> {
     val raw = plainPrefs.getString(key, null)?.trim()

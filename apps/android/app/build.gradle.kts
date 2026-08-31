@@ -146,6 +146,7 @@ android {
   sourceSets {
     getByName("main") {
       assets.directories.add("../../shared/OpenClawKit/Sources/OpenClawKit/Resources")
+      assets.directories.add(rootProject.file("../../ui/public/provider-icons").path)
       assets.directories.add(thirdPartyLicensesDir.path)
     }
   }
