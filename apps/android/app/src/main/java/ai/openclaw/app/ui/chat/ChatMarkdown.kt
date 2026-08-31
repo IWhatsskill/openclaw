@@ -110,6 +110,7 @@ fun ChatMarkdown(
   text: String,
   textColor: Color,
   isStreaming: Boolean = false,
+  bodyStyle: TextStyle = ClawTheme.type.body,
 ) {
   val blocks = remember(text, isStreaming) { segmentChatMarkdown(text, isStreaming) }
   val inlineStyles =
@@ -117,7 +118,7 @@ fun ChatMarkdown(
       inlineCodeBg = ClawTheme.colors.codeBg,
       inlineCodeColor = ClawTheme.colors.codeText,
       linkColor = ClawTheme.colors.accent,
-      baseCallout = ClawTheme.type.body,
+      baseCallout = bodyStyle,
     )
 
   Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
