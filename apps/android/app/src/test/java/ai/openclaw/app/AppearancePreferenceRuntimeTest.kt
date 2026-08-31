@@ -26,6 +26,7 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.util.ReflectionHelpers
 import org.robolectric.util.ReflectionHelpers.ClassParameter
+import java.lang.management.ManagementFactory
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -666,7 +667,7 @@ class AppearancePreferenceRuntimeTest {
       val runtime = NodeRuntime(app, prefs)
       val endpointA = GatewayEndpoint.manual("127.0.0.1", 18789)
       val endpointB = GatewayEndpoint.manual("127.0.0.2", 18789)
-      val profileLookupStarted = CompletableDeferred<Thread>()
+      val profileLookupStarted = CompletableDeferred<Unit>()
       val releaseProfileLookup = CompletableDeferred<Unit>()
       val prefsLockAcquired = CountDownLatch(1)
       val releasePrefsLock = CountDownLatch(1)
@@ -691,7 +692,7 @@ class AppearancePreferenceRuntimeTest {
           "users.prefs.get" ->
             """{"status":"ok","entries":{"ui.theme":"claw","ui.themeMode":"dark"}}"""
           "users.self" -> {
-            profileLookupStarted.complete(Thread.currentThread())
+            profileLookupStarted.complete(Unit)
             releaseProfileLookup.await()
             error("operator.write unavailable")
           }
@@ -705,15 +706,15 @@ class AppearancePreferenceRuntimeTest {
           async(Dispatchers.IO) {
             invokeRefreshBrandingFromGateway(runtime)
           }
-        val refreshThread = withTimeout(10_000) { profileLookupStarted.await() }
+        withTimeout(10_000) { profileLookupStarted.await() }
 
         prefsLockOwner.start()
         assertTrue(prefsLockAcquired.await(10, TimeUnit.SECONDS))
+        val gatewayDataScopeLock = ReflectionHelpers.getField<Any>(runtime, "gatewayDataScopeLock")
         releaseProfileLookup.complete(Unit)
-        assertTrue(awaitThreadState(refreshThread, Thread.State.BLOCKED))
+        assertTrue(awaitMonitorOwned(gatewayDataScopeLock))
 
         val gatewaySwitchStarted = CountDownLatch(1)
-        val gatewayDataScopeLock = ReflectionHelpers.getField<Any>(runtime, "gatewayDataScopeLock")
         gatewaySwitch =
           Thread {
             gatewaySwitchStarted.countDown()
@@ -754,6 +755,23 @@ class AppearancePreferenceRuntimeTest {
       Thread.sleep(10)
     }
     return thread.state == expected
+  }
+
+  private fun awaitMonitorOwned(monitor: Any): Boolean {
+    val monitorIdentity = System.identityHashCode(monitor)
+    val threadMxBean = ManagementFactory.getThreadMXBean()
+    val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+    while (System.nanoTime() < deadline) {
+      val owned =
+        threadMxBean
+          .dumpAllThreads(true, false)
+          .any { thread ->
+            thread.lockedMonitors.any { locked -> locked.identityHashCode == monitorIdentity }
+          }
+      if (owned) return true
+      Thread.sleep(10)
+    }
+    return false
   }
 
   private suspend fun invokeRefreshBrandingFromGateway(runtime: NodeRuntime) =
