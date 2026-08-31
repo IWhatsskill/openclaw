@@ -41,11 +41,14 @@ class AndroidLicenseNoticesTest {
         "AndroidX Room",
         "AndroidX Wear",
         "Bouncy Castle Provider",
+        "CodexBar",
         "Coil",
         "CommonMark Java",
         "dnsjava",
         "KaTeX",
         "Kotlin Libraries",
+        "llama.cpp",
+        "Lobe Icons",
         "Manrope",
         "nibor autolink",
         "OkHttp and Okio",
@@ -61,5 +64,8 @@ class AndroidLicenseNoticesTest {
     assertTrue(licenses.any { license -> license.text.contains("MIT License") })
     assertTrue(licenses.any { license -> license.text.contains("Bouncy Castle Licence") })
     assertTrue(licenses.any { license -> license.title == "Coil" && license.text.contains("Coil Contributors") })
+    assertTrue(licenses.any { license -> license.title == "CodexBar" && license.text.contains("Peter Steinberger") })
+    assertTrue(licenses.any { license -> license.title == "Lobe Icons" && license.text.contains("LobeHub") })
+    assertTrue(licenses.any { license -> license.title == "llama.cpp" && license.text.contains("ggml authors") })
   }
 }

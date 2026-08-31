@@ -237,6 +237,34 @@ class ChatControllerCommandControlsTest {
     }
 
   @Test
+  fun catalogNewSessionCreatesRootSessionForSelectedAgent() =
+    runTest {
+      val (controller, requests) =
+        chatControllerTestSetup {
+          respond("sessions.create", """{"ok":true,"key":"agent:main:dashboard:catalog"}""")
+          respond("chat.history", """{"sessionId":"catalog-session","messages":[]}""")
+          respond("health", "{}")
+          respond("sessions.list", """{"sessions":[]}""")
+        }
+      controller.handleGatewayEvent("health", null)
+      controller.load("main")
+      advanceUntilIdle()
+
+      assertTrue(controller.startNewChatAwait(catalogId = "codex"))
+
+      val create = requests.first { it.first == "sessions.create" }.second.orEmpty()
+      assertTrue(create.contains("\"agentId\":\"main\""))
+      assertTrue(create.contains("\"catalogId\":\"codex\""))
+      assertFalse(create.contains("\"parentSessionKey\""))
+      assertFalse(create.contains("\"emitCommandHooks\""))
+      assertFalse(create.contains("\"succeedsParent\""))
+      assertFalse(create.contains("\"worktree\""))
+      assertFalse(create.contains("\"model\""))
+      assertFalse(create.contains("\"key\""))
+      assertEquals("agent:main:dashboard:catalog", controller.sessionKey.value)
+    }
+
+  @Test
   fun startNewChatInWorktreeIncludesWorktreeFlag() =
     runTest {
       val (controller, requests) =
