@@ -8,6 +8,7 @@ import ai.openclaw.app.GatewayNodeCapabilityApproval
 import ai.openclaw.app.GatewayUsageProviderSummary
 import ai.openclaw.app.GatewayUsageWindowSummary
 import ai.openclaw.app.LocationMode
+import ai.openclaw.app.appearanceAccentPalette
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.verbatimText
@@ -426,6 +427,31 @@ class SettingsScreensTest {
     // Discovered gateways surface inside Add Gateway with a per-row connect.
     val discoveredRows = source.indexOf("discoveredGateways.forEachIndexed", screenStart)
     assertTrue(discoveredRows > addPanel && discoveredRows < pairedPanel)
+  }
+
+  @Test
+  fun accentSwatchDescriptionsNameDefaultAndEveryColor() {
+    val descriptions =
+      (listOf<Long?>(null) + appearanceAccentPalette).map(::appearanceAccentSwatchDescription)
+
+    assertEquals(appearanceAccentPalette.size + 1, descriptions.toSet().size)
+    assertEquals("Accent color, Default", descriptions.first())
+    assertTrue(descriptions.drop(1).all { it.startsWith("Accent color, #") })
+  }
+
+  @Test
+  fun appearanceScreenUsesDirectControlsWithoutRedundantSummaryPanel() {
+    val source = settingsScreensSource()
+    val screenStart = source.indexOf("private fun AppearanceSettingsScreen(")
+    val screenEnd = source.indexOf("@Composable", screenStart + 1)
+    assertTrue(screenStart >= 0 && screenEnd > screenStart)
+    val screenBody = source.substring(screenStart, screenEnd)
+
+    assertFalse(screenBody.contains("SettingsMetricPanel("))
+    assertTrue(screenBody.contains("nativeString(\"Theme family\")"))
+    assertTrue(screenBody.contains("nativeString(\"Color mode\")"))
+    assertTrue(screenBody.contains("nativeString(\"Accent color\")"))
+    assertTrue(screenBody.contains("nativeString(\"App language\")"))
   }
 
   private fun settingsScreensSource(): String {

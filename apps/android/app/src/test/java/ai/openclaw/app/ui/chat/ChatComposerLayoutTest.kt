@@ -31,6 +31,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModelStore
 import org.junit.After
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
@@ -101,6 +102,73 @@ class ChatComposerLayoutTest {
     }
   }
 
+  @Test
+  fun narrowToolbarKeepsModelEffortMicAndPrimaryActionVisible() {
+    showChat()
+    composeRule.onNode(hasSetTextAction()).performClick()
+    composeRule.waitForIdle()
+
+    val viewport = composeRule.onNodeWithTag("chat-viewport").getUnclippedBoundsInRoot()
+    val controls =
+      listOf(
+        "model" to composeRule.onNodeWithTag("chat-composer-model"),
+        "effort" to composeRule.onNodeWithTag("chat-composer-thinking"),
+        "mic" to composeRule.onNodeWithTag("chat-composer-mic"),
+        "stop" to composeRule.onNodeWithContentDescription("Stop"),
+      )
+    val controlBounds =
+      controls.map { (name, node) ->
+        node.assertIsDisplayed()
+        val bounds = node.getUnclippedBoundsInRoot()
+        assertTrue("$name must retain width: $bounds", bounds.right > bounds.left)
+        assertTrue("$name must stay inside the viewport: $bounds inside $viewport", bounds.left >= viewport.left)
+        assertTrue("$name must stay inside the viewport: $bounds inside $viewport", bounds.right <= viewport.right)
+        name to bounds
+      }
+    controlBounds.zipWithNext().forEach { (left, right) ->
+      assertTrue(
+        "${left.first} must not overlap ${right.first}: ${left.second} vs ${right.second}",
+        left.second.right <= right.second.left,
+      )
+    }
+  }
+
+  @Test
+  fun primaryActionKeeps48DpTouchTargetAround40DpVisualSurface() {
+    showChat()
+
+    val touchTarget = composeRule.onNodeWithContentDescription("Stop").getUnclippedBoundsInRoot()
+    val visualSurface =
+      composeRule
+        .onNodeWithTag("chat-composer-primary-action-visual", useUnmergedTree = true)
+        .getUnclippedBoundsInRoot()
+    assertEquals(48.dp, touchTarget.right - touchTarget.left)
+    assertEquals(48.dp, touchTarget.bottom - touchTarget.top)
+    assertEquals(40.dp, visualSurface.right - visualSurface.left)
+    assertEquals(40.dp, visualSurface.bottom - visualSurface.top)
+  }
+
+  @Test
+  fun hiddenAuxiliaryToolbarKeepsPrimaryActionAtTrailingEdge() {
+    showChat()
+    composeRule.mainClock.autoAdvance = false
+
+    composeRule.onNode(hasSetTextAction()).performClick()
+    composeRule.mainClock.advanceTimeBy(500L)
+    composeRule.waitForIdle()
+    composeRule.onNodeWithTag("chat-composer-model").assertIsDisplayed()
+    val expandedActionRight =
+      composeRule.onNodeWithContentDescription("Stop").getUnclippedBoundsInRoot().right
+
+    composeRule.mainClock.advanceTimeBy(CHAT_COMPOSER_AUXILIARY_IDLE_MS + 500L)
+    composeRule.waitForIdle()
+    composeRule.onNodeWithTag("chat-composer-model").assertDoesNotExist()
+    val collapsedActionRight =
+      composeRule.onNodeWithContentDescription("Stop").getUnclippedBoundsInRoot().right
+
+    assertEquals(expandedActionRight, collapsedActionRight)
+  }
+
   private fun showChat() {
     val viewModel = MainViewModel(app, prefs, SavedStateHandle())
     viewModelStore.put("chat", viewModel)
@@ -115,7 +183,6 @@ class ChatComposerLayoutTest {
             showSidebarButton = true,
             onOpenSidebar = {},
             onToggleTalk = {},
-            onOpenSessions = {},
             onOpenDashboard = {},
             onOpenGatewaySettings = {},
           )

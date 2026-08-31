@@ -1,6 +1,9 @@
 package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.GatewayModelSummary
+import ai.openclaw.app.ui.design.providerBrandTintArgb
+import ai.openclaw.app.ui.design.providerFallbackLabel
+import ai.openclaw.app.ui.design.providerIconSlug
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -47,6 +50,81 @@ class ChatModelPickerTest {
     assertTrue(thinkingSupportedForSelection(selectedModelRef = "openai/unknown", catalog = catalog))
     assertTrue(thinkingSupportedForSelection(selectedModelRef = "openai/reasoning", catalog = catalog))
     assertFalse(thinkingSupportedForSelection(selectedModelRef = "openai/plain", catalog = catalog))
+  }
+
+  @Test
+  fun fastModeSupportFollowsTheResolvedProviderAndExistingOverrides() {
+    val catalog =
+      listOf(
+        model(id = "gpt-5.6", provider = "openai"),
+        model(id = "claude-opus-4", provider = "anthropic"),
+        model(id = "gemini-pro", provider = "google"),
+      )
+
+    val openAiSupported =
+      fastModeProviderSupportedForSelection(
+        selectedModelRef = "openai/gpt-5.6",
+        sessionModelProvider = null,
+        catalog = catalog,
+      )
+    val legacyCodexSupported =
+      fastModeProviderSupportedForSelection(
+        selectedModelRef = "openai-codex/gpt-5.6",
+        sessionModelProvider = null,
+        catalog = emptyList(),
+      )
+    val googleSupported =
+      fastModeProviderSupportedForSelection(
+        selectedModelRef = "google/gemini-pro",
+        sessionModelProvider = null,
+        catalog = catalog,
+      )
+
+    assertTrue(openAiSupported)
+    assertTrue(legacyCodexSupported)
+    assertFalse(googleSupported)
+    assertTrue(
+      fastModeSupportedForSelection(
+        providerSupported = openAiSupported,
+        hasConfiguredFastModeOverride = false,
+      ),
+    )
+    assertTrue(
+      fastModeSupportedForSelection(
+        providerSupported = legacyCodexSupported,
+        hasConfiguredFastModeOverride = false,
+      ),
+    )
+    assertFalse(
+      fastModeSupportedForSelection(
+        providerSupported = googleSupported,
+        hasConfiguredFastModeOverride = false,
+      ),
+    )
+    assertTrue(
+      fastModeSupportedForSelection(
+        providerSupported = googleSupported,
+        hasConfiguredFastModeOverride = true,
+      ),
+    )
+  }
+
+  @Test
+  fun providerIconsFollowCanonicalWebAliasesAndSafeFallbacks() {
+    assertEquals("claude", providerIconSlug("anthropic"))
+    assertEquals("bedrock", providerIconSlug("aws-bedrock"))
+    assertEquals("gemini", providerIconSlug("google"))
+    assertEquals("copilot", providerIconSlug("github-copilot"))
+    assertEquals("codex", providerIconSlug("openai"))
+    assertEquals("grok", providerIconSlug("xAI"))
+    assertEquals("vertexai", providerIconSlug("vertex-ai"))
+    assertEquals("openrouter", providerIconSlug("open-router"))
+    assertEquals("O", providerFallbackLabel(" openai"))
+    assertEquals("", providerFallbackLabel(" -- "))
+    assertEquals(0xFF10A37FL, providerBrandTintArgb("codex"))
+    assertEquals(0xFFD97757L, providerBrandTintArgb("claude"))
+    assertEquals(0xFF4285F4L, providerBrandTintArgb("gemini"))
+    assertEquals(null, providerBrandTintArgb("openrouter"))
   }
 
   private fun model(
