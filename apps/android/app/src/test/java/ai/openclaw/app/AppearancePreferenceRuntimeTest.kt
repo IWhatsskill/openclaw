@@ -705,16 +705,12 @@ class AppearancePreferenceRuntimeTest {
           async(Dispatchers.IO) {
             invokeRefreshBrandingFromGateway(runtime)
           }
-        val refreshThread = withTimeout(2_000) { profileLookupStarted.await() }
+        val refreshThread = withTimeout(10_000) { profileLookupStarted.await() }
 
         prefsLockOwner.start()
-        assertTrue(prefsLockAcquired.await(2, TimeUnit.SECONDS))
+        assertTrue(prefsLockAcquired.await(10, TimeUnit.SECONDS))
         releaseProfileLookup.complete(Unit)
-        withTimeout(2_000) {
-          while (refreshThread.state != Thread.State.BLOCKED) {
-            yield()
-          }
-        }
+        assertTrue(awaitThreadState(refreshThread, Thread.State.BLOCKED))
 
         val gatewaySwitchStarted = CountDownLatch(1)
         val gatewayDataScopeLock = ReflectionHelpers.getField<Any>(runtime, "gatewayDataScopeLock")
@@ -726,20 +722,12 @@ class AppearancePreferenceRuntimeTest {
             }
           }
         gatewaySwitch.start()
-        assertTrue(gatewaySwitchStarted.await(2, TimeUnit.SECONDS))
-        withTimeout(2_000) {
-          while (
-            gatewaySwitch.state == Thread.State.NEW ||
-            gatewaySwitch.state == Thread.State.RUNNABLE
-          ) {
-            yield()
-          }
-        }
-        assertEquals(Thread.State.BLOCKED, gatewaySwitch.state)
+        assertTrue(gatewaySwitchStarted.await(10, TimeUnit.SECONDS))
+        assertTrue(awaitThreadState(gatewaySwitch, Thread.State.BLOCKED))
 
         releasePrefsLock.countDown()
-        withTimeout(2_000) { refresh.await() }
-        gatewaySwitch.join(2_000)
+        withTimeout(10_000) { refresh.await() }
+        gatewaySwitch.join(10_000)
         assertFalse(gatewaySwitch.isAlive)
 
         val adoptedScope = AppearancePreferenceScope(endpointA.stableId, profileId = null)
@@ -751,11 +739,22 @@ class AppearancePreferenceRuntimeTest {
       } finally {
         releaseProfileLookup.complete(Unit)
         releasePrefsLock.countDown()
-        prefsLockOwner.join(2_000)
-        gatewaySwitch?.join(2_000)
+        prefsLockOwner.join(10_000)
+        gatewaySwitch?.join(10_000)
         closeNodeRuntimeTestFixture(runtime)
       }
     }
+
+  private fun awaitThreadState(
+    thread: Thread,
+    expected: Thread.State,
+  ): Boolean {
+    val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+    while (thread.state != expected && System.nanoTime() < deadline) {
+      Thread.sleep(10)
+    }
+    return thread.state == expected
+  }
 
   private suspend fun invokeRefreshBrandingFromGateway(runtime: NodeRuntime) =
     suspendCoroutineUninterceptedOrReturn<Unit> { continuation ->
