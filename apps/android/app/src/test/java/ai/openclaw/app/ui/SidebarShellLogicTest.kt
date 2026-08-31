@@ -1,7 +1,9 @@
 package ai.openclaw.app.ui
 
+import ai.openclaw.app.AppearanceThemeFamily
 import ai.openclaw.app.GatewayAgentSummary
 import ai.openclaw.app.chat.ChatSessionEntry
+import ai.openclaw.app.ui.design.clawColorsForTheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -9,6 +11,28 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SidebarShellLogicTest {
+  @Test
+  fun sidebarPaletteUsesEveryActiveThemeAndAccentToken() {
+    AppearanceThemeFamily.entries.forEach { family ->
+      listOf(false, true).forEach { dark ->
+        val colors =
+          clawColorsForTheme(
+            dark = dark,
+            family = family,
+            accentArgb = 0xFF2563EBL,
+          )
+        val palette = sidebarPalette(colors)
+
+        assertEquals(colors.canvas, palette.background)
+        assertEquals(colors.surfaceRaised, palette.elevated)
+        assertEquals(colors.accentSoft, palette.selection)
+        assertEquals(colors.text, palette.text)
+        assertEquals(colors.textMuted, palette.muted)
+        assertEquals(colors.border, palette.hairline)
+      }
+    }
+  }
+
   @Test
   fun storedSidebarOrderAppendsMissingDestinationsInCanonicalOrder() {
     assertEquals(
