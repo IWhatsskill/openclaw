@@ -44,7 +44,8 @@ type DirectoryOptions = { cwd?: string; readDir?: ReadDirectoryEntries };
 type DirectoryLookup = Required<DirectoryOptions>;
 type ShardOptions = DirectoryOptions & { env?: NodeJS.ProcessEnv };
 type PlatformOptions = { env?: NodeJS.ProcessEnv; platform?: NodeJS.Platform };
-type PlatformShardOptions = ShardOptions & ResourceOptions & { splitCore?: boolean };
+type PlatformShardOptions = ShardOptions &
+  ResourceOptions & { splitCore?: boolean; splitExtensions?: boolean };
 type ResourceOptions = PlatformOptions & { hostResources?: HostResources };
 type RunnerOptions = {
   env: NodeJS.ProcessEnv;
@@ -85,11 +86,13 @@ export function createOxlintShards({
   hostResources = resolveHostResources(),
   readDir = fs.readdirSync,
   splitCore = false,
+  splitExtensions = false,
 }: PlatformShardOptions = {}) {
   const coreShards = splitCore ? createCoreOxlintShards({ cwd, readDir }) : [CORE_SHARD];
-  // Unsplit plugin lint can exceed small-host RAM even with a single lint thread.
-  // Only chunk serial runs so explicit parallel modes cannot multiply processes.
+  // Explicit stripes require chunked input even when resource policy keeps
+  // ordinary plugin lint unsplit.
   const chunkExtensions =
+    splitExtensions ||
     platform === "win32" ||
     (hostResources.totalMemoryBytes < CI_PARALLEL_MIN_MEMORY_BYTES &&
       shouldRunOxlintShardsSerial({ env, platform, hostResources }));
@@ -271,6 +274,7 @@ export async function main(
     platform: process.platform,
     hostResources,
     splitCore: shardArgs.splitCore,
+    splitExtensions: shardArgs.extensionStripe !== undefined,
   });
   const selectedShards = selectExtensionOxlintStripe(
     selectCoreOxlintStripe(filterOxlintShards(shards, shardArgs.only), shardArgs.coreStripe),
