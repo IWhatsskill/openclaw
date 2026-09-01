@@ -6154,6 +6154,7 @@ class NodeRuntime private constructor(
           ?.let { profileId -> AppearancePreferenceScope(gatewayScope.stableId, profileId) }
       val pendingScope = preferenceScope ?: AppearancePreferenceScope(gatewayScope.stableId, profileId = null)
       var pendingAtRefreshStart = emptyMap<String, String?>()
+      var protectedPendingKeysAtRefreshStart = emptySet<String>()
       val pendingScopePrepared =
         publishAppearancePreferenceRefresh(gatewayScope, refreshGeneration) {
           when {
@@ -6174,10 +6175,13 @@ class NodeRuntime private constructor(
           }
           if (noDurableIdentity) {
             prefs.promotePendingAppearancePreferencesToLocal(gatewayScope.stableId)
+            protectedPendingKeysAtRefreshStart =
+              prefs.pendingAppearancePreferenceKeysForGateway(gatewayScope.stableId)
             pendingAtRefreshStart = emptyMap()
           } else {
             pendingAtRefreshStart =
               prefs.pendingAppearancePreferenceEntries(pendingScope, adoptUnscoped = true)
+            protectedPendingKeysAtRefreshStart = pendingAtRefreshStart.keys
           }
         }
       if (!pendingScopePrepared) {
@@ -6200,7 +6204,7 @@ class NodeRuntime private constructor(
         val pendingKeys =
           prefs.pendingAppearancePreferenceEntries(pendingScope).keys
         val isFresh: (String) -> Boolean = { key ->
-          key !in pendingAtRefreshStart &&
+          key !in protectedPendingKeysAtRefreshStart &&
             key !in pendingKeys &&
             prefs.appearancePreferenceRevision(key) == revisionSnapshot[key]
         }
@@ -6365,7 +6369,15 @@ class NodeRuntime private constructor(
       }
       if (key !in pending || pending[key] != value) return@withLock false
       if (!writeProfileAppearancePreference(gatewayScope, key, value)) return@withLock false
-      prefs.clearPendingAppearancePreference(key, value, preferenceScope)
+      val currentOwner = appearancePreferenceScopeOwner
+      if (
+        isGatewayDataScopeCurrent(gatewayScope) &&
+        gatewayConnectionDisplay.value.isConnected &&
+        currentOwner?.generation == gatewayScope.generation &&
+        currentOwner.scope == preferenceScope
+      ) {
+        prefs.completePendingAppearancePreferenceWrite(key, value, preferenceScope)
+      }
       true
     }
   }

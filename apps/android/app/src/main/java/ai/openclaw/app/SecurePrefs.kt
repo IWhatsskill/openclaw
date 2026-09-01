@@ -5,6 +5,7 @@ package ai.openclaw.app
 import ai.openclaw.app.gateway.GatewayCustomHeaders
 import ai.openclaw.app.gateway.GatewayRegistryStore
 import ai.openclaw.app.gateway.GatewayStoreMigration
+import ai.openclaw.app.node.parseHexColorArgb
 import ai.openclaw.app.voice.VoiceWakePreferences
 import android.content.Context
 import android.content.SharedPreferences
@@ -926,16 +927,19 @@ class SecurePrefs(
 
   @Synchronized
   internal fun promotePendingAppearancePreferencesToLocal(gatewayStableId: String) {
-    val belongsToGateway: (PendingAppearancePreference) -> Boolean = { preference ->
+    val belongsToOwnerlessScope: (PendingAppearancePreference) -> Boolean = { preference ->
       preference.gatewayStableId == null ||
-        preference.gatewayStableId == gatewayStableId
+        (
+          preference.gatewayStableId == gatewayStableId &&
+            preference.profileId == null
+        )
     }
     val promotedKeys =
       pendingAppearancePreferences
-        .filter(belongsToGateway)
+        .filter(belongsToOwnerlessScope)
         .mapTo(mutableSetOf(), PendingAppearancePreference::key)
     if (promotedKeys.isEmpty()) return
-    val nextPending = pendingAppearancePreferences.filterNot(belongsToGateway)
+    val nextPending = pendingAppearancePreferences.filterNot(belongsToOwnerlessScope)
     val nextLocalOnly = localOnlyAppearancePreferenceKeys + promotedKeys
     plainPrefs.edit {
       persistPendingAppearancePreferences(this, nextPending)
@@ -944,6 +948,13 @@ class SecurePrefs(
     pendingAppearancePreferences = nextPending
     localOnlyAppearancePreferenceKeys = nextLocalOnly
   }
+
+  @Synchronized
+  internal fun pendingAppearancePreferenceKeysForGateway(gatewayStableId: String): Set<String> =
+    pendingAppearancePreferences
+      .asSequence()
+      .filter { preference -> preference.gatewayStableId == gatewayStableId }
+      .mapTo(mutableSetOf(), PendingAppearancePreference::key)
 
   @Synchronized
   internal fun pendingAppearancePreferenceEntries(
@@ -979,22 +990,62 @@ class SecurePrefs(
   }
 
   @Synchronized
-  internal fun clearPendingAppearancePreference(
+  internal fun completePendingAppearancePreferenceWrite(
     key: String,
     expectedValue: String?,
     scope: AppearancePreferenceScope? = null,
-  ) {
+  ): Boolean {
     val current =
       pendingAppearancePreferences.lastOrNull { preference ->
         preference.key == key && preference.matches(scope)
-      } ?: return
-    if (current.value != expectedValue) return
+      } ?: return false
+    if (current.value != expectedValue) return false
     val next =
       pendingAppearancePreferences.filterNot { preference ->
         preference.key == key && preference.matches(scope)
       }
-    plainPrefs.edit { persistPendingAppearancePreferences(this, next) }
+    when (key) {
+      "ui.theme" -> {
+        val family =
+          AppearanceThemeFamily.entries.firstOrNull { it.rawValue == expectedValue }
+            ?: return false
+        plainPrefs.edit {
+          putString(appearanceThemeFamilyKey, family.rawValue)
+          persistPendingAppearancePreferences(this, next)
+        }
+        _appearanceThemeFamily.value = family
+      }
+      "ui.themeMode" -> {
+        val mode =
+          AppearanceThemeMode.entries.firstOrNull { it.rawValue == expectedValue }
+            ?: return false
+        plainPrefs.edit {
+          putString(appearanceThemeModeKey, mode.rawValue)
+          persistPendingAppearancePreferences(this, next)
+        }
+        _appearanceThemeMode.value = mode
+      }
+      "ui.accent" -> {
+        val argb =
+          when {
+            expectedValue == null -> null
+            else -> parseHexColorArgb(expectedValue) ?: return false
+          }
+        plainPrefs.edit {
+          if (argb == null) {
+            remove(appearanceAccentArgbKey)
+          } else {
+            putLong(appearanceAccentArgbKey, argb)
+          }
+          persistPendingAppearancePreferences(this, next)
+        }
+        _appearanceAccentArgb.value = argb
+      }
+      else -> return false
+    }
     pendingAppearancePreferences = next
+    incrementAppearancePreferenceRevision(key)
+    return true
   }
 
   @Synchronized
@@ -1042,27 +1093,23 @@ class SecurePrefs(
   private fun migrateAppearancePreferenceSyncState() {
     val storedVersion = plainPrefs.getInt(appearanceSyncMigrationVersionKey, 0)
     if (storedVersion >= currentAppearanceSyncMigrationVersion) return
-    val shouldMigrateThemeMode =
+    val shouldKeepThemeModeLocal =
       plainPrefs.contains(appearanceThemeModeKey) &&
         pendingAppearancePreferences.none { it.key == "ui.themeMode" } &&
         "ui.themeMode" !in localOnlyAppearancePreferenceKeys
-    val nextPending =
-      if (shouldMigrateThemeMode) {
-        enqueuePendingAppearancePreference(
-          key = "ui.themeMode",
-          value = _appearanceThemeMode.value.rawValue,
-          scope = null,
-        )
+    val nextLocalOnly =
+      if (shouldKeepThemeModeLocal) {
+        localOnlyAppearancePreferenceKeys + "ui.themeMode"
       } else {
-        pendingAppearancePreferences
+        localOnlyAppearancePreferenceKeys
       }
     plainPrefs.edit {
-      if (nextPending != pendingAppearancePreferences) {
-        persistPendingAppearancePreferences(this, nextPending)
+      if (nextLocalOnly != localOnlyAppearancePreferenceKeys) {
+        persistLocalOnlyAppearancePreferenceKeys(this, nextLocalOnly)
       }
       putInt(appearanceSyncMigrationVersionKey, currentAppearanceSyncMigrationVersion)
     }
-    pendingAppearancePreferences = nextPending
+    localOnlyAppearancePreferenceKeys = nextLocalOnly
   }
 
   private fun updatedLocalOnlyAppearancePreferenceKeys(
