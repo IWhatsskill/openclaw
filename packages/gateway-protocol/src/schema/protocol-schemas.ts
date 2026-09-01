@@ -16,7 +16,8 @@ import { SessionCoreProtocolSchemas } from "./protocol-schema-fragment-sessions-
 import { SessionLifecycleProtocolSchemas } from "./protocol-schema-fragment-sessions-lifecycle.js";
 import { TransportProtocolSchemas } from "./protocol-schema-fragment-transport.js";
 
-// Fragment type references keep public declarations bounded without widening schema types.
+/** Public schema registry keyed by stable protocol schema name. */
+// Named fragment types avoid expanding every schema during declaration emission.
 export const ProtocolSchemas: typeof BoardProtocolSchemas &
   typeof ProgressCardProtocolSchemas &
   typeof TransportProtocolSchemas &
