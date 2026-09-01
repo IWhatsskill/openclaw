@@ -248,6 +248,11 @@ private data class SessionCatalogProgressOwner(
   val agentId: String?,
 )
 
+private data class ChatAgentSessionSelectionOwner(
+  val gatewayStableId: String?,
+  val agentId: String,
+)
+
 internal const val WEAR_AGENT_PULSE_PHONE_BUDGET_MILLIS = 8_000L
 
 internal data class WearAgentPulseReads<Tasks, Swarm>(
@@ -1318,6 +1323,9 @@ class NodeRuntime private constructor(
   // Preserve an explicit user choice across metadata refreshes. Gateway reconnects
   // clear it so the newly connected gateway's canonical main agent wins again.
   @Volatile private var selectedChatAgentId: String? = null
+  private val chatAgentSelectionSeq = AtomicLong(0)
+  private val lastSelectedChatSessionByOwner =
+    ConcurrentHashMap<ChatAgentSessionSelectionOwner, String>()
   private val _cronStatus = MutableStateFlow(GatewayCronStatus(enabled = false, jobs = 0, nextWakeAtMs = null))
   val cronStatus: StateFlow<GatewayCronStatus> = _cronStatus.asStateFlow()
   private val _cronJobs = MutableStateFlow<List<GatewayCronJobSummary>>(emptyList())
@@ -1437,6 +1445,9 @@ class NodeRuntime private constructor(
   internal val gatewayCatalogRevision: StateFlow<Long> = gatewayMethodsEpoch.asStateFlow()
 
   @Volatile internal var gatewayDataRequestOverrideForTests: GatewayDataRequestOverride? = null
+
+  @Volatile internal var chatAgentSessionCandidatesOverrideForTests:
+    (suspend (String) -> List<ChatSessionEntry>?)? = null
 
   @Volatile internal var gatewayDataRequestTimeoutObserverForTests: ((method: String, timeoutMs: Long) -> Unit)? = null
 
@@ -1795,6 +1806,7 @@ class NodeRuntime private constructor(
     _gatewayAccentArgb.value = null
     _gatewayAgents.value = emptyList()
     selectedChatAgentId = null
+    chatAgentSelectionSeq.incrementAndGet()
     _modelCatalog.value = emptyList()
     providerModelCatalogRefreshGuard.invalidate()
     _providerModelCatalog.value = emptyList()
@@ -2025,6 +2037,14 @@ class NodeRuntime private constructor(
   }
 
   private fun publishChatSessionDeletion(deletion: ChatSessionDeletion) {
+    chatAgentSelectionSeq.incrementAndGet()
+    lastSelectedChatSessionByOwner.remove(
+      ChatAgentSessionSelectionOwner(
+        gatewayStableId = deletion.gatewayId,
+        agentId = deletion.agentId,
+      ),
+      deletion.sessionKey,
+    )
     chatSessionDeletionListeners.values.forEach { listener -> listener(deletion) }
   }
 
@@ -5171,9 +5191,11 @@ class NodeRuntime private constructor(
     sessionKey: String,
     ownerAgentId: String? = null,
   ) {
+    chatAgentSelectionSeq.incrementAndGet()
     retirePendingSessionCatalogContinuation()
     stopMessageSpeech()
     chat.switchSession(sessionKey, ownerAgentId)
+    rememberSelectedChatSession(sessionKey, ownerAgentId)
   }
 
   internal fun refreshSystemAgentChat() {
@@ -5212,12 +5234,70 @@ class NodeRuntime private constructor(
   fun selectChatAgent(agentId: String) {
     val normalizedAgentId = agentId.trim()
     if (normalizedAgentId.isEmpty()) return
+    val selectionSequence = chatAgentSelectionSeq.incrementAndGet()
+    val selectionOwner = chatAgentSessionSelectionOwner(normalizedAgentId)
     retirePendingSessionCatalogContinuation()
     stopMessageSpeech()
     // Agent selection owns every main-session consumer; switching chat alone would
     // leave Talk mode bound to the previous agent.
     selectedChatAgentId = normalizedAgentId
     selectMainSessionKey(normalizedAgentId)
+    val selectedMainSessionKey = mainSessionKey.value
+    scope.launch {
+      val candidates =
+        try {
+          chatAgentSessionCandidatesOverrideForTests?.invoke(normalizedAgentId)
+            ?: chat.fetchSessionSelectionCandidates(normalizedAgentId)
+        } catch (err: CancellationException) {
+          throw err
+        } catch (_: Throwable) {
+          emptyList()
+        } ?: return@launch
+      if (
+        chatAgentSelectionSeq.get() != selectionSequence ||
+        selectedChatAgentId != normalizedAgentId ||
+        chatAgentSessionSelectionOwner(normalizedAgentId) != selectionOwner ||
+        mainSessionKey.value != selectedMainSessionKey
+      ) {
+        return@launch
+      }
+      val remembered = lastSelectedChatSessionByOwner[selectionOwner]
+      val target =
+        selectChatAgentSessionKey(
+          candidates = candidates,
+          agentId = normalizedAgentId,
+          rememberedSessionKey = remembered,
+          mainSessionKey = selectedMainSessionKey,
+        )
+      if (
+        remembered != null &&
+        candidates.none { entry -> entry.key == remembered && entry.archived != true }
+      ) {
+        lastSelectedChatSessionByOwner.remove(selectionOwner, remembered)
+      }
+      if (target != selectedMainSessionKey) {
+        chat.switchSession(target, normalizedAgentId)
+      }
+    }
+  }
+
+  private fun chatAgentSessionSelectionOwner(agentId: String): ChatAgentSessionSelectionOwner =
+    ChatAgentSessionSelectionOwner(
+      gatewayStableId = connectedEndpoint?.stableId ?: prefs.gatewayRegistry.activeStableId.value,
+      agentId = agentId,
+    )
+
+  private fun rememberSelectedChatSession(
+    sessionKey: String,
+    ownerAgentId: String?,
+  ) {
+    val key = sessionKey.trim().takeIf(String::isNotEmpty) ?: return
+    val agentId =
+      resolveAgentIdFromMainSessionKey(key)
+        ?: ownerAgentId?.trim()?.takeIf(String::isNotEmpty)
+        ?: selectedChatAgentId
+        ?: return
+    lastSelectedChatSessionByOwner[chatAgentSessionSelectionOwner(agentId)] = key
   }
 
   suspend fun fetchChatSessionList(
@@ -5966,7 +6046,9 @@ class NodeRuntime private constructor(
             _sessionCatalogState.value = _sessionCatalogState.value.copy(continuingEntryId = null)
             if (sessionCatalogSelectionSeq.compareAndSet(selectionSeq, selectionSeq + 1)) {
               stopMessageSpeech()
+              chatAgentSelectionSeq.incrementAndGet()
               chat.switchSession(sessionKey, entry.agentId)
+              rememberSelectedChatSession(sessionKey, entry.agentId)
               opened = true
             }
           }
@@ -9735,6 +9817,36 @@ fun channelDisplayLabel(channel: String): String =
         .joinToString(" ") { token -> token.replaceFirstChar { it.uppercase() } }
         .ifBlank { "Channel" }
   }
+
+internal fun selectChatAgentSessionKey(
+  candidates: List<ChatSessionEntry>,
+  agentId: String,
+  rememberedSessionKey: String?,
+  mainSessionKey: String,
+): String {
+  val normalizedAgentId = agentId.trim()
+  val ownerSessions =
+    candidates.filter { entry ->
+      val owner = resolveAgentIdFromMainSessionKey(entry.key) ?: entry.ownerAgentId
+      owner == null || owner == normalizedAgentId
+    }
+  rememberedSessionKey
+    ?.takeIf { remembered -> ownerSessions.any { entry -> entry.key == remembered && entry.archived != true } }
+    ?.let { return it }
+  return ownerSessions
+    .asSequence()
+    .filter { entry ->
+      entry.archived != true &&
+        entry.isMain != true &&
+        entry.key != mainSessionKey &&
+        entry.key != "main"
+    }.maxWithOrNull(
+      compareBy<ChatSessionEntry> { entry ->
+        entry.lastActivityAt ?: entry.updatedAtMs ?: Long.MIN_VALUE
+      }.thenBy { entry -> entry.key },
+    )?.key
+    ?: mainSessionKey
+}
 
 private fun gatewayControlPageTlsFingerprint(
   prefs: SecurePrefs,

@@ -32,6 +32,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
+import java.util.Locale
 
 /** Gateway Control UI dashboard for one chat session. */
 @Composable
@@ -43,6 +44,9 @@ internal fun SessionDashboardScreen(
   val isConnected by viewModel.isConnected.collectAsState()
   val controlPage by viewModel.gatewayControlPage.collectAsState()
   val desktopObserveAvailable by viewModel.desktopObserveAvailable.collectAsState()
+  val sessionOwnerAgentId by viewModel.chatSessionOwnerAgentId.collectAsState()
+  val gatewayDefaultAgentId by viewModel.gatewayDefaultAgentId.collectAsState()
+  val mainSessionKey by viewModel.mainSessionKey.collectAsState()
   var showingDesktop by rememberSaveable(sessionKey) { mutableStateOf(false) }
   if (showingDesktop) {
     // The viewer replaces this screen in place rather than pushing a shell tab, so it must
@@ -89,10 +93,16 @@ internal fun SessionDashboardScreen(
       Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
         val page = controlPage
         if (isConnected && page != null) {
-          key(page, sessionKey) {
+          key(page, sessionKey, sessionOwnerAgentId, gatewayDefaultAgentId, mainSessionKey) {
             ControlUiWebView(
               page = page,
-              url = sessionDashboardUrl(baseUrl = page.baseUrl, sessionKey = sessionKey),
+              url =
+                sessionDashboardUrl(
+                  baseUrl = page.baseUrl,
+                  sessionKey = sessionKey,
+                  fallbackAgentId = sessionOwnerAgentId ?: gatewayDefaultAgentId,
+                  mainSessionKey = mainSessionKey,
+                ),
               modifier = Modifier.fillMaxSize(),
             )
           }
@@ -120,22 +130,105 @@ internal fun SessionDashboardScreen(
 }
 
 /**
- * Builds the one-shot dashboard route without placing credentials in the URL.
- * Appends to the served base like the terminal screen so a Control UI mounted
- * under gateway.controlUi.basePath keeps its prefix.
+ * Mirrors the Control UI session-path contract without placing credentials in the URL.
+ * The direct dashboard route preserves a configured gateway.controlUi.basePath.
  */
 internal fun sessionDashboardUrl(
   baseUrl: String,
   sessionKey: String,
-): String =
-  baseUrl
-    .trimEnd('/')
-    .toUri()
+  fallbackAgentId: String? = null,
+  mainSessionKey: String? = null,
+): String {
+  val rawKey = sessionKey.trim().ifEmpty { "main" }
+  val parsed = parseAgentSessionKey(rawKey)
+  val agentId = normalizeDashboardAgentId(parsed?.first ?: fallbackAgentId)
+  val rest = parsed?.second ?: rawKey
+  val configuredMainKey =
+    mainSessionKey
+      ?.trim()
+      ?.takeIf(String::isNotEmpty)
+      ?.let { key -> parseAgentSessionKey(key)?.second ?: key }
+      ?.lowercase(Locale.ROOT)
+      ?: "main"
+  val normalizedRest = rest.lowercase(Locale.ROOT)
+  val routeSegments =
+    when {
+      (parsed == null && normalizedRest == "main") ||
+        normalizedRest == configuredMainKey ||
+        normalizedRest == "global" -> emptyList()
+      else -> dashboardSessionRestSegments(rest, configuredMainKey)
+    }
+  val uri = baseUrl.trimEnd('/').toUri()
+  val basePath = uri.encodedPath.orEmpty().trimEnd('/')
+  val encodedRoute =
+    buildList {
+      add("dashboard")
+      add(encodeDashboardPathSegment(agentId))
+      addAll(routeSegments)
+    }.joinToString("/")
+  return uri
     .buildUpon()
-    .appendPath("chat")
+    .encodedPath("$basePath/$encodedRoute")
     .clearQuery()
     .fragment(null)
-    .appendQueryParameter("session", sessionKey)
-    .appendQueryParameter("face", "dashboard")
     .build()
     .toString()
+}
+
+private val dashboardSessionUuidSuffix =
+  Regex("([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$", RegexOption.IGNORE_CASE)
+private val dashboardShortSessionRef = Regex("^(?:.*-)?[0-9a-f]{8,32}$", RegexOption.IGNORE_CASE)
+
+private fun parseAgentSessionKey(sessionKey: String): Pair<String, String>? {
+  val parts = sessionKey.split(':')
+  if (parts.size < 3 || !parts.first().equals("agent", ignoreCase = true)) return null
+  val agentId = parts[1].trim().takeIf(String::isNotEmpty) ?: return null
+  val rest = parts.drop(2)
+  if (rest.any(String::isEmpty)) return null
+  return agentId to rest.joinToString(":")
+}
+
+private fun normalizeDashboardAgentId(agentId: String?): String {
+  val trimmed = agentId?.trim().orEmpty()
+  val normalized =
+    trimmed
+      .lowercase(Locale.ROOT)
+      .replace(Regex("[^a-z0-9_-]+"), "-")
+      .trim('-')
+      .take(64)
+  return normalized.ifEmpty { "main" }
+}
+
+private fun dashboardSessionRestSegments(
+  rest: String,
+  configuredMainKey: String,
+): List<String> {
+  val uuid =
+    dashboardSessionUuidSuffix
+      .find(rest)
+      ?.groupValues
+      ?.get(1)
+      ?.replace("-", "")
+      ?.lowercase(Locale.ROOT)
+  if (uuid != null) {
+    var length = 8
+    while (length < uuid.length && uuid.take(length).equals(configuredMainKey, ignoreCase = true)) length += 1
+    return listOf(uuid.take(length))
+  }
+  val segments = rest.split(':')
+  if (segments.size == 1 && dashboardShortSessionRef.matches(segments.first())) {
+    return listOf("~key", encodeDashboardPathSegment(segments.first()))
+  }
+  return segments.map(::encodeDashboardPathSegment)
+}
+
+private fun encodeDashboardPathSegment(segment: String): String =
+  when (segment) {
+    "." -> "~dot"
+    ".." -> "~dotdot"
+    else ->
+      android.net.Uri
+        .encode(segment)
+        .replace(".", "%2E")
+        .let { encoded -> if (encoded.startsWith("~")) "~$encoded" else encoded }
+  }

@@ -1,5 +1,6 @@
 package ai.openclaw.app.chat
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -169,6 +170,50 @@ class ChatControllerTranscriptCacheTest {
         controller.sendMessageAwaitAcceptance(message = "hi", thinkingLevel = "off", attachments = emptyList())
       assertFalse(accepted)
       assertEquals("Gateway health not OK; cannot send", controller.errorText.value)
+    }
+
+  @Test
+  fun sessionSelectionCandidatesFallBackToRequestedOwnersCacheWhenOffline() =
+    runTest {
+      val cache = FakeTranscriptCache()
+      cache.sessionsByOwner["gateway-a" to "scout"] =
+        listOf(
+          ChatSessionEntry(
+            key = "agent:scout:cached",
+            updatedAtMs = 10,
+            ownerAgentId = "scout",
+          ),
+        )
+      val controller =
+        createCachedController(cache) { _, _ -> throw IllegalStateException("offline") }
+
+      val candidates = controller.fetchSessionSelectionCandidates("scout").orEmpty()
+
+      assertEquals(listOf("agent:scout:cached"), candidates.map { it.key })
+      assertEquals(listOf("scout"), candidates.map { it.ownerAgentId })
+      assertTrue(controller.sessions.value.isEmpty())
+    }
+
+  @Test
+  fun sessionSelectionCandidateCacheCancellationStopsBeforeNetworkRequest() =
+    runTest {
+      val cache = FakeTranscriptCache()
+      cache.beforeSessionsLoad = { _, _ -> throw CancellationException("superseded") }
+      var networkRequests = 0
+      val controller =
+        createCachedController(cache) { _, _ ->
+          networkRequests += 1
+          error("network must not run after cancellation")
+        }
+
+      try {
+        controller.fetchSessionSelectionCandidates("scout")
+        throw AssertionError("expected CancellationException to propagate")
+      } catch (_: CancellationException) {
+        // Owner lookup cancellation must stop before a stale network fallback can start.
+      }
+
+      assertEquals(0, networkRequests)
     }
 
   @Test

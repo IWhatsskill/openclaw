@@ -2220,6 +2220,46 @@ class ChatController internal constructor(
     }
   }
 
+  /** Loads sessions for another agent without changing the visible chat owner. */
+  internal suspend fun fetchSessionSelectionCandidates(agentId: String): List<ChatSessionEntry>? {
+    val ownerAgentId = agentId.trim().takeIf(String::isNotEmpty) ?: return emptyList()
+    val requestCacheScope = currentCacheScope()
+    val cachedSessions =
+      try {
+        requestCacheScope
+          ?.let { cacheScope ->
+            transcriptCache
+              ?.loadSessions(cacheScope.gatewayId, ownerAgentId)
+              .orEmpty()
+              .map { session -> session.copy(ownerAgentId = ownerAgentId) }
+          }.orEmpty()
+      } catch (err: CancellationException) {
+        throw err
+      } catch (_: Throwable) {
+        emptyList()
+      }
+    if (requestCacheScope == null) return cachedSessions
+
+    return try {
+      val params =
+        buildJsonObject {
+          put("includeGlobal", JsonPrimitive(true))
+          put("includeUnknown", JsonPrimitive(false))
+          put("agentId", JsonPrimitive(ownerAgentId))
+          put("limit", JsonPrimitive(SESSION_LIST_FETCH_LIMIT))
+        }
+      parseSessions(
+        requestGatewayBound(requestCacheScope.gatewayId, "sessions.list", params.toString()),
+      ).sessions
+        .map { session -> session.copy(ownerAgentId = ownerAgentId) }
+        .takeIf { requestCacheScope == currentCacheScope() }
+    } catch (err: CancellationException) {
+      throw err
+    } catch (_: Throwable) {
+      cachedSessions.takeIf { requestCacheScope == currentCacheScope() }
+    }
+  }
+
   /** Starts a fresh chat for the active gateway session key. */
   fun startNewChat(worktree: Boolean = false) {
     scope.launch { startNewChatAwait(worktree = worktree) }
