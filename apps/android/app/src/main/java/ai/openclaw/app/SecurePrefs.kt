@@ -765,8 +765,8 @@ class SecurePrefs(
       return deduplicatePendingAppearancePreferences(
         decoded.filter { preference ->
           preference.key in appearanceSyncKeys &&
-            (preference.gatewayStableId == null || preference.gatewayStableId.isNotBlank()) &&
-            (preference.profileId == null || preference.profileId.isNotBlank())
+            !preference.gatewayStableId.isNullOrBlank() &&
+            !preference.profileId.isNullOrBlank()
         },
       )
     }
@@ -921,30 +921,6 @@ class SecurePrefs(
   internal fun isAppearancePreferenceLocalOnly(key: String): Boolean = key in localOnlyAppearancePreferenceKeys
 
   @Synchronized
-  internal fun promotePendingAppearancePreferencesToLocal(gatewayStableId: String) {
-    val belongsToOwnerlessScope: (PendingAppearancePreference) -> Boolean = { preference ->
-      preference.gatewayStableId == null ||
-        (
-          preference.gatewayStableId == gatewayStableId &&
-            preference.profileId == null
-        )
-    }
-    val promotedKeys =
-      pendingAppearancePreferences
-        .filter(belongsToOwnerlessScope)
-        .mapTo(mutableSetOf(), PendingAppearancePreference::key)
-    if (promotedKeys.isEmpty()) return
-    val nextPending = pendingAppearancePreferences.filterNot(belongsToOwnerlessScope)
-    val nextLocalOnly = localOnlyAppearancePreferenceKeys + promotedKeys
-    plainPrefs.edit {
-      persistPendingAppearancePreferences(this, nextPending)
-      persistLocalOnlyAppearancePreferenceKeys(this, nextLocalOnly)
-    }
-    pendingAppearancePreferences = nextPending
-    localOnlyAppearancePreferenceKeys = nextLocalOnly
-  }
-
-  @Synchronized
   internal fun pendingAppearancePreferenceKeysForGateway(gatewayStableId: String): Set<String> =
     pendingAppearancePreferences
       .asSequence()
@@ -953,42 +929,17 @@ class SecurePrefs(
 
   @Synchronized
   internal fun pendingAppearancePreferenceEntries(
-    scope: AppearancePreferenceScope? = null,
-    adoptUnscoped: Boolean = false,
-  ): Map<String, String?> {
-    if (scope != null && adoptUnscoped) {
-      val adopted =
-        deduplicatePendingAppearancePreferences(
-          pendingAppearancePreferences.map { preference ->
-            when {
-              preference.gatewayStableId == null ->
-                preference.copy(
-                  gatewayStableId = scope.gatewayStableId,
-                  profileId = scope.profileId,
-                )
-              preference.gatewayStableId == scope.gatewayStableId &&
-                preference.profileId == null &&
-                scope.profileId != null ->
-                preference.copy(profileId = scope.profileId)
-              else -> preference
-            }
-          },
-        )
-      if (adopted != pendingAppearancePreferences) {
-        plainPrefs.edit { persistPendingAppearancePreferences(this, adopted) }
-        pendingAppearancePreferences = adopted
-      }
-    }
-    return pendingAppearancePreferences
+    scope: AppearancePreferenceScope,
+  ): Map<String, String?> =
+    pendingAppearancePreferences
       .filter { it.matches(scope) }
       .associate { it.key to it.value }
-  }
 
   @Synchronized
   internal fun completePendingAppearancePreferenceWrite(
     key: String,
     expectedValue: String?,
-    scope: AppearancePreferenceScope? = null,
+    scope: AppearancePreferenceScope,
   ): Boolean {
     val current =
       pendingAppearancePreferences.lastOrNull { preference ->
@@ -1050,38 +1001,28 @@ class SecurePrefs(
     key: String,
     value: String?,
     scope: AppearancePreferenceScope?,
-  ): List<PendingAppearancePreference> =
-    deduplicatePendingAppearancePreferences(
+  ): List<PendingAppearancePreference> {
+    require(scope?.profileId != null) { "Appearance sync requires a confirmed profile" }
+    return deduplicatePendingAppearancePreferences(
       pendingAppearancePreferences +
         PendingAppearancePreference(
-          gatewayStableId = scope?.gatewayStableId,
-          profileId = scope?.profileId,
+          gatewayStableId = scope.gatewayStableId,
+          profileId = scope.profileId,
           key = key,
           value = value,
         ),
     )
+  }
 
   private fun deduplicatePendingAppearancePreferences(
     preferences: List<PendingAppearancePreference>,
-  ): List<PendingAppearancePreference> {
-    val byOwnerAndKey =
-      linkedMapOf<Triple<String?, String?, String>, PendingAppearancePreference>()
-    preferences.forEach { preference ->
-      val key = Triple(preference.gatewayStableId, preference.profileId, preference.key)
-      // Adoption can merge unknown-profile and profile-owned edits. Preserve last-edit
-      // order across persistence rather than keeping a replaced entry's first position.
-      byOwnerAndKey.remove(key)
-      byOwnerAndKey[key] = preference
-    }
-    return byOwnerAndKey.values.toList()
-  }
+  ): List<PendingAppearancePreference> =
+    preferences
+      .associateBy { Triple(it.gatewayStableId, it.profileId, it.key) }
+      .values
+      .toList()
 
-  private fun PendingAppearancePreference.matches(scope: AppearancePreferenceScope?): Boolean =
-    if (scope == null) {
-      gatewayStableId == null
-    } else {
-      gatewayStableId == scope.gatewayStableId && profileId == scope.profileId
-    }
+  private fun PendingAppearancePreference.matches(scope: AppearancePreferenceScope): Boolean = gatewayStableId == scope.gatewayStableId && profileId == scope.profileId
 
   private fun loadLocalOnlyAppearancePreferenceKeys(): Set<String> =
     plainPrefs

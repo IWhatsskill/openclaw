@@ -12,15 +12,21 @@ import ai.openclaw.app.SessionCatalogHost
 import ai.openclaw.app.SessionCatalogState
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.closeNodeRuntimeTestFixture
+import ai.openclaw.app.defaultSidebarPageOrder
 import ai.openclaw.app.ui.design.ClawDesignTheme
 import android.content.Context
 import android.provider.Settings
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.test.TouchInjectionScope
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModelStore
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -300,6 +306,167 @@ class SidebarCatalogGroupingTest {
     assertFalse(sidebarCatalogSessionSelectionEnabled(remote, canMutateSessions = false))
     assertTrue(sidebarCatalogSessionSelectionEnabled(remote, canMutateSessions = true))
     assertFalse(sidebarCatalogSessionSelectionEnabled(unavailable, canMutateSessions = true))
+  }
+
+  @Test
+  fun inlinePageDragSkipsHiddenPagesWhileEditKeepsTheFullOrder() {
+    val app = RuntimeEnvironment.getApplication() as NodeApp
+    val originalAnimatorScale = Settings.Global.getString(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE)
+    val prefs = SecurePrefs(app, app.getSharedPreferences("sidebar-pages-${UUID.randomUUID()}", Context.MODE_PRIVATE))
+    val runtime = NodeRuntime(app, prefs, NodeRuntimeMode.ScreenshotFixture)
+    val viewModel = MainViewModel(app, prefs, SavedStateHandle())
+    val viewModels = ViewModelStore().apply { put("sidebar", viewModel) }
+    val dragStates = mutableListOf<Boolean>()
+    val dragOnePageDown: TouchInjectionScope.() -> Unit = {
+      down(center)
+      advanceEventTime(viewConfiguration.longPressTimeoutMillis + 1L)
+      moveBy(Offset(0f, 52.dp.toPx()))
+      up()
+    }
+
+    try {
+      Settings.Global.putFloat(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 0f)
+      prefs.setSidebarPageOrder(defaultSidebarPageOrder)
+      prefs.setSidebarVisiblePages(listOf("settings", "home", "skills", "threads"))
+      ReflectionHelpers.getField<MutableStateFlow<NodeRuntime?>>(viewModel, "runtimeRef").value = runtime
+      composeRule.setContent {
+        ClawDesignTheme {
+          OpenClawSidebar(
+            viewModel = viewModel,
+            agents = emptyList(),
+            selectedAgentId = "main",
+            sessions = emptyList(),
+            activeSessionKey = "main",
+            activeDestination = null,
+            connection = GatewayConnectionDisplay(false, "Offline", null),
+            drawerActive = true,
+            showCloseButton = false,
+            onClose = {},
+            onDragActiveChange = { dragStates += it },
+            onNewSession = {},
+            onSelectAgent = {},
+            onSelectSession = {},
+            onSelectCatalogSession = {},
+            onCreateCatalogSession = {},
+            onSelectDestination = {},
+          )
+        }
+      }
+      composeRule.onNodeWithText("Work").assertDoesNotExist()
+      composeRule.onNodeWithText("Home").assertIsDisplayed()
+      composeRule.onNodeWithText("Settings").assertIsDisplayed().performTouchInput(dragOnePageDown)
+
+      composeRule.runOnIdle {
+        assertEquals(listOf(true, false), dragStates)
+        assertEquals(listOf("home", "work", "settings", "skills", "threads"), prefs.sidebarPageOrder.value)
+      }
+      val homeTop =
+        composeRule
+          .onNodeWithText("Home")
+          .fetchSemanticsNode()
+          .boundsInRoot.top
+      val settingsTop =
+        composeRule
+          .onNodeWithText("Settings")
+          .fetchSemanticsNode()
+          .boundsInRoot.top
+      assertTrue("One drag must move Settings below the next visible page", homeTop < settingsTop)
+
+      composeRule.onNodeWithTag("sidebar-pages-menu").performClick()
+      composeRule.onNodeWithText("Edit pinned items").performClick()
+      composeRule.onNodeWithText("EDIT PINNED ITEMS").assertIsDisplayed()
+      composeRule.onNodeWithText("Work").assertIsDisplayed().performTouchInput(dragOnePageDown)
+      composeRule.runOnIdle {
+        assertEquals(listOf("home", "settings", "work", "skills", "threads"), prefs.sidebarPageOrder.value)
+        assertEquals(listOf("settings", "home", "skills", "threads"), prefs.sidebarVisiblePages.value)
+      }
+    } finally {
+      viewModels.clear()
+      try {
+        closeNodeRuntimeTestFixture(runtime)
+      } finally {
+        Settings.Global.putString(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, originalAnimatorScale)
+      }
+    }
+  }
+
+  @Test
+  fun catalogRefreshKeepsPinnedSessionsWhileDeduplicatingRecent() {
+    val app = RuntimeEnvironment.getApplication() as NodeApp
+    val originalAnimatorScale = Settings.Global.getString(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE)
+    val prefs = SecurePrefs(app, app.getSharedPreferences("sidebar-catalog-${UUID.randomUUID()}", Context.MODE_PRIVATE))
+    val runtime = NodeRuntime(app, prefs, NodeRuntimeMode.ScreenshotFixture)
+    val viewModel = MainViewModel(app, prefs, SavedStateHandle())
+    val viewModels = ViewModelStore().apply { put("sidebar", viewModel) }
+    val pinned = entry("catalog-pinned", cwd = "/work/project", recency = 3.0).copy(name = "Pinned catalog session")
+    val recent = entry("catalog-recent", cwd = "/work/project", recency = 2.0).copy(name = "Catalog recent session")
+    val pinnedKey = requireNotNull(pinned.sessionKey)
+    val sessions =
+      listOf(
+        ChatSessionEntry(key = pinnedKey, updatedAtMs = 3, ownerAgentId = "main", label = pinned.name, pinned = true),
+        ChatSessionEntry(key = requireNotNull(recent.sessionKey), updatedAtMs = 2, ownerAgentId = "main", label = recent.name),
+        ChatSessionEntry(key = "agent:main:ordinary-recent", updatedAtMs = 1, ownerAgentId = "main", label = "Ordinary recent session"),
+      )
+    val catalogState = ReflectionHelpers.getField<MutableStateFlow<SessionCatalogState>>(runtime, "_sessionCatalogState")
+    var selectedSessionKey: String? = null
+
+    try {
+      Settings.Global.putFloat(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 0f)
+      catalogState.value = SessionCatalogState(agentId = "main", catalogs = emptyList())
+      ReflectionHelpers.getField<MutableStateFlow<Boolean>>(runtime, "_sessionCatalogAvailable").value = true
+      ReflectionHelpers.getField<MutableStateFlow<NodeRuntime?>>(viewModel, "runtimeRef").value = runtime
+      composeRule.setContent {
+        ClawDesignTheme {
+          OpenClawSidebar(
+            viewModel = viewModel,
+            agents = emptyList(),
+            selectedAgentId = "main",
+            sessions = sessions,
+            activeSessionKey = pinnedKey,
+            activeDestination = null,
+            connection = GatewayConnectionDisplay(false, "Offline", null),
+            drawerActive = true,
+            showCloseButton = false,
+            onClose = {},
+            onDragActiveChange = {},
+            onNewSession = {},
+            onSelectAgent = {},
+            onSelectSession = { selectedSessionKey = it.key },
+            onSelectCatalogSession = {},
+            onCreateCatalogSession = {},
+            onSelectDestination = {},
+          )
+        }
+      }
+      composeRule.onNodeWithText("Pinned").performScrollTo().performClick()
+      composeRule.onNodeWithText("Pinned catalog session").performScrollTo().assertIsDisplayed()
+      composeRule.onNodeWithText("Recent").performScrollTo().performClick()
+      composeRule.onNodeWithText("Catalog recent session").performScrollTo().assertIsDisplayed()
+
+      composeRule.runOnIdle {
+        catalogState.value =
+          SessionCatalogState(
+            agentId = "main",
+            catalogs = listOf(SessionCatalog(id = "codex", label = "Codex", hosts = listOf(host("codex", sessions = listOf(pinned, recent))))),
+          )
+      }
+      composeRule.onNodeWithText("Codex").performScrollTo().assertIsDisplayed()
+      composeRule.onNodeWithText("Ordinary recent session").performScrollTo().assertIsDisplayed()
+      composeRule.onNodeWithText("Catalog recent session").assertDoesNotExist()
+      composeRule
+        .onNodeWithText("Pinned catalog session")
+        .performScrollTo()
+        .assertIsDisplayed()
+        .performClick()
+      composeRule.runOnIdle { assertEquals(pinnedKey, selectedSessionKey) }
+    } finally {
+      viewModels.clear()
+      try {
+        closeNodeRuntimeTestFixture(runtime)
+      } finally {
+        Settings.Global.putString(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, originalAnimatorScale)
+      }
+    }
   }
 
   @Test

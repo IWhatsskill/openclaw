@@ -31,6 +31,108 @@ import kotlin.coroutines.intrinsics.suspendCoroutineUninterceptedOrReturn
 @Config(sdk = [34])
 class SessionCatalogRuntimeTest {
   @Test
+  fun olderProgressCannotPopulateAnotherAgentsCatalogWhenItsRefreshFails() =
+    runBlocking {
+      val app = RuntimeEnvironment.getApplication()
+      val securePrefs =
+        app.getSharedPreferences(
+          "openclaw.node.session.catalog.test.${UUID.randomUUID()}",
+          Context.MODE_PRIVATE,
+        )
+      val runtime = NodeRuntime(app, SecurePrefs(app, securePrefsOverride = securePrefs))
+      val mainProgressId = CompletableDeferred<String>()
+      val releaseMain = CompletableDeferred<Unit>()
+      val workStarted = CompletableDeferred<Unit>()
+      val releaseWork = CompletableDeferred<Unit>()
+      val progressHandled = CompletableDeferred<Unit>()
+      var progressThread: Thread? = null
+      try {
+        ReflectionHelpers.setField(runtime, "connectedEndpoint", GatewayEndpoint.manual("127.0.0.1", 18789))
+        ReflectionHelpers.setField(runtime, "operatorConnected", true)
+        ReflectionHelpers.getField<MutableStateFlow<Boolean>>(runtime, "_sessionCatalogAvailable").value = true
+        runtime.gatewayDataRequestOverrideForTests = { _, method, params ->
+          check(method == "sessions.catalog.list")
+          val request = Json.parseToJsonElement(requireNotNull(params)).jsonObject
+          when (request["agentId"]?.jsonPrimitive?.content) {
+            "main" -> {
+              mainProgressId.complete(requireNotNull(request["progressId"]).jsonPrimitive.content)
+              releaseMain.await()
+              """{"catalogs":[]}"""
+            }
+            "work" -> {
+              workStarted.complete(Unit)
+              releaseWork.await()
+              error("Work catalog unavailable")
+            }
+            else -> error("Unexpected catalog request")
+          }
+        }
+
+        val mainRefresh =
+          async(start = CoroutineStart.UNDISPATCHED) {
+            invokeRefreshSessionCatalogFromGateway(runtime, "main")
+          }
+        val progressId = withTimeout(2_000) { mainProgressId.await() }
+        val progress =
+          """{"progressId":"$progressId","agentId":"main","catalog":{"id":"codex","label":"Main catalog","hosts":[{"hostId":"desktop","label":"Desktop","kind":"node","connected":true,"sessions":[{"threadId":"main-thread","status":"idle","canContinue":true}]}]}}"""
+        val eventHandler =
+          NodeRuntime::class.java
+            .getDeclaredMethod("handleGatewayEvent", String::class.java, String::class.java)
+            .apply { isAccessible = true }
+        eventHandler.invoke(runtime, "sessions.catalog.host", progress)
+        assertEquals(
+          "Main catalog",
+          runtime.sessionCatalogState.value.catalogs
+            .single()
+            .label,
+        )
+
+        val delayedProgress =
+          Thread {
+            try {
+              eventHandler.invoke(runtime, "sessions.catalog.host", progress)
+              progressHandled.complete(Unit)
+            } catch (err: Throwable) {
+              progressHandled.completeExceptionally(err)
+            }
+          }
+        progressThread = delayedProgress
+        val dataLock = ReflectionHelpers.getField<Any>(runtime, "gatewayDataScopeLock")
+        val workRefresh =
+          synchronized(dataLock) {
+            delayedProgress.start()
+            val deadline = System.nanoTime() + 2_000_000_000L
+            while (delayedProgress.state != Thread.State.BLOCKED && System.nanoTime() < deadline) {
+              Thread.yield()
+            }
+            assertEquals("Progress must wait at the held publication lock", Thread.State.BLOCKED, delayedProgress.state)
+            val refresh =
+              async(start = CoroutineStart.UNDISPATCHED) {
+                invokeRefreshSessionCatalogFromGateway(runtime, "work")
+              }
+            assertTrue("Replacement refresh must reach its request before progress resumes", workStarted.isCompleted)
+            refresh
+          }
+        withTimeout(2_000) { progressHandled.await() }
+        releaseWork.complete(Unit)
+        withTimeout(2_000) { workRefresh.await() }
+        releaseMain.complete(Unit)
+        withTimeout(2_000) { mainRefresh.await() }
+
+        val state = runtime.sessionCatalogState.value
+        assertEquals("work", state.agentId)
+        assertFalse(state.loading)
+        assertTrue(!state.errorText.isNullOrBlank())
+        assertTrue("Late main progress must not survive the work agent's failed refresh", state.catalogs.isEmpty())
+      } finally {
+        releaseMain.complete(Unit)
+        releaseWork.complete(Unit)
+        progressThread?.join(2_000)
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    }
+
+  @Test
   fun loadMoreDuringRefreshIsIgnoredAndRetryKeepsTheAppendedPage() =
     runBlocking {
       val app = RuntimeEnvironment.getApplication()
@@ -85,6 +187,11 @@ class SessionCatalogRuntimeTest {
 
         runtime.refreshSessionCatalog("main")
         withTimeout(2_000) { refreshStarted.await() }
+        val ignoredRefresh =
+          async(start = CoroutineStart.UNDISPATCHED) {
+            invokeRefreshSessionCatalogFromGateway(runtime, "main")
+          }
+        withTimeout(2_000) { ignoredRefresh.await() }
         val ignoredLoadMore =
           async(start = CoroutineStart.UNDISPATCHED) {
             invokeLoadMoreSessionCatalogFromGateway(runtime, "codex")
@@ -117,6 +224,81 @@ class SessionCatalogRuntimeTest {
         assertEquals(1, state.loadedPageDepthsByHost[sessionCatalogHostKey("codex", "desktop")])
       } finally {
         releaseRefresh.complete(Unit)
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    }
+
+  @Test
+  fun paginationCannotLeaveLoadingStateAfterAnotherAgentsRefresh() =
+    runBlocking {
+      val app = RuntimeEnvironment.getApplication()
+      val securePrefs =
+        app.getSharedPreferences(
+          "openclaw.node.session.catalog.test.${UUID.randomUUID()}",
+          Context.MODE_PRIVATE,
+        )
+      val runtime = NodeRuntime(app, SecurePrefs(app, securePrefsOverride = securePrefs))
+      val paginationFinished = CompletableDeferred<Unit>()
+      var paginationThread: Thread? = null
+      try {
+        ReflectionHelpers.setField(runtime, "connectedEndpoint", GatewayEndpoint.manual("127.0.0.1", 18789))
+        ReflectionHelpers.setField(runtime, "operatorConnected", true)
+        ReflectionHelpers.getField<MutableStateFlow<Boolean>>(runtime, "_sessionCatalogAvailable").value = true
+        runtime.gatewayDataRequestOverrideForTests = { _, method, params ->
+          check(method == "sessions.catalog.list")
+          val request = Json.parseToJsonElement(requireNotNull(params)).jsonObject
+          val agentId = requireNotNull(request["agentId"]).jsonPrimitive.content
+          val threadId = if ("cursors" in request) "$agentId-next" else "$agentId-first"
+          """{"catalogs":[{"id":"codex","label":"Catalog","hosts":[{"hostId":"desktop","label":"Desktop","kind":"node","connected":true,"nextCursor":"cursor-2","sessions":[{"threadId":"$threadId","status":"idle","canContinue":true}]}]}]}"""
+        }
+        invokeRefreshSessionCatalogFromGateway(runtime, "main")
+        assertEquals("main", runtime.sessionCatalogState.value.agentId)
+        assertFalse(runtime.sessionCatalogState.value.loading)
+
+        val delayedPagination =
+          Thread {
+            try {
+              runBlocking { invokeLoadMoreSessionCatalogFromGateway(runtime, "codex") }
+              paginationFinished.complete(Unit)
+            } catch (err: Throwable) {
+              paginationFinished.completeExceptionally(err)
+            }
+          }
+        paginationThread = delayedPagination
+        val dataLock = ReflectionHelpers.getField<Any>(runtime, "gatewayDataScopeLock")
+        synchronized(dataLock) {
+          delayedPagination.start()
+          val deadline = System.nanoTime() + 2_000_000_000L
+          while (delayedPagination.state != Thread.State.BLOCKED && System.nanoTime() < deadline) {
+            Thread.yield()
+          }
+          assertEquals("Pagination must wait at the held data lock", Thread.State.BLOCKED, delayedPagination.state)
+          val replacement =
+            async(start = CoroutineStart.UNDISPATCHED) {
+              invokeRefreshSessionCatalogFromGateway(runtime, "work")
+            }
+          assertTrue("The replacement refresh must finish before pagination resumes", replacement.isCompleted)
+          assertEquals("work", runtime.sessionCatalogState.value.agentId)
+          assertFalse(runtime.sessionCatalogState.value.loading)
+        }
+        withTimeout(2_000) { paginationFinished.await() }
+
+        val state = runtime.sessionCatalogState.value
+        assertEquals("work", state.agentId)
+        assertTrue(
+          "Retired pagination must not leave the replacement catalog loading more",
+          state.loadingMoreCatalogIds.isEmpty(),
+        )
+        assertTrue(
+          state.catalogs
+            .single()
+            .hosts
+            .single()
+            .sessions
+            .all { it.agentId == "work" },
+        )
+      } finally {
+        paginationThread?.join(2_000)
         closeNodeRuntimeTestFixture(runtime)
       }
     }

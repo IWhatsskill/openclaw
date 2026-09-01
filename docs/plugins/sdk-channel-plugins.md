@@ -60,6 +60,12 @@ them with `listMessageReceiptPlatformIds(...)` or
 `resolveMessageReceiptPrimaryId(...)` instead of keeping parallel `messageIds`
 fields.
 
+Channel actions and adapter capabilities come from the selected plugin
+registration. An omitted `actions`, `message`, or `outbound` surface is not
+filled from another plugin with the same channel ID. Prepared delivery handlers
+created inside a registry scope retain that handle when invoked after the caller
+leaves the scope.
+
 Declare live and finalizer capabilities precisely - core uses these to decide
 what a channel can do, and drift between the declared and actual behavior is a
 contract test failure:
@@ -552,6 +558,13 @@ subscription, and routed-elsewhere notices.
   `bindPending` returns no handle
 - `observe` - optional delivery diagnostics hooks
 
+Native approval runtimes can receive three approval kinds: `exec`, `plugin`,
+and `system-agent`. A `system-agent` request asks an operator to approve a
+Gateway-side persistent change, such as a config write or Gateway restart.
+The runtime must render the typed approval actions and then render the final
+application result. An allowed request can finish as applied or not applied;
+do not treat the recorded approval alone as proof that the change completed.
+
 Other approval helpers:
 
 - Use `createNativeApprovalChannelRouteGates` from
@@ -928,6 +941,9 @@ unrelated inbound runtime helpers.
     runtime, including duplicate-account suppression. If `configured` is omitted,
     diagnostics use a recorded Gateway value when available; otherwise they report
     that configuration status is unavailable.
+    Selection before secret redemption also reads this metadata directly. Directory
+    auto-selection requires `configured: true`; callers can still select the channel
+    explicitly when configuration status is unknown.
 
     Create `src/channel.ts`:
 

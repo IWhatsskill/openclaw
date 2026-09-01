@@ -1,5 +1,6 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.GatewayModelUnavailableReason
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.ui.chat.ChatComposerTextDraftStore
 import kotlinx.coroutines.CompletableDeferred
@@ -78,7 +79,7 @@ class ChatControllerModelSelectionTest {
       val controller =
         createScriptedChatController {
           respond("chat.history") {
-            """{"messages":[],"sessionInfo":{"key":"main","modelProvider":"$modelProvider","model":"$model"}}"""
+            """{"sessionId":"model-session","messages":[],"sessionInfo":{"key":"main","sessionId":"model-session","modelProvider":"$modelProvider","model":"$model"}}"""
           }
           respond("sessions.list") {
             """{"sessions":[{"key":"main","modelProvider":"$modelProvider","model":"$model"}]}"""
@@ -217,6 +218,9 @@ class ChatControllerModelSelectionTest {
       var thinkingLevel = "off"
       val controller =
         createScriptedChatController {
+          respond("chat.history") {
+            """{"sessionId":"thinking-session","messages":[],"sessionInfo":{"key":"main","sessionId":"thinking-session",${thinkingFields(thinkingLevel, "off", "high", "max")}}}"""
+          }
           respond("sessions.list") {
             """{"sessions":[{"key":"main",${thinkingFields(thinkingLevel, "off", "high", "max")}}]}"""
           }
@@ -258,6 +262,9 @@ class ChatControllerModelSelectionTest {
       var thinkingLevel = "off"
       val controller =
         createScriptedChatController {
+          respond("chat.history") {
+            """{"sessionId":"thinking-session","messages":[],"sessionInfo":{"key":"main","sessionId":"thinking-session",${thinkingFields(thinkingLevel, "off", "high", "max")}}}"""
+          }
           respond("sessions.list") {
             """{"sessions":[{"key":"main",${thinkingFields(thinkingLevel, "off", "high", "max")}}]}"""
           }
@@ -467,6 +474,294 @@ class ChatControllerModelSelectionTest {
         listOf("sessions.patch", "chat.send"),
         requests.filter { it == "sessions.patch" || it == "chat.send" },
       )
+    }
+
+  @Test
+  fun immediateSendWaitsForModelCapabilitiesAfterANewerMessageSnapshot() =
+    runTest {
+      val patchStarted = CompletableDeferred<Unit>()
+      val releasePatch = CompletableDeferred<Unit>()
+      val refreshStarted = CompletableDeferred<Unit>()
+      val releaseRefresh = CompletableDeferred<Unit>()
+      val successorStarted = CompletableDeferred<Unit>()
+      val releaseSuccessor = CompletableDeferred<Unit>()
+      var sessionRow =
+        """{"key":"main","sessionId":"model-session","modelProvider":"synthetic","model":"reasoning",${thinkingFields("high", "off", "high")},"permissionMode":null,"permissionModePending":false}"""
+      val (controller, requests) =
+        chatControllerTestSetup {
+          respond("chat.metadata") {
+            """
+            {"commands":[],"models":[
+              {"id":"reasoning","provider":"synthetic","available":true,"input":["text"],"reasoning":true},
+              {"id":"plain","provider":"synthetic","available":true,"input":["text"],"reasoning":false},
+              {"id":"plain-next","provider":"synthetic","available":true,"input":["text"],"reasoning":false}
+            ]}
+            """.trimIndent()
+          }
+          respond("sessions.list") {
+            """{"sessions":[$sessionRow]}"""
+          }
+          respond("chat.history") { paramsJson ->
+            val response = """{"sessionId":"model-session","messages":[],"sessionInfo":$sessionRow}"""
+            val params = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
+            if (params["limit"] == JsonPrimitive(1)) {
+              refreshStarted.complete(Unit)
+              releaseRefresh.await()
+            }
+            response
+          }
+          respond("sessions.patch") { paramsJson ->
+            val params = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
+            val model = (params["model"] as JsonPrimitive).content.removePrefix("synthetic/")
+            sessionRow =
+              """{"key":"main","sessionId":"model-session","modelProvider":"synthetic","model":"$model",${thinkingFields("off", "off")},"permissionMode":null,"permissionModePending":false}"""
+            if (model == "plain") {
+              patchStarted.complete(Unit)
+              releasePatch.await()
+            } else {
+              successorStarted.complete(Unit)
+              releaseSuccessor.await()
+            }
+            """{"entry":$sessionRow,"resolved":{"modelProvider":"synthetic","model":"$model",${thinkingFields("off", "off")}}}"""
+          }
+          respond("chat.send", """{"runId":"run-ok","status":"ok"}""")
+        }
+      controller.handleGatewayEvent("health", null)
+      controller.refreshSessions()
+      advanceUntilIdle()
+      assertEquals("high", controller.thinkingLevel.value)
+
+      val patch = async { controller.setSessionModelAwait("main", "synthetic/plain") }
+      patchStarted.await()
+      val send =
+        async {
+          controller.sendMessageAwaitAcceptance(
+            message = "use the selected model",
+            thinkingLevel = controller.thinkingLevel.value,
+            attachments = emptyList(),
+          )
+        }
+      runCurrent()
+
+      // Message snapshots omit catalog-backed picker options; the exact read must
+      // reconcile them when a newer event prevents applying the rich patch ACK.
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """{"sessionKey":"main","agentId":"main","phase":"message","session":{"key":"main","modelProvider":"synthetic","model":"plain","thinkingLevel":"off","permissionMode":null,"permissionModePending":false}}""",
+      )
+      releasePatch.complete(Unit)
+      try {
+        refreshStarted.await()
+        runCurrent()
+        assertFalse(requests.any { it.first == "chat.send" })
+        controller.setSessionModel("main", "synthetic/plain-next")
+        runCurrent()
+        assertEquals(1, requests.count { it.first == "sessions.patch" })
+        releaseRefresh.complete(Unit)
+        successorStarted.await()
+        runCurrent()
+        assertFalse(requests.any { it.first == "chat.send" })
+      } finally {
+        releaseRefresh.complete(Unit)
+        releaseSuccessor.complete(Unit)
+      }
+
+      assertTrue(patch.await())
+      assertTrue(send.await())
+      val sentParams =
+        json.parseToJsonElement(
+          requests
+            .single { it.first == "chat.send" }
+            .second
+            .orEmpty(),
+        ) as JsonObject
+      assertEquals("off", (sentParams["thinking"] as JsonPrimitive).content)
+      assertEquals("synthetic/plain-next", controller.selectedModelRef.value)
+      assertEquals(
+        listOf("off"),
+        controller.thinkingLevelSelection.value.options
+          .map { it.id },
+      )
+      val historyLimits =
+        requests
+          .filter { it.first == "chat.history" }
+          .map { (json.parseToJsonElement(it.second.orEmpty()) as JsonObject)["limit"] }
+      assertEquals(listOf(JsonPrimitive(1), null), historyLimits)
+    }
+
+  @Test
+  fun modelReconciliationReadsExactSessionWhenItFallsOutsideVisibleWindow() =
+    runTest {
+      val sessionKey = "agent:main:conversation"
+      val patchStarted = CompletableDeferred<Unit>()
+      val releasePatch = CompletableDeferred<Unit>()
+      var patched = false
+      var sessionRow =
+        """{"key":"$sessionKey","agentId":"main","sessionId":"conversation-id","updatedAt":1,"modelProvider":"synthetic","model":"reasoning",${thinkingFields("high", "off", "high")}}"""
+      val (controller, requests) =
+        chatControllerTestSetup {
+          respond("chat.history") {
+            """{"sessionKey":"$sessionKey","sessionId":"conversation-id","messages":[],"sessionInfo":$sessionRow}"""
+          }
+          respond("sessions.list") {
+            if (patched) {
+              // The current window has one row; a newer conversation displaces this one.
+              """{"sessions":[{"key":"agent:main:newer","sessionId":"newer-id","updatedAt":3}],"totalCount":2,"hasMore":true}"""
+            } else {
+              """{"sessions":[$sessionRow]}"""
+            }
+          }
+          respond("sessions.patch") {
+            patched = true
+            sessionRow =
+              """{"key":"$sessionKey","agentId":"main","sessionId":"conversation-id","updatedAt":2,"modelProvider":"synthetic","model":"plain",${thinkingFields("off", "off")}}"""
+            patchStarted.complete(Unit)
+            releasePatch.await()
+            """{"entry":$sessionRow,"resolved":{"modelProvider":"synthetic","model":"plain",${thinkingFields("off", "off")}}}"""
+          }
+          respond("chat.send", """{"runId":"run-ok","status":"ok"}""")
+        }
+      controller.load(sessionKey)
+      advanceUntilIdle()
+      assertEquals("high", controller.thinkingLevel.value)
+
+      val patch = async { controller.setSessionModelAwait(sessionKey, "synthetic/plain") }
+      patchStarted.await()
+      val send = async { controller.sendMessageAwaitAcceptance("keep this draft", "high", emptyList()) }
+      runCurrent()
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """{"sessionKey":"$sessionKey","agentId":"main","phase":"message","session":{"key":"$sessionKey","sessionId":"conversation-id","modelProvider":"synthetic","model":"plain","thinkingLevel":"off","permissionMode":null,"permissionModePending":false}}""",
+      )
+      releasePatch.complete(Unit)
+
+      assertTrue(patch.await())
+      assertTrue(send.await())
+      val sentParams = json.parseToJsonElement(requests.single { it.first == "chat.send" }.second.orEmpty()) as JsonObject
+      assertEquals("off", (sentParams["thinking"] as JsonPrimitive).content)
+      assertEquals("synthetic/plain", controller.selectedModelRef.value)
+      assertEquals(
+        listOf("off"),
+        controller.thinkingLevelSelection.value.options
+          .map { it.id },
+      )
+      assertTrue(controller.pendingSessionSettingsKeys.value.isEmpty())
+      assertNull(controller.errorText.value)
+    }
+
+  @Test
+  fun deletionRetiresActiveAndQueuedModelSelectionsBeforeTheirAcknowledgements() =
+    runTest {
+      val sessionKey = "agent:main:conversation"
+      val patchStarted = CompletableDeferred<Unit>()
+      val releasePatch = CompletableDeferred<Unit>()
+      var deleted = false
+      val (controller, requests) =
+        chatControllerTestSetup {
+          respond("sessions.list") {
+            if (deleted) {
+              """{"sessions":[]}"""
+            } else {
+              """{"sessions":[{"key":"$sessionKey","sessionId":"conversation-id","modelProvider":"synthetic","model":"original"}]}"""
+            }
+          }
+          respond("sessions.patch") { paramsJson ->
+            val params = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
+            val model = (params["model"] as JsonPrimitive).content.removePrefix("synthetic/")
+            if (model == "first") {
+              patchStarted.complete(Unit)
+              releasePatch.await()
+            }
+            """{"entry":{"key":"$sessionKey","sessionId":"conversation-id"},"resolved":{"modelProvider":"synthetic","model":"$model"}}"""
+          }
+        }
+      controller.refreshSessions()
+      advanceUntilIdle()
+      val first = async { controller.setSessionModelAwait(sessionKey, "synthetic/first") }
+      patchStarted.await()
+      val queued = async { controller.setSessionModelAwait(sessionKey, "synthetic/queued") }
+      runCurrent()
+
+      // The patch committed before deletion, but its response is still in flight.
+      deleted = true
+      try {
+        controller.handleGatewayEvent(
+          "sessions.changed",
+          """{"sessionKey":"$sessionKey","sessionId":"conversation-id","agentId":"main","reason":"delete","ts":3}""",
+        )
+        assertFalse(controller.sessions.value.any { it.key == sessionKey })
+      } finally {
+        releasePatch.complete(Unit)
+      }
+      assertTrue(first.await())
+      runCurrent()
+
+      assertFalse(controller.sessions.value.any { it.key == sessionKey })
+      assertFalse(queued.await())
+      assertEquals(1, requests.count { it.first == "sessions.patch" })
+      assertTrue(controller.pendingSessionSettingsKeys.value.isEmpty())
+    }
+
+  @Test
+  fun failedModelReconciliationPreservesWriteAcceptanceAndBlocksSendUntilRefresh() =
+    runTest {
+      val patchStarted = CompletableDeferred<Unit>()
+      val releasePatch = CompletableDeferred<Unit>()
+      var failRefresh = false
+      var sessionRow =
+        """{"key":"main","sessionId":"model-session","modelProvider":"synthetic","model":"reasoning",${thinkingFields("high", "off", "high")}}"""
+      val (controller, requests) =
+        chatControllerTestSetup {
+          respond("sessions.list") {
+            """{"sessions":[$sessionRow]}"""
+          }
+          respond("chat.history") { paramsJson ->
+            val params = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
+            if (params["limit"] == JsonPrimitive(1) && failRefresh) error("history offline")
+            """{"sessionId":"model-session","messages":[],"sessionInfo":$sessionRow}"""
+          }
+          respond("sessions.patch") {
+            sessionRow = """{"key":"main","sessionId":"model-session","modelProvider":"synthetic","model":"plain",${thinkingFields("off", "off")}}"""
+            patchStarted.complete(Unit)
+            releasePatch.await()
+            """{"entry":$sessionRow,"resolved":{"modelProvider":"synthetic","model":"plain",${thinkingFields("off", "off")}}}"""
+          }
+          respond("chat.send", """{"runId":"run-ok","status":"ok"}""")
+        }
+      controller.handleGatewayEvent("health", null)
+      controller.refreshSessions()
+      advanceUntilIdle()
+
+      val patch = async { controller.setSessionModelAwait("main", "synthetic/plain") }
+      patchStarted.await()
+      val send = async { controller.sendMessageAwaitAcceptance("keep this draft", "high", emptyList()) }
+      runCurrent()
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """{"sessionKey":"main","agentId":"main","phase":"message","session":{"key":"main","modelProvider":"synthetic","model":"plain","thinkingLevel":"off","permissionMode":null,"permissionModePending":false}}""",
+      )
+      failRefresh = true
+      releasePatch.complete(Unit)
+
+      assertTrue(patch.await())
+      assertFalse(send.await())
+      assertEquals("Could not refresh session settings. Refresh before sending.", controller.errorText.value)
+      assertFalse(controller.sendMessageAwaitAcceptance("keep this draft", "high", emptyList()))
+      assertFalse(requests.any { it.first == "chat.send" })
+
+      failRefresh = false
+      controller.refreshSessions()
+      advanceUntilIdle()
+
+      assertNull(controller.errorText.value)
+      assertTrue(controller.sendMessageAwaitAcceptance("keep this draft", "high", emptyList()))
+      val sentParams = json.parseToJsonElement(requests.single { it.first == "chat.send" }.second.orEmpty()) as JsonObject
+      assertEquals("off", (sentParams["thinking"] as JsonPrimitive).content)
+      val historyLimits =
+        requests
+          .filter { it.first == "chat.history" }
+          .map { (json.parseToJsonElement(it.second.orEmpty()) as JsonObject)["limit"] }
+      assertEquals(listOf(JsonPrimitive(1), JsonPrimitive(1), null), historyLimits)
     }
 
   @Test
@@ -1410,6 +1705,43 @@ class ChatControllerModelSelectionTest {
     }
 
   @Test
+  fun acceptedMetadataRecoveryUnblocksPermanentAuthSendGate() =
+    runTest {
+      var available = false
+      var unavailableReason: String? = "missing-auth"
+      var sends = 0
+      val controller =
+        createScriptedChatController {
+          respond("chat.metadata") { availabilityMetadata(available, unavailableReason) }
+          respond("sessions.patch", "{}")
+          respond("chat.send") {
+            sends += 1
+            """{"runId":"recovered-send","status":"ok"}"""
+          }
+        }
+      controller.handleGatewayEvent("health", null)
+      advanceUntilIdle()
+      assertTrue(controller.setSessionModelAwait("main", "openai/gpt-5.6-luna"))
+      assertEquals(
+        GatewayModelUnavailableReason.MissingAuth,
+        controller.modelCatalog.value
+          .single()
+          .unavailableReason,
+      )
+
+      assertFalse(controller.sendMessageAwaitAcceptance("blocked", "off", emptyList()))
+      assertEquals(0, sends)
+
+      available = true
+      unavailableReason = null
+      controller.handleGatewayEvent("chat.metadata.changed", "{}")
+      advanceUntilIdle()
+
+      assertTrue(controller.sendMessageAwaitAcceptance("allowed", "off", emptyList()))
+      assertEquals(1, sends)
+    }
+
+  @Test
   fun newerMetadataPublicationFencesOlderResponseAndFailure() =
     runTest {
       for (event in listOf("chat.metadata.changed", "patch", "command-metadata", "reset", "seqGap")) {
@@ -1673,7 +2005,13 @@ class ChatControllerModelSelectionTest {
       assertEquals(listOf("max"), sentThinkingLevels)
     }
 
-  private fun availabilityMetadata(available: Boolean): String = """{"swarmEnabled":false,"commands":[],"models":[{"id":"gpt-5.6-luna","provider":"openai","available":$available,"input":["text"]}]}"""
+  private fun availabilityMetadata(
+    available: Boolean,
+    unavailableReason: String? = null,
+  ): String {
+    val reasonField = unavailableReason?.let { ",\"unavailableReason\":\"$it\"" }.orEmpty()
+    return """{"swarmEnabled":false,"commands":[],"models":[{"id":"gpt-5.6-luna","provider":"openai","available":$available$reasonField,"input":["text"]}]}"""
+  }
 
   private fun thinkingFields(
     level: String?,

@@ -7,7 +7,7 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 - Pair with a Gateway using a QR code, setup code, or manual connection. Gateway credentials are stored encrypted.
 - Stream chat replies, choose models and reasoning effort, manage session permissions, and expand task progress. Dictation, voice messages, and Talk are part of Chat, not a separate Voice tab.
 - Select agents, pin sessions, and browse available native session catalogs from the sidebar. Connecting creates or adopts a dedicated Android session without resetting its history.
-- Choose a theme family, color mode, accent, and app language in **Settings → Appearance**. Appearance choices sync with a connected writable profile; read-only connections keep edits on the device.
+- Choose a theme family, color mode, accent, and app language in **Settings → Appearance**. Theme and accent edits sync with a connected writable profile. Read-only or unknown-profile edits, including new edits after restarting offline, stay on the device; choose them again after connecting to sync. Already profile-bound edits wait for that profile to reconnect.
 - Enable camera, location, and other phone capabilities through onboarding or Settings. Biometric locking, Gateway/chat notifications, and authenticated background presence are supported.
 - Manage installed skills and Gateway-verified ClawHub releases, review Skill Workshop proposals, and inspect or edit automations with the required Gateway access.
 - Use the Wear OS companion for sessions, replies, aborts, and realtime Talk through the paired phone without storing Gateway credentials on the watch.

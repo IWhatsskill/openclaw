@@ -16,18 +16,25 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.DeviceConfigurationOverride
+import androidx.compose.ui.test.FontScale
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.click
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
+import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasSetTextAction
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
@@ -37,7 +44,11 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextReplacement
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModelStore
@@ -255,33 +266,83 @@ class ChatComposerLayoutTest {
 
   @Test
   fun narrowToolbarKeepsModelEffortMicAndPrimaryActionVisible() {
-    showChat()
+    verifyNarrowToolbar(fontScale = 1f)
+  }
+
+  @Test
+  fun largeFontNarrowToolbarKeepsModelEffortMicAndPrimaryActionVisible() {
+    verifyNarrowToolbar(fontScale = 1.3f)
+  }
+
+  private fun verifyNarrowToolbar(fontScale: Float) {
+    val viewModel = showChat(viewportWidth = 320.dp, fontScale = fontScale)
+    composeRule.runOnIdle {
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """{"sessionKey":"${controller.sessionKey.value}","session":{"key":"${controller.sessionKey.value}","agentId":"main","modelProvider":"openai","model":"gpt-5.2","totalTokens":18420,"contextTokens":200000}}""",
+      )
+    }
+    composeRule.waitUntil {
+      viewModel.chatSessions.value.any {
+        it.key == controller.sessionKey.value && it.totalTokens == 18_420L && it.contextTokens == 200_000L
+      }
+    }
     composeRule.onNode(hasSetTextAction()).performClick()
     composeRule.waitForIdle()
 
     val viewport = composeRule.onNodeWithTag("chat-viewport").getUnclippedBoundsInRoot()
+    val model = composeRule.onNodeWithTag("chat-composer-model")
+    val context = composeRule.onNode(hasContentDescription("Context ", substring = true)).assertIsDisplayed()
     val controls =
       listOf(
-        "model" to composeRule.onNodeWithTag("chat-composer-model"),
+        "model" to model,
+        "permissions" to composeRule.onNode(hasContentDescription("Permissions:", substring = true)),
+        "context" to context,
         "effort" to composeRule.onNodeWithTag("chat-composer-thinking"),
         "mic" to composeRule.onNodeWithTag("chat-composer-mic"),
+        "attachment" to composeRule.onNodeWithContentDescription("Add attachment"),
         "stop" to composeRule.onNodeWithContentDescription("Stop"),
       )
     val controlBounds =
       controls.map { (name, node) ->
-        node.assertIsDisplayed()
         val bounds = node.getUnclippedBoundsInRoot()
-        assertTrue("$name must retain width: $bounds", bounds.right > bounds.left)
+        assertTrue("$name must retain a 48dp touch target: $bounds", bounds.right - bounds.left >= 48.dp)
+        assertTrue("$name must retain a 48dp touch target: $bounds", bounds.bottom - bounds.top >= 48.dp)
         assertTrue("$name must stay inside the viewport: $bounds inside $viewport", bounds.left >= viewport.left)
         assertTrue("$name must stay inside the viewport: $bounds inside $viewport", bounds.right <= viewport.right)
+        assertTrue("$name must stay inside the viewport: $bounds inside $viewport", bounds.top >= viewport.top)
+        assertTrue("$name must stay inside the viewport: $bounds inside $viewport", bounds.bottom <= viewport.bottom)
+        node.assertIsDisplayed()
         name to bounds
       }
-    controlBounds.zipWithNext().forEach { (left, right) ->
-      assertTrue(
-        "${left.first} must not overlap ${right.first}: ${left.second} vs ${right.second}",
-        left.second.right <= right.second.left,
-      )
+    controlBounds.forEachIndexed { index, (name, bounds) ->
+      controlBounds.drop(index + 1).forEach { (otherName, otherBounds) ->
+        assertTrue(
+          "$name must not overlap $otherName: $bounds vs $otherBounds",
+          bounds.right <= otherBounds.left ||
+            otherBounds.right <= bounds.left ||
+            bounds.bottom <= otherBounds.top ||
+            otherBounds.bottom <= bounds.top,
+        )
+      }
     }
+
+    val label =
+      composeRule.onNode(
+        hasAnyAncestor(hasTestTag("chat-composer-model")) and SemanticsMatcher.keyIsDefined(SemanticsActions.GetTextLayoutResult),
+        useUnmergedTree = true,
+      )
+    label.assertIsDisplayed()
+    val layouts = mutableListOf<TextLayoutResult>()
+    label.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { action -> assertTrue(action(layouts)) }
+    assertTrue("The model label must paint text, not just its dropdown arrow", layouts.single().getLineEnd(0, visibleEnd = true) > 0)
+
+    model.assertIsEnabled().performTouchInput { click(center) }
+    val expectedModel = AndroidScreenshotFixture.models.single()
+    composeRule
+      .onNode(hasText(expectedModel.name) and hasText(expectedModel.provider.orEmpty()))
+      .assertIsDisplayed()
+      .assertHasClickAction()
   }
 
   @Test
@@ -320,6 +381,34 @@ class ChatComposerLayoutTest {
     assertEquals(expandedActionRight, collapsedActionRight)
   }
 
+  @Test
+  fun keyboardFocusedAuxiliaryToolbarStaysVisibleUntilFocusLeaves() {
+    showChat()
+    composeRule.mainClock.autoAdvance = false
+
+    val editor = composeRule.onNode(hasSetTextAction())
+    editor.performClick()
+    composeRule.mainClock.advanceTimeBy(500L)
+    composeRule.waitForIdle()
+    val model = composeRule.onNodeWithTag("chat-composer-model").assertIsDisplayed()
+    model.performSemanticsAction(SemanticsActions.RequestFocus) { requestFocus ->
+      assertTrue("The model control must accept keyboard focus", requestFocus())
+    }
+    model.assertIsFocused()
+
+    composeRule.mainClock.advanceTimeBy(CHAT_COMPOSER_AUXILIARY_IDLE_MS + 500L)
+    composeRule.waitForIdle()
+    model.assertIsDisplayed().assertIsFocused()
+
+    editor.performSemanticsAction(SemanticsActions.RequestFocus) { requestFocus ->
+      assertTrue(requestFocus())
+    }
+    editor.assertIsFocused()
+    composeRule.mainClock.advanceTimeBy(CHAT_COMPOSER_AUXILIARY_IDLE_MS + 500L)
+    composeRule.waitForIdle()
+    model.assertDoesNotExist()
+  }
+
   private fun assertDraftKeepsDisabledSendWhileAdmissionIsPending(
     text: String = "",
     attachment: PendingAttachment? = null,
@@ -351,23 +440,28 @@ class ChatComposerLayoutTest {
     attachment?.let { composeRule.onNodeWithText(it.fileName).assertIsDisplayed() }
   }
 
-  private fun showChat(): MainViewModel {
+  private fun showChat(
+    viewportWidth: Dp = 360.dp,
+    fontScale: Float = 1f,
+  ): MainViewModel {
     val viewModel = MainViewModel(app, prefs, SavedStateHandle())
     viewModelStore.put("chat", viewModel)
     viewModel.enterScreenshotFixtureMode(AndroidScreenshotScene.Chat)
     composeRule.setContent {
-      ClawDesignTheme {
-        // A portrait phone's remaining content viewport after its IME opens.
-        Box(Modifier.size(width = 360.dp, height = 400.dp).clipToBounds().testTag("chat-viewport")) {
-          ChatScreen(
-            viewModel = viewModel,
-            talkActive = false,
-            showSidebarButton = true,
-            onOpenSidebar = {},
-            onToggleTalk = {},
-            onOpenDashboard = {},
-            onOpenGatewaySettings = {},
-          )
+      DeviceConfigurationOverride(DeviceConfigurationOverride.FontScale(fontScale)) {
+        ClawDesignTheme {
+          // A portrait phone's remaining content viewport after its IME opens.
+          Box(Modifier.size(width = viewportWidth, height = 400.dp).clipToBounds().testTag("chat-viewport")) {
+            ChatScreen(
+              viewModel = viewModel,
+              talkActive = false,
+              showSidebarButton = true,
+              onOpenSidebar = {},
+              onToggleTalk = {},
+              onOpenDashboard = {},
+              onOpenGatewaySettings = {},
+            )
+          }
         }
       }
     }

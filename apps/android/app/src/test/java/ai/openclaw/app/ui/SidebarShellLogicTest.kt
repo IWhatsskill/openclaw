@@ -217,11 +217,12 @@ class SidebarShellLogicTest {
   }
 
   @Test
-  fun catalogSessionsAreExcludedFromPinnedAndRecentSections() {
+  fun catalogPinsRemainVisibleWithoutDuplicatingRecentRows() {
     val presentation =
       sidebarSessionPresentation(
         sessions =
           listOf(
+            session("visible-newest-pinned", activity = 50, pinned = true),
             session("catalog-pinned", activity = 40, pinned = true),
             session("visible-pinned", activity = 30, pinned = true),
             session("catalog-recent", activity = 20),
@@ -233,7 +234,7 @@ class SidebarShellLogicTest {
       )
 
     assertEquals(
-      listOf("visible-pinned"),
+      listOf("visible-newest-pinned", "catalog-pinned", "visible-pinned"),
       presentation.pinned.map(ChatSessionEntry::key),
     )
     assertEquals(

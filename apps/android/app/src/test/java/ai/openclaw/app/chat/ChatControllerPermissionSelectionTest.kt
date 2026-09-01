@@ -82,10 +82,11 @@ class ChatControllerPermissionSelectionTest {
     runTest {
       val patchStarted = CompletableDeferred<Unit>()
       val releasePatch = CompletableDeferred<Unit>()
-      var sessionRow = """{"key":"main","agentId":"main","permissionMode":"guarded","permissionModePending":false}"""
+      var sessionRow = """{"key":"main","agentId":"main","sessionId":"permission-session","permissionMode":"guarded","permissionModePending":false}"""
       val controller =
         createScriptedChatController {
           respond("sessions.list") { """{"sessions":[$sessionRow]}""" }
+          respond("chat.history") { """{"sessionId":"permission-session","messages":[],"sessionInfo":$sessionRow}""" }
           respond("sessions.patch") {
             patchStarted.complete(Unit)
             releasePatch.await()
@@ -98,7 +99,7 @@ class ChatControllerPermissionSelectionTest {
       val patch = async { controller.setSessionPermissionModeAwait("main", ChatPermissionMode.Workspace) }
       patchStarted.await()
       for ((mode, pending) in listOf("workspace" to true, "workspace" to false, "read-only" to true)) {
-        sessionRow = """{"key":"main","agentId":"main","permissionMode":"$mode","permissionModePending":$pending}"""
+        sessionRow = """{"key":"main","agentId":"main","sessionId":"permission-session","permissionMode":"$mode","permissionModePending":$pending}"""
         controller.handleGatewayEvent(
           "sessions.changed",
           """{"sessionKey":"main","agentId":"main","phase":"message","session":$sessionRow}""",
@@ -214,6 +215,61 @@ class ChatControllerPermissionSelectionTest {
           .permissionMode,
       )
       assertEquals(2, listRequests)
+    }
+
+  @Test
+  fun exactSettingsReadPreservesNewerSnapshotsWithoutRestartingUnchangedMessages() =
+    runTest {
+      for (staleRead in listOf(false, true)) {
+        val readStarted = CompletableDeferred<Unit>()
+        val releaseRead = CompletableDeferred<Unit>()
+        val sessionKey = "agent:main:conversation"
+        val currentSettings = """"permissionMode":"read-only","permissionModePending":false,"effectiveFastMode":true"""
+        var sessionRow = """{"key":"$sessionKey","sessionId":"conversation-id",$currentSettings,"fastMode":true}"""
+        var settingsReads = 0
+        val controller =
+          createScriptedChatController {
+            respond("sessions.list") { """{"sessions":[$sessionRow]}""" }
+            respond("sessions.patch") {
+              val sampledSettings =
+                if (staleRead) {
+                  """"permissionMode":"workspace","permissionModePending":true,"effectiveFastMode":true"""
+                } else {
+                  currentSettings
+                }
+              sessionRow = """{"key":"$sessionKey","sessionId":"conversation-id",$sampledSettings,"status":"completed","outputTokens":5}"""
+              """{"entry":{"key":"$sessionKey","sessionId":"conversation-id"},"resolved":{}}"""
+            }
+            respond("chat.history") {
+              val response = """{"sessionKey":"$sessionKey","sessionId":"conversation-id","messages":[],"sessionInfo":$sessionRow}"""
+              if (++settingsReads == 1) {
+                readStarted.complete(Unit)
+                releaseRead.await()
+              }
+              response
+            }
+          }
+        controller.refreshSessions()
+        advanceUntilIdle()
+        controller.setSessionFastMode(sessionKey, enabled = false, clearOverride = true)
+        readStarted.await()
+
+        sessionRow = """{"key":"$sessionKey","sessionId":"conversation-id",$currentSettings,"status":"running","outputTokens":99}"""
+        controller.handleGatewayEvent(
+          "sessions.changed",
+          """{"sessionKey":"$sessionKey","agentId":"main","phase":"message","session":$sessionRow}""",
+        )
+        releaseRead.complete(Unit)
+        advanceUntilIdle()
+
+        val session = controller.sessions.value.single()
+        assertEquals(ChatPermissionMode.ReadOnly to false, session.permissionMode to session.permissionModePending)
+        assertNull(session.fastMode)
+        assertEquals(ChatFastMode.On, session.effectiveFastMode)
+        assertEquals("running" to 99L, session.status to session.outputTokens)
+        assertEquals(if (staleRead) 2 else 1, settingsReads)
+        assertTrue(controller.pendingSessionSettingsKeys.value.isEmpty())
+      }
     }
 
   @Test
@@ -400,6 +456,9 @@ class ChatControllerPermissionSelectionTest {
           respond("sessions.list") {
             """{"sessions":[{"key":"main","fastMode":$storedFastMode,"effectiveFastMode":$storedFastMode}]}"""
           }
+          respond("chat.history") {
+            """{"sessionId":"fast-session","messages":[],"sessionInfo":{"key":"main","sessionId":"fast-session","fastMode":$storedFastMode,"effectiveFastMode":$storedFastMode}}"""
+          }
           respond("sessions.patch") {
             storedFastMode = true
             patchStarted.complete(Unit)
@@ -439,33 +498,48 @@ class ChatControllerPermissionSelectionTest {
       val releasePatch = CompletableDeferred<Unit>()
       val refreshStarted = CompletableDeferred<Unit>()
       val releaseRefresh = CompletableDeferred<Unit>()
-      var sessionRow: String? = """{"key":"$sessionKey","permissionMode":"guarded","permissionModePending":false}"""
-      var listRequests = 0
-      val controller =
-        createScriptedChatController {
+      var sessionRow = """{"key":"$sessionKey","sessionId":"conversation-id","permissionMode":"guarded","permissionModePending":false}"""
+      var lookupUnavailable = false
+      var settingsReads = 0
+      val deletions = mutableListOf<ChatSessionDeletion>()
+      val connectionScope = ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1)
+      val gateway =
+        ScriptedGateway(json).apply {
           respond("sessions.list") {
-            val response = """{"sessions":[${sessionRow.orEmpty()}]}"""
-            if (++listRequests > 1) {
-              refreshStarted.complete(Unit)
-              releaseRefresh.await()
+            if (lookupUnavailable) """{"sessions":[]}""" else """{"sessions":[$sessionRow]}"""
+          }
+          respond("chat.history") {
+            settingsReads += 1
+            refreshStarted.complete(Unit)
+            releaseRefresh.await()
+            if (lookupUnavailable) {
+              // The lookup owner also returns this shape when store reads fail.
+              """{"sessionKey":"$sessionKey","messages":[],"sessionInfo":{"key":"$sessionKey","agentId":"main","modelProvider":"synthetic","model":"default"}}"""
+            } else {
+              """{"sessionKey":"$sessionKey","sessionId":"conversation-id","messages":[],"sessionInfo":$sessionRow}"""
             }
-            response
           }
           respond("sessions.patch") {
-            sessionRow = """{"key":"$sessionKey","permissionMode":"workspace","permissionModePending":false}"""
+            sessionRow = """{"key":"$sessionKey","sessionId":"conversation-id","permissionMode":"workspace","permissionModePending":false}"""
             patchStarted.complete(Unit)
             releasePatch.await()
             """{"entry":{"key":"$sessionKey","permissionMode":"workspace"},"resolved":{}}"""
           }
         }
+      val controller =
+        createChatController(
+          cacheScope = { connectionScope },
+          onSessionDeleted = deletions::add,
+          requestGateway = gateway::request,
+        )
       controller.refreshSessions()
       advanceUntilIdle()
       val patch = async { controller.setSessionPermissionModeAwait(sessionKey, ChatPermissionMode.Workspace) }
       patchStarted.await()
 
-      // Patch effects publish after releasing the mutation lane. A concurrent deletion
-      // can remove the row before the broadcaster loads it, leaving identity only.
-      sessionRow = null
+      // Patch effects and history can lose their row to the lookup owner's empty-on-error
+      // projection. Neither missing identity authorizes deleting local state.
+      lookupUnavailable = true
       controller.handleGatewayEvent(
         "sessions.changed",
         """{"sessionKey":"$sessionKey","agentId":"main","reason":"patch","ts":1}""",
@@ -484,8 +558,31 @@ class ChatControllerPermissionSelectionTest {
         releaseRefresh.complete(Unit)
         advanceUntilIdle()
       }
-      assertTrue(controller.sessions.value.isEmpty())
-      assertEquals(2, listRequests)
+      assertEquals(
+        ChatPermissionMode.Guarded,
+        controller.sessions.value
+          .single()
+          .permissionMode,
+      )
+      assertEquals(setOf(sessionKey), controller.pendingSessionSettingsKeys.value)
+      assertEquals("Could not refresh session settings. Refresh before sending.", controller.errorText.value)
+      assertTrue(deletions.isEmpty())
+      assertEquals(1, settingsReads)
+
+      lookupUnavailable = false
+      controller.refreshSessions()
+      advanceUntilIdle()
+
+      assertEquals(
+        ChatPermissionMode.Workspace,
+        controller.sessions.value
+          .single()
+          .permissionMode,
+      )
+      assertTrue(controller.pendingSessionSettingsKeys.value.isEmpty())
+      assertNull(controller.errorText.value)
+      assertTrue(deletions.isEmpty())
+      assertEquals(2, settingsReads)
     }
 
   @Test
@@ -493,12 +590,13 @@ class ChatControllerPermissionSelectionTest {
     runTest {
       val patchStarted = CompletableDeferred<Unit>()
       val releasePatch = CompletableDeferred<Unit>()
-      var sessionRow = """{"key":"main","permissionMode":null,"permissionModePending":false,"fastMode":false,"effectiveFastMode":false}"""
+      var sessionRow = """{"key":"main","sessionId":"fast-session","permissionMode":null,"permissionModePending":false,"fastMode":false,"effectiveFastMode":false}"""
       val controller =
         createScriptedChatController {
           respond("sessions.list") { """{"sessions":[$sessionRow]}""" }
+          respond("chat.history") { """{"sessionId":"fast-session","messages":[],"sessionInfo":$sessionRow}""" }
           respond("sessions.patch") {
-            sessionRow = """{"key":"main","permissionMode":null,"permissionModePending":false,"fastMode":true,"effectiveFastMode":true}"""
+            sessionRow = """{"key":"main","sessionId":"fast-session","permissionMode":null,"permissionModePending":false,"fastMode":true,"effectiveFastMode":true}"""
             patchStarted.complete(Unit)
             releasePatch.await()
             """{"entry":{"key":"main","fastMode":true,"effectiveFastMode":true},"resolved":{}}"""
@@ -513,7 +611,7 @@ class ChatControllerPermissionSelectionTest {
         """{"sessionKey":"main","agentId":"main","phase":"message","session":$sessionRow}""",
       )
 
-      sessionRow = """{"key":"main","permissionMode":null,"permissionModePending":false,"fastMode":false,"effectiveFastMode":false}"""
+      sessionRow = """{"key":"main","sessionId":"fast-session","permissionMode":null,"permissionModePending":false,"fastMode":false,"effectiveFastMode":false}"""
       controller.handleGatewayEvent(
         "sessions.changed",
         """{"sessionKey":"main","agentId":"main","phase":"message","session":$sessionRow}""",
@@ -565,19 +663,14 @@ class ChatControllerPermissionSelectionTest {
     }
 
   @Test
-  fun clearingFastModeRefreshesInheritedEffectiveStateFromSessionList() =
+  fun clearingFastModeRefreshesInheritedEffectiveStateFromExactSession() =
     runTest {
       val patches = mutableListOf<String>()
-      var sessionListCalls = 0
       val controller =
         createScriptedChatController {
-          respond("sessions.list") {
-            sessionListCalls += 1
-            if (sessionListCalls == 1) {
-              """{"sessions":[{"key":"main","fastMode":"on","effectiveFastMode":"on"}]}"""
-            } else {
-              """{"sessions":[{"key":"main","effectiveFastMode":"on"}]}"""
-            }
+          respond("sessions.list", """{"sessions":[{"key":"main","fastMode":"on","effectiveFastMode":"on"}]}""")
+          respond("chat.history") {
+            """{"sessionId":"fast-session","messages":[],"sessionInfo":{"key":"main","sessionId":"fast-session","effectiveFastMode":"on"}}"""
           }
           respond("sessions.patch") { paramsJson ->
             patches += paramsJson.orEmpty()
@@ -608,16 +701,11 @@ class ChatControllerPermissionSelectionTest {
     runTest {
       val patchStarted = CompletableDeferred<Unit>()
       val releasePatch = CompletableDeferred<Unit>()
-      var sessionListCalls = 0
       val controller =
         createScriptedChatController {
-          respond("sessions.list") {
-            sessionListCalls += 1
-            if (sessionListCalls == 1) {
-              """{"sessions":[{"key":"main","fastMode":"on","effectiveFastMode":"on"}]}"""
-            } else {
-              """{"sessions":[{"key":"main","effectiveFastMode":"on"}]}"""
-            }
+          respond("sessions.list", """{"sessions":[{"key":"main","fastMode":"on","effectiveFastMode":"on"}]}""")
+          respond("chat.history") {
+            """{"sessionId":"fast-session","messages":[],"sessionInfo":{"key":"main","sessionId":"fast-session","effectiveFastMode":"on"}}"""
           }
           respond("sessions.patch") {
             patchStarted.complete(Unit)

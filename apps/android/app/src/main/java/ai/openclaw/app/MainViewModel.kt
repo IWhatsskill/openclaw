@@ -1292,65 +1292,52 @@ class MainViewModel private constructor(
     ensureRuntime().refreshVoiceWakePermission()
   }
 
-  private fun appearancePreferenceEditTarget(runtime: NodeRuntime?): AppearancePreferenceEditTarget =
-    runtime?.appearancePreferenceEditTargetSnapshot()
-      ?: AppearancePreferenceEditTarget(
-        mode = AppearancePreferenceEditMode.Deferred,
-        scope =
-          prefs.gatewayRegistry.activeStableId.value
-            ?.let { stableId -> AppearancePreferenceScope(stableId, profileId = null) },
-      )
+  private fun syncQueuedAppearancePreference(
+    key: String,
+    value: String?,
+  ) {
+    // Startup or reconnect can publish a profile after the target snapshot but
+    // before persistence. Notify its current owner after every queued edit.
+    val runtime = runtimeRef.value ?: return
+    viewModelScope.launch(Dispatchers.Default) {
+      runtime.setProfileAppearancePreference(key, value)
+    }
+  }
 
   fun setAppearanceThemeMode(mode: AppearanceThemeMode) {
-    val runtime = runtimeRef.value
-    val target = appearancePreferenceEditTarget(runtime)
-    val retainLocal = target.mode == AppearancePreferenceEditMode.DeviceLocal
+    val pendingScope = runtimeRef.value?.appearancePreferenceScopeForEdit()
+    val retainLocal = pendingScope == null
     prefs.setAppearanceThemeMode(
       mode = mode,
       pendingSync = !retainLocal,
-      pendingScope = target.scope,
+      pendingScope = pendingScope,
       retainLocal = retainLocal,
     )
-    if (target.mode == AppearancePreferenceEditMode.Writable && runtime != null) {
-      viewModelScope.launch(Dispatchers.Default) {
-        runtime.setProfileAppearancePreference("ui.themeMode", mode.rawValue)
-      }
-    }
+    if (!retainLocal) syncQueuedAppearancePreference("ui.themeMode", mode.rawValue)
   }
 
   fun setAppearanceThemeFamily(family: AppearanceThemeFamily) {
-    val runtime = runtimeRef.value
-    val target = appearancePreferenceEditTarget(runtime)
-    val retainLocal = target.mode == AppearancePreferenceEditMode.DeviceLocal
+    val pendingScope = runtimeRef.value?.appearancePreferenceScopeForEdit()
+    val retainLocal = pendingScope == null
     prefs.setAppearanceThemeFamily(
       family = family,
       pendingSync = !retainLocal,
-      pendingScope = target.scope,
+      pendingScope = pendingScope,
       retainLocal = retainLocal,
     )
-    if (target.mode == AppearancePreferenceEditMode.Writable && runtime != null) {
-      viewModelScope.launch(Dispatchers.Default) {
-        runtime.setProfileAppearancePreference("ui.theme", family.rawValue)
-      }
-    }
+    if (!retainLocal) syncQueuedAppearancePreference("ui.theme", family.rawValue)
   }
 
   fun setAppearanceAccentArgb(argb: Long?) {
-    val runtime = runtimeRef.value
-    val target = appearancePreferenceEditTarget(runtime)
-    val retainLocal = target.mode == AppearancePreferenceEditMode.DeviceLocal
+    val pendingScope = runtimeRef.value?.appearancePreferenceScopeForEdit()
+    val retainLocal = pendingScope == null
     prefs.setAppearanceAccentArgb(
       argb = argb,
       pendingSync = !retainLocal,
-      pendingScope = target.scope,
+      pendingScope = pendingScope,
       retainLocal = retainLocal,
     )
-    val value = appearanceAccentPreferenceValue(argb)
-    if (target.mode == AppearancePreferenceEditMode.Writable && runtime != null) {
-      viewModelScope.launch(Dispatchers.Default) {
-        runtime.setProfileAppearancePreference("ui.accent", value)
-      }
-    }
+    if (!retainLocal) syncQueuedAppearancePreference("ui.accent", appearanceAccentPreferenceValue(argb))
   }
 
   fun refreshGatewayConnection() {

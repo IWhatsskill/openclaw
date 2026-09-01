@@ -3,6 +3,7 @@ package ai.openclaw.app
 import android.content.Context
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -361,37 +362,38 @@ class SecurePrefsTest {
       .clear()
       .commit()
     val securePrefs = context.getSharedPreferences("secure-prefs-test-${UUID.randomUUID()}", Context.MODE_PRIVATE)
+    val scope = AppearancePreferenceScope("gateway-a", "profile-a")
     val prefs = SecurePrefs(context, securePrefs)
 
-    prefs.setAppearanceThemeFamily(AppearanceThemeFamily.Tide, pendingSync = true)
-    prefs.setAppearanceAccentArgb(null, pendingSync = true)
+    prefs.setAppearanceThemeFamily(AppearanceThemeFamily.Tide, pendingSync = true, pendingScope = scope)
+    prefs.setAppearanceAccentArgb(null, pendingSync = true, pendingScope = scope)
 
     val restored = SecurePrefs(context, securePrefs)
     assertEquals(
       mapOf("ui.theme" to "tide", "ui.accent" to null),
-      restored.pendingAppearancePreferenceEntries(),
+      restored.pendingAppearancePreferenceEntries(scope),
     )
     restored.setAppearanceThemeFamily(AppearanceThemeFamily.Claw)
     restored.setAppearanceAccentArgb(0xFFE96CB7L)
 
-    assertFalse(restored.completePendingAppearancePreferenceWrite("ui.theme", expectedValue = "claw"))
+    assertFalse(restored.completePendingAppearancePreferenceWrite("ui.theme", expectedValue = "claw", scope = scope))
     assertEquals(AppearanceThemeFamily.Claw, restored.appearanceThemeFamily.value)
-    assertTrue("ui.theme" in restored.pendingAppearancePreferenceEntries())
+    assertTrue("ui.theme" in restored.pendingAppearancePreferenceEntries(scope))
 
-    assertTrue(restored.completePendingAppearancePreferenceWrite("ui.theme", expectedValue = "tide"))
-    assertTrue(restored.completePendingAppearancePreferenceWrite("ui.accent", expectedValue = null))
+    assertTrue(restored.completePendingAppearancePreferenceWrite("ui.theme", expectedValue = "tide", scope = scope))
+    assertTrue(restored.completePendingAppearancePreferenceWrite("ui.accent", expectedValue = null, scope = scope))
 
     assertEquals(AppearanceThemeFamily.Tide, restored.appearanceThemeFamily.value)
     assertEquals(null, restored.appearanceAccentArgb.value)
-    assertTrue(restored.pendingAppearancePreferenceEntries().isEmpty())
+    assertTrue(restored.pendingAppearancePreferenceEntries(scope).isEmpty())
     val reloaded = SecurePrefs(context, securePrefs)
     assertEquals(AppearanceThemeFamily.Tide, reloaded.appearanceThemeFamily.value)
     assertEquals(null, reloaded.appearanceAccentArgb.value)
-    assertTrue(reloaded.pendingAppearancePreferenceEntries().isEmpty())
+    assertTrue(reloaded.pendingAppearancePreferenceEntries(scope).isEmpty())
   }
 
   @Test
-  fun pendingAppearanceSyncIsolatedByGatewayAndProfileAndAdoptsOnlyUnscopedWrites() {
+  fun pendingAppearanceSyncIsolatedByGatewayAndProfile() {
     val context = RuntimeEnvironment.getApplication()
     context
       .getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
@@ -400,39 +402,34 @@ class SecurePrefsTest {
       .commit()
     val securePrefs = context.getSharedPreferences("secure-prefs-test-${UUID.randomUUID()}", Context.MODE_PRIVATE)
     val gatewayA = AppearancePreferenceScope("gateway-a", "profile-a")
-    val gatewayB = AppearancePreferenceScope("gateway-b", "profile-b")
+    val gatewayB = AppearancePreferenceScope("gateway-b", "profile-a")
+    val otherProfile = AppearancePreferenceScope("gateway-a", "profile-b")
     val prefs = SecurePrefs(context, securePrefs)
+    val edits =
+      mapOf(
+        gatewayA to AppearanceThemeFamily.Dash,
+        gatewayB to AppearanceThemeFamily.Tide,
+        otherProfile to AppearanceThemeFamily.Rose,
+      )
 
-    prefs.setAppearanceThemeMode(
-      AppearanceThemeMode.Light,
-      pendingSync = true,
-      pendingScope = gatewayA,
-    )
-    prefs.setAppearanceThemeFamily(
-      AppearanceThemeFamily.Tide,
-      pendingSync = true,
-      pendingScope = gatewayB,
-    )
-    prefs.setAppearanceAccentArgb(null, pendingSync = true)
+    edits.forEach { (scope, family) ->
+      prefs.setAppearanceThemeFamily(family, pendingSync = true, pendingScope = scope)
+    }
 
     val restored = SecurePrefs(context, securePrefs)
-    assertEquals(mapOf("ui.themeMode" to "light"), restored.pendingAppearancePreferenceEntries(gatewayA))
+    edits.forEach { (scope, family) ->
+      assertEquals(mapOf("ui.theme" to family.rawValue), restored.pendingAppearancePreferenceEntries(scope))
+    }
+    assertFalse(restored.completePendingAppearancePreferenceWrite("ui.theme", "dash", gatewayB))
+    assertFalse(restored.completePendingAppearancePreferenceWrite("ui.theme", "dash", otherProfile))
+    assertTrue(restored.completePendingAppearancePreferenceWrite("ui.theme", "dash", gatewayA))
+    assertTrue(restored.pendingAppearancePreferenceEntries(gatewayA).isEmpty())
     assertEquals(mapOf("ui.theme" to "tide"), restored.pendingAppearancePreferenceEntries(gatewayB))
-    assertEquals(mapOf("ui.accent" to null), restored.pendingAppearancePreferenceEntries())
-
-    val adoptedA = restored.pendingAppearancePreferenceEntries(gatewayA, adoptUnscoped = true)
-    assertEquals(mapOf("ui.themeMode" to "light", "ui.accent" to null), adoptedA)
-    assertTrue(restored.pendingAppearancePreferenceEntries().isEmpty())
-    assertEquals(mapOf("ui.theme" to "tide"), restored.pendingAppearancePreferenceEntries(gatewayB))
-
-    assertFalse(restored.completePendingAppearancePreferenceWrite("ui.themeMode", "light", gatewayB))
-    assertTrue("ui.themeMode" in restored.pendingAppearancePreferenceEntries(gatewayA))
-    assertTrue(restored.completePendingAppearancePreferenceWrite("ui.themeMode", "light", gatewayA))
-    assertTrue("ui.themeMode" !in restored.pendingAppearancePreferenceEntries(gatewayA))
+    assertEquals(mapOf("ui.theme" to "rose"), restored.pendingAppearancePreferenceEntries(otherProfile))
   }
 
   @Test
-  fun adoptingPendingAppearanceWritesPreservesTheLatestEditAfterRestart() {
+  fun pendingAppearanceWritesKeepTheLatestValueAfterRestart() {
     val context = RuntimeEnvironment.getApplication()
     context
       .getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
@@ -440,31 +437,15 @@ class SecurePrefsTest {
       .clear()
       .commit()
     val securePrefs = context.getSharedPreferences("secure-prefs-test-${UUID.randomUUID()}", Context.MODE_PRIVATE)
-    val gatewayScope = AppearancePreferenceScope("gateway-a", profileId = null)
     val profileScope = AppearancePreferenceScope("gateway-a", "profile-a")
     val prefs = SecurePrefs(context, securePrefs)
 
-    prefs.setAppearanceThemeFamily(
-      AppearanceThemeFamily.Dash,
-      pendingSync = true,
-      pendingScope = gatewayScope,
-    )
-    prefs.setAppearanceThemeFamily(
-      AppearanceThemeFamily.Tide,
-      pendingSync = true,
-      pendingScope = profileScope,
-    )
-    prefs.setAppearanceThemeFamily(
-      AppearanceThemeFamily.Rose,
-      pendingSync = true,
-      pendingScope = gatewayScope,
-    )
+    listOf(AppearanceThemeFamily.Dash, AppearanceThemeFamily.Tide, AppearanceThemeFamily.Rose).forEach { family ->
+      prefs.setAppearanceThemeFamily(family, pendingSync = true, pendingScope = profileScope)
+    }
 
     val restored = SecurePrefs(context, securePrefs)
-    assertEquals(
-      mapOf("ui.theme" to "rose"),
-      restored.pendingAppearancePreferenceEntries(profileScope, adoptUnscoped = true),
-    )
+    assertEquals(mapOf("ui.theme" to "rose"), restored.pendingAppearancePreferenceEntries(profileScope))
     assertTrue(restored.completePendingAppearancePreferenceWrite("ui.theme", "rose", profileScope))
     assertEquals(AppearanceThemeFamily.Rose, SecurePrefs(context, securePrefs).appearanceThemeFamily.value)
   }
@@ -484,12 +465,10 @@ class SecurePrefsTest {
     val prefs = SecurePrefs(context, securePrefs)
 
     assertEquals(AppearanceThemeMode.Light, prefs.appearanceThemeMode.value)
-    assertTrue(prefs.pendingAppearancePreferenceEntries().isEmpty())
     assertTrue(prefs.isAppearancePreferenceLocalOnly("ui.themeMode"))
 
     val restored = SecurePrefs(context, securePrefs)
     assertEquals(AppearanceThemeMode.Light, restored.appearanceThemeMode.value)
-    assertTrue(restored.pendingAppearancePreferenceEntries().isEmpty())
     assertTrue(restored.isAppearancePreferenceLocalOnly("ui.themeMode"))
   }
 
@@ -544,61 +523,27 @@ class SecurePrefsTest {
   }
 
   @Test
-  fun pendingAppearanceCanBePromotedToDurableDeviceLocalState() {
+  fun unboundAppearanceEditsCannotBecomePendingSync() {
     val context = RuntimeEnvironment.getApplication()
     context
       .getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
       .edit()
       .clear()
       .commit()
-    val securePrefs =
-      context.getSharedPreferences("secure-prefs-test-${UUID.randomUUID()}", Context.MODE_PRIVATE)
-    val gatewayScope = AppearancePreferenceScope("gateway-a", profileId = null)
-    val profileScope = AppearancePreferenceScope("gateway-a", profileId = "profile-a")
-    val otherGatewayScope = AppearancePreferenceScope("gateway-b", profileId = "profile-b")
+    val securePrefs = context.getSharedPreferences("secure-prefs-test-${UUID.randomUUID()}", Context.MODE_PRIVATE)
     val prefs = SecurePrefs(context, securePrefs)
+    prefs.setAppearanceThemeFamily(AppearanceThemeFamily.Tide, retainLocal = true)
 
-    prefs.setAppearanceAccentArgb(0xFFE96CB7L, pendingSync = true)
-    prefs.setAppearanceThemeFamily(
-      AppearanceThemeFamily.Dash,
-      pendingSync = true,
-      pendingScope = profileScope,
-    )
-    prefs.setAppearanceThemeMode(
-      AppearanceThemeMode.Light,
-      pendingSync = true,
-      pendingScope = otherGatewayScope,
-    )
-    prefs.promotePendingAppearancePreferencesToLocal(gatewayScope.gatewayStableId)
+    listOf(null, AppearancePreferenceScope("gateway-a", profileId = null)).forEach { scope ->
+      assertThrows(IllegalArgumentException::class.java) {
+        prefs.setAppearanceThemeFamily(AppearanceThemeFamily.Dash, pendingSync = true, pendingScope = scope)
+      }
+    }
 
-    assertTrue(prefs.pendingAppearancePreferenceEntries().isEmpty())
-    assertTrue(prefs.pendingAppearancePreferenceEntries(gatewayScope).isEmpty())
-    assertEquals(
-      AppearanceThemeFamily.Dash.rawValue,
-      prefs.pendingAppearancePreferenceEntries(profileScope)["ui.theme"],
-    )
-    assertEquals(
-      AppearanceThemeMode.Light.rawValue,
-      prefs.pendingAppearancePreferenceEntries(otherGatewayScope)["ui.themeMode"],
-    )
-    assertTrue(prefs.isAppearancePreferenceLocalOnly("ui.accent"))
-    assertFalse(prefs.isAppearancePreferenceLocalOnly("ui.theme"))
-    assertFalse(prefs.isAppearancePreferenceLocalOnly("ui.themeMode"))
-
-    prefs.setAppearanceAccentArgb(0xFFE96CB7L, pendingSync = true, pendingScope = gatewayScope)
-    prefs.promotePendingAppearancePreferencesToLocal(gatewayScope.gatewayStableId)
-
-    assertTrue(prefs.pendingAppearancePreferenceEntries(gatewayScope).isEmpty())
-    assertTrue(prefs.isAppearancePreferenceLocalOnly("ui.accent"))
     val restored = SecurePrefs(context, securePrefs)
-    assertEquals(0xFFE96CB7L, restored.appearanceAccentArgb.value)
-    assertEquals(AppearanceThemeFamily.Dash, restored.appearanceThemeFamily.value)
-    assertTrue(restored.isAppearancePreferenceLocalOnly("ui.accent"))
-    assertFalse(restored.isAppearancePreferenceLocalOnly("ui.theme"))
-    assertEquals(
-      AppearanceThemeFamily.Dash.rawValue,
-      restored.pendingAppearancePreferenceEntries(profileScope)["ui.theme"],
-    )
+    assertEquals(AppearanceThemeFamily.Tide, restored.appearanceThemeFamily.value)
+    assertTrue(restored.isAppearancePreferenceLocalOnly("ui.theme"))
+    assertTrue(restored.pendingAppearancePreferenceKeysForGateway("gateway-a").isEmpty())
   }
 
   @Test

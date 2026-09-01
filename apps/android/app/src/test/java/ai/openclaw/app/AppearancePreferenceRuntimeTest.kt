@@ -46,14 +46,11 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.util.ReflectionHelpers
-import java.lang.management.ManagementFactory
 import java.lang.reflect.InvocationTargetException
 import java.net.InetAddress
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.coroutines.Continuation
 import kotlin.coroutines.intrinsics.suspendCoroutineUninterceptedOrReturn
@@ -98,15 +95,15 @@ class AppearancePreferenceRuntimeTest {
     }
 
   @Test
-  fun readOnlyProfileRefreshPreservesGatewayScopedPendingTheme() =
+  fun readOnlyProfileRefreshPreservesAnotherProfilesPendingTheme() =
     runBlocking {
       withAppearanceGateway {
-        val pendingScope = profileScope(null)
+        val pendingScope = profileScope("profile-b")
         prefs.setAppearanceThemeFamily(AppearanceThemeFamily.Dash, pendingSync = true, pendingScope = pendingScope)
         setProfilePreferences("profile-a", """{"ui.theme":"claw","ui.themeMode":"light"}""")
         connect(scopes = listOf("operator.read"))
 
-        assertEquals(AppearanceThemeFamily.Dash, prefs.appearanceThemeFamily.value)
+        assertEquals(AppearanceThemeFamily.Claw, prefs.appearanceThemeFamily.value)
         assertEquals(AppearanceThemeMode.Light, prefs.appearanceThemeMode.value)
         assertEquals(mapOf("ui.theme" to "dash"), prefs.pendingAppearancePreferenceEntries(pendingScope))
         assertTrue(writes.isEmpty())
@@ -125,7 +122,7 @@ class AppearancePreferenceRuntimeTest {
         assertEquals(AppearanceThemeMode.Light, prefs.appearanceThemeMode.value)
         assertEquals(null, prefs.appearanceAccentArgb.value)
         assertEquals(0xFF14B8A6L, runtime.gatewayAccentArgb.value)
-        assertEquals(AppearancePreferenceEditMode.DeviceLocal, runtime.appearancePreferenceEditTargetSnapshot().mode)
+        assertEquals(null, runtime.appearancePreferenceScopeForEdit())
       }
     }
 
@@ -135,12 +132,10 @@ class AppearancePreferenceRuntimeTest {
       withAppearanceGateway {
         val profileA = profileScope("profile-a")
         prefs.setAppearanceThemeFamily(AppearanceThemeFamily.Dash, pendingSync = true, pendingScope = profileA)
-        prefs.setAppearanceAccentArgb(0xFFE96CB7L, pendingSync = true)
+        viewModel().setAppearanceAccentArgb(0xFFE96CB7L)
         connect(profileId = null)
 
         assertEquals(AppearanceThemeFamily.Dash, prefs.appearanceThemeFamily.value)
-        assertTrue(prefs.pendingAppearancePreferenceEntries().isEmpty())
-        assertTrue(prefs.pendingAppearancePreferenceEntries(profileScope(null)).isEmpty())
         assertEquals(mapOf("ui.theme" to "dash"), prefs.pendingAppearancePreferenceEntries(profileA))
         assertFalse(prefs.isAppearancePreferenceLocalOnly("ui.theme"))
         assertTrue(prefs.isAppearancePreferenceLocalOnly("ui.accent"))
@@ -172,6 +167,82 @@ class AppearancePreferenceRuntimeTest {
           assertEquals(0xFF5A9BEFL, prefs.appearanceAccentArgb.value)
           assertEquals(0xFF5A9BEFL, runtime.gatewayAccentArgb.value)
         }
+
+        setProfilePreferences("profile-b", """{"ui.theme":"rose","ui.themeMode":"light","ui.accent":"#E96CB7"}""")
+        respond = { request ->
+          if (request.method == "users.self") {
+            throw GatewayRequestRejected(GatewaySession.ErrorShape("UNAVAILABLE", "Profile lookup temporarily unavailable"))
+          }
+          null
+        }
+        connect(profileId = "profile-b")
+
+        assertEquals(AppearanceThemeFamily.Tide, prefs.appearanceThemeFamily.value)
+        assertEquals(AppearanceThemeMode.Dark, prefs.appearanceThemeMode.value)
+        assertEquals(0xFF5A9BEFL, prefs.appearanceAccentArgb.value)
+        assertEquals(null, runtime.appearancePreferenceScopeForEdit())
+      }
+    }
+
+  @Test
+  fun unverifiedReplacementEditsStayLocalWhenProfileLookupFails() =
+    runBlocking {
+      withAppearanceGateway {
+        connect()
+        val viewModel = viewModel()
+        val profileA = profileScope("profile-a")
+        val replacementHelloStarted = CompletableDeferred<Unit>()
+        val releaseReplacementHello = CompletableDeferred<Unit>()
+        val profileLookupStarted = CompletableDeferred<Unit>()
+        val releaseProfileLookup = CompletableDeferred<Unit>()
+        respond = { request ->
+          if (request.profileId == "profile-b") {
+            when (request.method) {
+              "connect" -> {
+                replacementHelloStarted.complete(Unit)
+                releaseReplacementHello.await()
+              }
+              "users.self" -> {
+                profileLookupStarted.complete(Unit)
+                releaseProfileLookup.await()
+                throw GatewayRequestRejected(GatewaySession.ErrorShape("UNAVAILABLE", "Profile lookup temporarily unavailable"))
+              }
+            }
+          }
+          null
+        }
+        try {
+          val replacement = async { connect(profileId = "profile-b") }
+          withTimeout(APPEARANCE_CONNECTION_TIMEOUT_MS) { replacementHelloStarted.await() }
+          assertFalse(runtime.gatewayConnectionDisplay.value.isConnected)
+          viewModel.setAppearanceThemeFamily(AppearanceThemeFamily.Rose)
+          assertEquals(mapOf("ui.theme" to "rose"), prefs.pendingAppearancePreferenceEntries(profileA))
+
+          releaseReplacementHello.complete(Unit)
+          withTimeout(APPEARANCE_CONNECTION_TIMEOUT_MS) { profileLookupStarted.await() }
+          assertTrue(runtime.gatewayConnectionDisplay.value.isConnected)
+          viewModel.setAppearanceThemeMode(AppearanceThemeMode.Light)
+          releaseProfileLookup.complete(Unit)
+          replacement.await()
+          assertTrue(runtime.gatewayConnectionDisplay.value.isConnected)
+          viewModel.setAppearanceAccentArgb(0xFF5A9BEFL)
+
+          connect(profileId = "profile-a")
+
+          assertEquals(
+            "Only A's pre-hello edit may sync after returning from unverified B",
+            listOf("profile-a" to "rose"),
+            writes.map { it.profileId to it.entry("ui.theme") },
+          )
+          assertTrue(prefs.pendingAppearancePreferenceEntries(profileA).isEmpty())
+          assertTrue(prefs.isAppearancePreferenceLocalOnly("ui.themeMode"))
+          assertTrue(prefs.isAppearancePreferenceLocalOnly("ui.accent"))
+          assertEquals(AppearanceThemeMode.Light, prefs.appearanceThemeMode.value)
+          assertEquals(0xFF5A9BEFL, prefs.appearanceAccentArgb.value)
+        } finally {
+          releaseReplacementHello.complete(Unit)
+          releaseProfileLookup.complete(Unit)
+        }
       }
     }
 
@@ -183,18 +254,29 @@ class AppearancePreferenceRuntimeTest {
           prefs.setAppearanceThemeFamily(AppearanceThemeFamily.Tide)
           prefs.setAppearanceThemeMode(AppearanceThemeMode.Dark)
           config = """{"ui":{"prefs":{"theme":"dash","themeMode":"light","accent":"#14B8A6"}}}"""
-          respond = { request ->
+          val unsupportedMethods = if (catalogOmitsMethod) setOf("config.get") else null
+          val unsupportedPreferences: suspend (AppearanceRpcRequest) -> String? = { request ->
             if (request.method == "users.prefs.get") {
               throw GatewayRequestRejected(GatewaySession.ErrorShape("INVALID_REQUEST", "unknown method: users.prefs.get"))
             }
             null
           }
-          connect(methods = if (catalogOmitsMethod) setOf("config.get") else null)
+          respond = unsupportedPreferences
+          connect(methods = unsupportedMethods)
 
           assertEquals(AppearanceThemeFamily.Dash, prefs.appearanceThemeFamily.value)
           assertEquals(AppearanceThemeMode.Light, prefs.appearanceThemeMode.value)
           assertEquals(0xFF14B8A6L, runtime.gatewayAccentArgb.value)
           assertEquals(if (catalogOmitsMethod) 0 else 1, requests.count { it.method == "users.prefs.get" })
+
+          for (readOnly in listOf(false, true)) {
+            respond = { null }
+            connect(scopes = if (readOnly) listOf("operator.read") else listOf("operator.read", "operator.write"))
+            respond = unsupportedPreferences
+            connect(profileId = "profile-b", methods = unsupportedMethods)
+
+            assertEquals(null, runtime.appearancePreferenceScopeForEdit())
+          }
         }
       }
     }
@@ -218,7 +300,6 @@ class AppearancePreferenceRuntimeTest {
         }
         assertTrue(writes.isEmpty())
         assertTrue(prefs.pendingAppearancePreferenceEntries(profileScope("profile-a")).isEmpty())
-        assertTrue(prefs.pendingAppearancePreferenceEntries().isEmpty())
 
         connect()
         viewModel.setAppearanceThemeFamily(AppearanceThemeFamily.Tide)
@@ -231,17 +312,203 @@ class AppearancePreferenceRuntimeTest {
     }
 
   @Test
-  fun offlineViewModelAppearanceEditStaysPendingForReconnect() =
+  fun unverifiedViewModelAppearanceEditsStayLocalUntilExplicitlyChangedOnline() =
+    runBlocking {
+      for (attachRuntime in listOf(false, true)) {
+        withAppearanceGateway {
+          viewModel(attachRuntime).setAppearanceThemeFamily(AppearanceThemeFamily.Dash)
+
+          assertEquals(AppearanceThemeFamily.Dash, prefs.appearanceThemeFamily.value)
+          assertTrue(prefs.pendingAppearancePreferenceKeysForGateway(endpoint.stableId).isEmpty())
+          assertTrue(prefs.isAppearancePreferenceLocalOnly("ui.theme"))
+          connect()
+          assertTrue(writes.isEmpty())
+          assertEquals(AppearanceThemeFamily.Dash, prefs.appearanceThemeFamily.value)
+
+          viewModel().setAppearanceThemeFamily(AppearanceThemeFamily.Tide)
+          withTimeout(2_000) {
+            while (writes.size != 1 || prefs.pendingAppearancePreferenceEntries(profileScope("profile-a")).isNotEmpty()) yield()
+          }
+          assertEquals(listOf("tide"), writes.map { it.entry("ui.theme") })
+          assertFalse(prefs.isAppearancePreferenceLocalOnly("ui.theme"))
+        }
+      }
+    }
+
+  @Test
+  fun offlineViewModelEditsRemainWithTheLastConfirmedProfile() =
     runBlocking {
       withAppearanceGateway {
-        viewModel().setAppearanceThemeFamily(AppearanceThemeFamily.Dash)
+        setProfilePreferences("profile-b", """{"ui.themeMode":"dark","ui.accent":"#e96cb7"}""")
+        setProfilePreferences("profile-a", """{"ui.themeMode":"dark","ui.accent":"#14b8a6"}""")
+        connect(profileId = "profile-b")
+        val viewModel = viewModel()
+        val replacementHelloStarted = CompletableDeferred<Unit>()
+        val releaseReplacementHello = CompletableDeferred<Unit>()
+        respond = { request ->
+          if (request.method == "connect" && request.profileId == "profile-a") {
+            replacementHelloStarted.complete(Unit)
+            releaseReplacementHello.await()
+          }
+          null
+        }
+        try {
+          val replacement = async { connect(profileId = "profile-a") }
+          withTimeout(APPEARANCE_CONNECTION_TIMEOUT_MS) { replacementHelloStarted.await() }
+          assertFalse(runtime.gatewayConnectionDisplay.value.isConnected)
+          viewModel.setAppearanceThemeMode(AppearanceThemeMode.Light)
+          viewModel.setAppearanceAccentArgb(0xFF5A9BEFL)
+          releaseReplacementHello.complete(Unit)
+          replacement.await()
 
-        assertEquals(mapOf("ui.theme" to "dash"), prefs.pendingAppearancePreferenceEntries())
-        assertFalse(prefs.isAppearancePreferenceLocalOnly("ui.theme"))
-        connect()
-        assertEquals(listOf("dash"), writes.map { it.entry("ui.theme") })
-        assertEquals(AppearanceThemeFamily.Dash, prefs.appearanceThemeFamily.value)
-        assertTrue(prefs.pendingAppearancePreferenceEntries(profileScope("profile-a")).isEmpty())
+          val pending = mapOf("ui.themeMode" to "light", "ui.accent" to "#5a9bef")
+          assertEquals("Profile A must not receive offline edits made for B", emptyList<AppearanceRpcRequest>(), writes)
+          assertEquals(pending, prefs.pendingAppearancePreferenceEntries(profileScope("profile-b")))
+          assertTrue(prefs.pendingAppearancePreferenceEntries(profileScope("profile-a")).isEmpty())
+          assertEquals(AppearanceThemeMode.Dark, prefs.appearanceThemeMode.value)
+          assertEquals(0xFF14B8A6L, prefs.appearanceAccentArgb.value)
+
+          connect(profileId = "profile-b")
+          assertEquals(listOf("profile-b", "profile-b"), writes.map { it.profileId })
+          assertEquals(
+            pending,
+            writes
+              .flatMap {
+                it.params
+                  .getValue("entries")
+                  .jsonObject.entries
+              }.associate { it.key to it.value.jsonPrimitive.content },
+          )
+          assertTrue(prefs.pendingAppearancePreferenceEntries(profileScope("profile-b")).isEmpty())
+          assertEquals(AppearanceThemeMode.Light, prefs.appearanceThemeMode.value)
+          assertEquals(0xFF5A9BEFL, prefs.appearanceAccentArgb.value)
+        } finally {
+          releaseReplacementHello.complete(Unit)
+        }
+      }
+    }
+
+  @Test
+  fun offlineViewModelEditsKeepKnownDeviceLocalPolicy() =
+    runBlocking {
+      val identities =
+        listOf(
+          "profile-b" to listOf("operator.read"),
+          null to listOf("operator.read", "operator.write"),
+        )
+      for ((profileId, scopes) in identities) {
+        withAppearanceGateway {
+          setProfilePreferences("profile-a", """{"ui.themeMode":"dark","ui.accent":"#14b8a6"}""")
+          connect(profileId = profileId, scopes = scopes)
+          val viewModel = viewModel()
+          viewModel.setAppearanceThemeMode(AppearanceThemeMode.Dark)
+          viewModel.setAppearanceAccentArgb(0xFFE96CB7L)
+          val replacementHelloStarted = CompletableDeferred<Unit>()
+          val releaseReplacementHello = CompletableDeferred<Unit>()
+          respond = { request ->
+            if (request.method == "connect" && request.profileId == "profile-a") {
+              replacementHelloStarted.complete(Unit)
+              releaseReplacementHello.await()
+            }
+            null
+          }
+          try {
+            val replacement = async { connect(profileId = "profile-a") }
+            withTimeout(APPEARANCE_CONNECTION_TIMEOUT_MS) { replacementHelloStarted.await() }
+            assertFalse(runtime.gatewayConnectionDisplay.value.isConnected)
+            viewModel.setAppearanceThemeMode(AppearanceThemeMode.Light)
+            viewModel.setAppearanceAccentArgb(0xFF5A9BEFL)
+            releaseReplacementHello.complete(Unit)
+            replacement.await()
+
+            assertEquals(
+              "Device-local edits must stay local after $profileId/$scopes disconnects",
+              emptyList<AppearanceRpcRequest>(),
+              writes,
+            )
+            for (key in listOf("ui.themeMode", "ui.accent")) {
+              assertTrue(prefs.isAppearancePreferenceLocalOnly(key))
+            }
+            assertTrue(prefs.pendingAppearancePreferenceEntries(profileScope("profile-a")).isEmpty())
+            assertEquals(AppearanceThemeMode.Light, prefs.appearanceThemeMode.value)
+            assertEquals(0xFF5A9BEFL, prefs.appearanceAccentArgb.value)
+          } finally {
+            releaseReplacementHello.complete(Unit)
+          }
+        }
+      }
+    }
+
+  @Test
+  fun recreatedRuntimeDoesNotAdoptOfflineEditsIntoAnotherProfile() =
+    runBlocking {
+      withAppearanceGateway {
+        connect(profileId = "profile-b")
+        recreateOffline()
+        assertEquals(endpoint.stableId, prefs.gatewayRegistry.activeStableId.value)
+        assertFalse(runtime.gatewayConnectionDisplay.value.isConnected)
+        val viewModel = viewModel()
+        viewModel.setAppearanceThemeMode(AppearanceThemeMode.Light)
+        viewModel.setAppearanceAccentArgb(0xFF5A9BEFL)
+        connect(profileId = "profile-a")
+
+        assertEquals("A fresh runtime must not assign offline edits to a different profile", emptyList<AppearanceRpcRequest>(), writes)
+
+        viewModel.setAppearanceThemeFamily(AppearanceThemeFamily.Rose)
+        withTimeout(2_000) {
+          while (writes.size != 1 || prefs.pendingAppearancePreferenceEntries(profileScope("profile-a")).isNotEmpty()) yield()
+        }
+        assertEquals(listOf("profile-a" to "rose"), writes.map { it.profileId to it.entry("ui.theme") })
+      }
+    }
+
+  @Test
+  fun recreatedRuntimeRetainsPreviouslyProfileBoundEdits() =
+    runBlocking {
+      withAppearanceGateway {
+        connect(profileId = "profile-b")
+        runtime.disconnect()
+        viewModel().setAppearanceThemeFamily(AppearanceThemeFamily.Rose)
+        recreateOffline()
+        val profileB = profileScope("profile-b")
+
+        assertEquals(mapOf("ui.theme" to "rose"), prefs.pendingAppearancePreferenceEntries(profileB))
+        connect(profileId = "profile-a")
+        assertTrue(writes.isEmpty())
+        assertEquals(mapOf("ui.theme" to "rose"), prefs.pendingAppearancePreferenceEntries(profileB))
+
+        connect(profileId = "profile-b")
+        assertEquals(listOf("profile-b" to "rose"), writes.map { it.profileId to it.entry("ui.theme") })
+        assertTrue(prefs.pendingAppearancePreferenceEntries(profileB).isEmpty())
+        assertEquals(AppearanceThemeFamily.Rose, prefs.appearanceThemeFamily.value)
+      }
+    }
+
+  @Test
+  fun recreatedRuntimeKeepsOfflineReadOnlyEditsDeviceLocal() =
+    runBlocking {
+      withAppearanceGateway {
+        connect(profileId = "profile-b", scopes = listOf("operator.read"))
+        viewModel().apply {
+          setAppearanceThemeMode(AppearanceThemeMode.Dark)
+          setAppearanceAccentArgb(0xFFE96CB7L)
+        }
+        recreateOffline()
+        assertEquals(endpoint.stableId, prefs.gatewayRegistry.activeStableId.value)
+        assertTrue(prefs.isAppearancePreferenceLocalOnly("ui.themeMode"))
+        assertTrue(prefs.isAppearancePreferenceLocalOnly("ui.accent"))
+        assertFalse(runtime.gatewayConnectionDisplay.value.isConnected)
+        viewModel().apply {
+          setAppearanceThemeMode(AppearanceThemeMode.Light)
+          setAppearanceAccentArgb(0xFF5A9BEFL)
+        }
+        connect(profileId = "profile-a")
+
+        assertEquals("Recreation must not make device-local edits syncable", emptyList<AppearanceRpcRequest>(), writes)
+        assertTrue(prefs.isAppearancePreferenceLocalOnly("ui.themeMode"))
+        assertTrue(prefs.isAppearancePreferenceLocalOnly("ui.accent"))
+        assertEquals(AppearanceThemeMode.Light, prefs.appearanceThemeMode.value)
+        assertEquals(0xFF5A9BEFL, prefs.appearanceAccentArgb.value)
       }
     }
 
@@ -256,7 +523,6 @@ class AppearancePreferenceRuntimeTest {
         assertEquals(AppearanceThemeMode.Light, prefs.appearanceThemeMode.value)
         assertTrue(prefs.isAppearancePreferenceLocalOnly("ui.themeMode"))
         assertTrue(prefs.pendingAppearancePreferenceEntries(profileScope("profile-a")).isEmpty())
-        assertTrue(prefs.pendingAppearancePreferenceEntries().isEmpty())
       }
     }
 
@@ -311,59 +577,6 @@ class AppearancePreferenceRuntimeTest {
           assertEquals(AppearanceThemeMode.Dark, prefs.appearanceThemeMode.value)
         } finally {
           releaseFirstConfig.complete(Unit)
-        }
-      }
-    }
-
-  @Test
-  fun gatewaySwitchCannotInterleaveWithUnscopedPreferenceAdoption() =
-    runBlocking {
-      withAppearanceGateway {
-        connect(scopes = listOf("operator.read"))
-        prefs.setAppearanceThemeFamily(AppearanceThemeFamily.Dash, pendingSync = true)
-        val lookupStarted = CompletableDeferred<Unit>()
-        val releaseLookup = CompletableDeferred<Unit>()
-        respond = { request ->
-          if (request.method == "users.self") {
-            lookupStarted.complete(Unit)
-            releaseLookup.await()
-          }
-          null
-        }
-        val prefsLocked = CountDownLatch(1)
-        val releasePrefs = CountDownLatch(1)
-        val prefsLockOwner =
-          Thread {
-            synchronized(prefs) {
-              prefsLocked.countDown()
-              releasePrefs.await()
-            }
-          }
-        var disconnect: Thread? = null
-        try {
-          val pendingRefresh = async(Dispatchers.IO) { refresh() }
-          withTimeout(2_000) { lookupStarted.await() }
-          prefsLockOwner.start()
-          assertTrue(prefsLocked.await(10, TimeUnit.SECONDS))
-          val gatewayLock = ReflectionHelpers.getField<Any>(runtime, "gatewayDataScopeLock")
-          releaseLookup.complete(Unit)
-          assertTrue(awaitMonitorOwned(gatewayLock))
-          val disconnectThread = Thread { runtime.disconnect() }
-          disconnect = disconnectThread
-          disconnectThread.start()
-          assertTrue(awaitThreadState(disconnectThread, Thread.State.BLOCKED))
-          releasePrefs.countDown()
-          withTimeout(10_000) { pendingRefresh.await() }
-          disconnectThread.join(10_000)
-
-          assertFalse(disconnectThread.isAlive)
-          assertEquals(mapOf("ui.theme" to "dash"), prefs.pendingAppearancePreferenceEntries(profileScope(null)))
-          assertTrue(prefs.pendingAppearancePreferenceEntries().isEmpty())
-        } finally {
-          releaseLookup.complete(Unit)
-          releasePrefs.countDown()
-          prefsLockOwner.join(10_000)
-          disconnect?.join(10_000)
         }
       }
     }
@@ -460,26 +673,6 @@ class AppearancePreferenceRuntimeTest {
         }
       }
     }
-
-  private fun awaitThreadState(
-    thread: Thread,
-    expected: Thread.State,
-  ): Boolean {
-    val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
-    while (thread.state != expected && System.nanoTime() < deadline) Thread.sleep(10)
-    return thread.state == expected
-  }
-
-  private fun awaitMonitorOwned(monitor: Any): Boolean {
-    val identity = System.identityHashCode(monitor)
-    val threads = ManagementFactory.getThreadMXBean()
-    val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
-    while (System.nanoTime() < deadline) {
-      if (threads.dumpAllThreads(true, false).any { thread -> thread.lockedMonitors.any { it.identityHashCode == identity } }) return true
-      Thread.sleep(10)
-    }
-    return false
-  }
 }
 
 private suspend fun withAppearanceGateway(
@@ -514,6 +707,7 @@ private class AppearanceGatewayFixture(
 ) {
   private val json = Json { ignoreUnknownKeys = true }
   private val app = RuntimeEnvironment.getApplication() as NodeApp
+  private val securePreferences = app.getSharedPreferences("appearance-runtime-" + UUID.randomUUID(), Context.MODE_PRIVATE)
   private val server = MockWebServer()
   private val workers = CoroutineScope(SupervisorJob() + Dispatchers.Default)
   private val sequence = AtomicInteger()
@@ -526,7 +720,9 @@ private class AppearanceGatewayFixture(
     @Volatile var profileId: String?,
     val scopes: List<String>,
     val methods: Set<String>?,
-  )
+  ) {
+    val operatorHello = CompletableDeferred<Int>()
+  }
 
   @Volatile private var nextConnection =
     Connection("profile-a", listOf("operator.read", "operator.write"), appearanceMethods)
@@ -536,10 +732,14 @@ private class AppearanceGatewayFixture(
   @Volatile var respond: suspend (AppearanceRpcRequest) -> String? = { null }
   val requests = CopyOnWriteArrayList<AppearanceRpcRequest>()
   val writes: List<AppearanceRpcRequest> get() = requests.filter { it.method == "users.prefs.set" }
-  val prefs: SecurePrefs
-  val runtime: NodeRuntime
+  var prefs: SecurePrefs
+    private set
+
+  var runtime: NodeRuntime
+    private set
+
   val endpoint: GatewayEndpoint
-  private val session: GatewaySession
+  private var session: GatewaySession
   private var connected = false
 
   init {
@@ -548,7 +748,7 @@ private class AppearanceGatewayFixture(
       legacyThemeMode?.let { putString("appearance.themeMode", it.rawValue) }
       commit()
     }
-    prefs = SecurePrefs(app, app.getSharedPreferences("appearance-runtime-" + UUID.randomUUID(), Context.MODE_PRIVATE))
+    prefs = SecurePrefs(app, securePreferences)
     runtime = NodeRuntime(app, prefs)
     session = ReflectionHelpers.getField(runtime, "operatorSession")
     server.dispatcher =
@@ -571,18 +771,10 @@ private class AppearanceGatewayFixture(
     methods: Set<String>? = appearanceMethods,
     waitForBranding: Boolean = true,
   ) {
-    nextConnection = Connection(profileId, scopes, methods)
-    val number = sequence.get() + 1
+    if (!connected) stopStartupJobs()
+    val identity = Connection(profileId, scopes, methods)
+    nextConnection = identity
     if (!connected) {
-      // Match the established runtime fixture: stop discovery before it can open
-      // extra sockets, keeping the normal session callbacks and their IO alive.
-      val startupJobs =
-        ReflectionHelpers
-          .getField<CoroutineScope>(runtime, "scope")
-          .coroutineContext.job.children
-          .toList()
-      startupJobs.forEach { it.cancel() }
-      startupJobs.joinAll()
       ReflectionHelpers.setField(runtime, "connectedEndpoint", endpoint)
       val manager = ReflectionHelpers.getField<ConnectionManager>(runtime, "connectionManager")
       session.connect(endpoint, "synthetic-appearance-proof", null, null, manager.buildOperatorConnectOptions())
@@ -591,9 +783,48 @@ private class AppearanceGatewayFixture(
       session.reconnect()
     }
     withTimeout(APPEARANCE_CONNECTION_TIMEOUT_MS) {
+      // Startup can open both role sockets; observe this operator hello instead of predicting the next upgrade.
+      val number = identity.operatorHello.await()
       runtime.serverName.first { it == "appearance-$number" }
       if (waitForBranding) brandingFinished.first { it >= number }
     }
+  }
+
+  suspend fun recreateOffline() {
+    models.clear()
+    session.disconnectAndJoin()
+    closeNodeRuntimeTestFixture(runtime)
+    val previousRespond = respond
+    respond = { request ->
+      if (request.method == "connect") {
+        throw GatewayRequestRejected(GatewaySession.ErrorShape("UNAVAILABLE", "Gateway offline"))
+      }
+      previousRespond(request)
+    }
+    try {
+      prefs = SecurePrefs(app, securePreferences)
+      runtime = NodeRuntime(app, prefs)
+      session = ReflectionHelpers.getField(runtime, "operatorSession")
+      runtime.disconnect()
+      stopStartupJobs()
+      connected = false
+    } finally {
+      respond = previousRespond
+    }
+  }
+
+  private suspend fun stopStartupJobs() {
+    // Match the established runtime fixture: stop discovery before it can open
+    // extra sockets, keeping the normal session callbacks and their IO alive.
+    val startupJobs =
+      ReflectionHelpers
+        .getField<CoroutineScope>(runtime, "scope")
+        .coroutineContext.job.children
+        .toList()
+    startupJobs.forEach { it.cancel() }
+    startupJobs.joinAll()
+    session.disconnectAndJoin()
+    ReflectionHelpers.getField<GatewaySession>(runtime, "nodeSession").disconnectAndJoin()
   }
 
   fun profileScope(profileId: String?) = AppearancePreferenceScope(endpoint.stableId, profileId)
@@ -609,9 +840,9 @@ private class AppearanceGatewayFixture(
     connections.getValue(sequence.get()).profileId = profileId
   }
 
-  fun viewModel(): MainViewModel =
+  fun viewModel(attachRuntime: Boolean = true): MainViewModel =
     MainViewModel(app, prefs, SavedStateHandle()).also { viewModel ->
-      ReflectionHelpers.getField<MutableStateFlow<NodeRuntime?>>(viewModel, "runtimeRef").value = runtime
+      if (attachRuntime) ReflectionHelpers.getField<MutableStateFlow<NodeRuntime?>>(viewModel, "runtimeRef").value = runtime
       models.put("appearance", viewModel)
     }
 
@@ -660,7 +891,10 @@ private class AppearanceGatewayFixture(
       workers.launch {
         try {
           val payload = respond(request) ?: response(request, identity)
-          webSocket.send("""{"type":"res","id":$id,"ok":true,"payload":$payload}""")
+          val sent = webSocket.send("""{"type":"res","id":$id,"ok":true,"payload":$payload}""")
+          if (sent && request.method == "connect" && request.params["role"]?.jsonPrimitive?.content == "operator") {
+            identity.operatorHello.complete(number)
+          }
         } catch (error: GatewayRequestRejected) {
           val code = JsonPrimitive(error.gatewayError.code)
           val message = JsonPrimitive(error.gatewayError.message)

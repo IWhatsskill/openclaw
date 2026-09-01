@@ -4353,6 +4353,27 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(finalBroadcasts).toStrictEqual([]);
   });
 
+  it("labels additional returned agent errors instead of flattening them", async () => {
+    await createTranscriptFixture("openclaw-chat-send-multiple-agent-errors-");
+    mockState.triggerAgentRunStart = true;
+    mockState.dispatchedReplies = [
+      { kind: "final", payload: { text: "Primary execution failed", isError: true } },
+      { kind: "final", payload: { text: "Workspace recovery failed", isError: true } },
+      { kind: "final", payload: { text: "Workspace recovery failed", isError: true } },
+    ];
+    const { send } = createChatRequestFixture();
+
+    const broadcast = await send({
+      idempotencyKey: "idem-multiple-agent-errors",
+      message: "run on the worker",
+    });
+
+    expect(broadcast).toMatchObject({
+      state: "error",
+      errorMessage: "Primary execution failed\n\nAdditional error: Workspace recovery failed",
+    });
+  });
+
   it.each([
     ["error payload after start", true, "error", undefined],
     ["error payload before launch", false, "error", undefined],
@@ -4361,6 +4382,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     ["recorded failure with source reply", true, "source", "failed"],
     ["recorded success with ordinary output", true, "ordinary", "completed"],
     ["recorded success with a recoverable warning", true, "warning", "completed"],
+    ["recorded success with only a tool warning", true, "warning-only", "completed"],
     ["recorded success with source reply plus warning", true, "source-warning", "completed"],
   ] as const)(
     "projects agent-run terminal: $0",
@@ -4371,7 +4393,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       const runId = `idem-agent-terminal-${name.replaceAll(" ", "-")}`;
       const failed = outcome === "failed" || presentation === "error";
       const sourceReply = presentation === "source" || presentation === "source-warning";
-      const replyText = "Partial agent reply";
+      const replyText = presentation === "warning-only" ? "⚠️ Exec failed" : "Partial agent reply";
       const errorMessage =
         presentation === "error"
           ? agentStarted
@@ -4404,7 +4426,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
             mediaUrls: [mediaUrl],
           }),
         ];
-      } else if (presentation === "empty") {
+      } else if (presentation === "empty" || presentation === "warning-only") {
         mockState.finalText = "";
       } else if (presentation === "error") {
         mockState.dispatchedReplies = [
@@ -4417,10 +4439,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         mockState.runtimeAssistantTextsBeforeDelivery = [replyText];
         mockState.dispatchedReplies = [{ kind: "final", payload: { text: replyText } }];
       }
-      if (presentation === "warning" || presentation === "source-warning") {
+      if (
+        presentation === "warning" ||
+        presentation === "warning-only" ||
+        presentation === "source-warning"
+      ) {
         mockState.dispatchedReplies.push({
           kind: "final",
-          payload: { text: "tool warning", isError: true },
+          payload: { text: "⚠️ Exec failed", isError: true },
         });
       }
       if (outcome) {
@@ -4476,7 +4502,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           }),
         ]);
         expect(broadcasts[0]).not.toHaveProperty("message");
-      } else if (sourceReply) {
+      } else if (sourceReply || presentation === "warning-only") {
         expect(broadcasts).toEqual([expect.objectContaining({ runId, state: "final" })]);
         expect(extractFirstTextBlock(broadcasts[0])).toBe(replyText);
       } else {

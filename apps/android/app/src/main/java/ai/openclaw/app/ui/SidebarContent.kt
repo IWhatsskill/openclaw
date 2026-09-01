@@ -84,6 +84,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.util.Collections
 
 private val CodexBrandColor = Color(0xFF10A37F)
 private const val SIDEBAR_CATALOG_REFRESH_MS = 30_000L
@@ -143,15 +144,16 @@ internal fun moveSidebarDestination(
   pageIds: List<String>,
   destinationId: String,
   direction: Int,
+  visiblePageIds: Set<String>? = null,
 ): List<String> {
   val ordered = orderedSidebarDestinations(pageIds).map(SidebarDestination::stableId).toMutableList()
   if (direction == 0) return ordered
-  val fromIndex = ordered.indexOf(destinationId)
+  val visibleOrder = ordered.filter { visiblePageIds == null || it in visiblePageIds }
+  val fromIndex = visibleOrder.indexOf(destinationId)
   if (fromIndex < 0) return ordered
-  val targetIndex = (fromIndex + direction.sign).coerceIn(0, ordered.lastIndex)
-  if (targetIndex == fromIndex) return ordered
-  ordered.removeAt(fromIndex)
-  ordered.add(targetIndex, destinationId)
+  val targetId = visibleOrder.getOrNull(fromIndex + direction.sign) ?: return ordered
+  // Swap visible slots so hidden pages keep their positions and never consume a drag step.
+  Collections.swap(ordered, ordered.indexOf(destinationId), ordered.indexOf(targetId))
   return ordered
 }
 
@@ -206,7 +208,7 @@ internal fun sidebarSessionPresentation(
   excludedSessionKeys: Set<String> = emptySet(),
 ): SidebarSessionPresentation {
   val activeSessions = sidebarRecentSessions(sessions)
-  val pinned = activeSessions.filter { it.pinned == true && it.key !in excludedSessionKeys }
+  val pinned = activeSessions.filter { it.pinned == true }
   val recent =
     activeSessions.filter { session ->
       session.pinned != true && session.key !in excludedSessionKeys
@@ -647,6 +649,7 @@ internal fun OpenClawSidebar(
                       pageIds = pageOrder,
                       destinationId = destination.stableId,
                       direction = direction,
+                      visiblePageIds = visiblePageIdSet,
                     ),
                   )
                 },

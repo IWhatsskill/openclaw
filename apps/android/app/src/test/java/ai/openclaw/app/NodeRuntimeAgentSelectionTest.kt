@@ -6,6 +6,7 @@ import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.gateway.GatewayEndpoint
 import android.content.Context
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.currentCoroutineContext
@@ -24,6 +25,7 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.util.ReflectionHelpers
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicReference
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -156,6 +158,12 @@ class NodeRuntimeAgentSelectionTest {
         closeNodeRuntimeTestFixture(runtime)
       }
     }
+
+  @Test
+  fun currentSessionSelectionWinsAfterAgentLookupValidation() = assertCurrentSessionSelectionWinsAtPublication(catalogContinuation = false)
+
+  @Test
+  fun currentSessionSelectionWinsAfterCatalogContinuationValidation() = assertCurrentSessionSelectionWinsAtPublication(catalogContinuation = true)
 
   @Test
   fun newSessionWinsWhenAgentLookupReturnsBeforeCreation() = assertNewSessionWinsOverAgentLookup(catalogId = null, lookupBeforeCreation = true)
@@ -312,6 +320,93 @@ class NodeRuntimeAgentSelectionTest {
 
         assertEquals(scoutMain, runtime.chatSessionKey.value)
       } finally {
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    }
+
+  private fun assertCurrentSessionSelectionWinsAtPublication(catalogContinuation: Boolean) =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      val requestStarted = CompletableDeferred<Job>()
+      val releaseResponse = CompletableDeferred<Unit>()
+      val destinationThread = AtomicReference<Thread?>()
+      val selectionFinished = CompletableDeferred<Unit>()
+      var selectionThread: Thread? = null
+      try {
+        if (catalogContinuation) {
+          runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
+            check(method == "sessions.catalog.continue")
+            requestStarted.complete(currentCoroutineContext().job)
+            releaseResponse.await()
+            destinationThread.set(Thread.currentThread())
+            """{"sessionKey":"agent:main:old-destination"}"""
+          }
+          async(Dispatchers.Default) {
+            runtime.continueSessionCatalogEntry(
+              SessionCatalogEntry(
+                catalogId = "codex",
+                hostId = "desktop",
+                threadId = "remote-thread",
+                agentId = "main",
+                status = "idle",
+                archived = false,
+                canContinue = true,
+              ),
+            )
+          }
+        } else {
+          runtime.chatAgentSessionCandidatesOverrideForTests = {
+            requestStarted.complete(currentCoroutineContext().job)
+            releaseResponse.await()
+            destinationThread.set(Thread.currentThread())
+            listOf(ChatSessionEntry(key = "agent:main:old-destination", updatedAtMs = 20, ownerAgentId = "main"))
+          }
+          runtime.selectChatAgent("main")
+        }
+        val destinationJob = withTimeout(2_000) { requestStarted.await() }
+        val selectedKey = runtime.chatSessionKey.value
+        val chat = ReflectionHelpers.getField<ChatController>(runtime, "chat")
+        val publicationLock = ReflectionHelpers.getField<Any>(chat, "gatewayScopeApplyLock")
+        val newerSelection =
+          Thread {
+            try {
+              runtime.switchChatSession(selectedKey, "main")
+              selectionFinished.complete(Unit)
+            } catch (err: Throwable) {
+              selectionFinished.completeExceptionally(err)
+            }
+          }
+        selectionThread = newerSelection
+        synchronized(publicationLock) {
+          releaseResponse.complete(Unit)
+          val destinationDeadline = System.nanoTime() + 2_000_000_000L
+          while (destinationThread.get()?.state != Thread.State.BLOCKED && System.nanoTime() < destinationDeadline) {
+            Thread.yield()
+          }
+          assertEquals(
+            "The older destination must wait at the chat publication lock",
+            Thread.State.BLOCKED,
+            destinationThread.get()?.state,
+          )
+          // Selecting the current session still retires older intent, even without a new history load.
+          newerSelection.start()
+          val selectionDeadline = System.nanoTime() + 2_000_000_000L
+          while (!selectionFinished.isCompleted && newerSelection.state != Thread.State.BLOCKED && System.nanoTime() < selectionDeadline) {
+            Thread.yield()
+          }
+          // A serialized owner may defer the newer selection until the older commit completes.
+          assertTrue(
+            "The newer selection must finish or wait for the in-flight destination commit",
+            selectionFinished.isCompleted || newerSelection.state == Thread.State.BLOCKED,
+          )
+        }
+        withTimeout(2_000) { destinationJob.join() }
+        withTimeout(2_000) { selectionFinished.await() }
+
+        assertEquals("The newer explicit session selection must win", selectedKey, runtime.chatSessionKey.value)
+      } finally {
+        releaseResponse.complete(Unit)
+        selectionThread?.join(2_000)
         closeNodeRuntimeTestFixture(runtime)
       }
     }
