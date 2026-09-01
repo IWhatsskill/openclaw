@@ -5,6 +5,7 @@ import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
 import android.content.Context
 import androidx.lifecycle.SavedStateHandle
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -27,6 +28,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.util.ReflectionHelpers
 import org.robolectric.util.ReflectionHelpers.ClassParameter
 import java.lang.management.ManagementFactory
+import java.lang.reflect.InvocationTargetException
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -828,12 +830,53 @@ class AppearancePreferenceRuntimeTest {
     return false
   }
 
+  @Test
+  fun brandingRefreshPropagatesCancellation() =
+    runBlocking {
+      val app = RuntimeEnvironment.getApplication()
+      val sharedPrefs =
+        app.getSharedPreferences(
+          "openclaw.node.appearance.runtime.test.${UUID.randomUUID()}",
+          Context.MODE_PRIVATE,
+        )
+      val runtime = NodeRuntime(app, SecurePrefs(app, securePrefsOverride = sharedPrefs))
+      val endpoint = GatewayEndpoint.manual("127.0.0.1", 18789)
+
+      ReflectionHelpers.setField(runtime, "connectedEndpoint", endpoint)
+      ReflectionHelpers.setField(runtime, "operatorConnected", true)
+      ReflectionHelpers
+        .getField<MutableStateFlow<GatewayConnectionDisplay>>(runtime, "_gatewayConnectionDisplay")
+        .value =
+        GatewayConnectionDisplay(isConnected = true, statusText = "Connected", problem = null)
+      runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
+        if (method == "config.get") throw CancellationException("refresh cancelled")
+        error("Unexpected method: $method")
+      }
+
+      try {
+        var propagated: CancellationException? = null
+        try {
+          invokeRefreshBrandingFromGateway(runtime)
+        } catch (cancelled: CancellationException) {
+          propagated = cancelled
+        }
+
+        assertEquals("refresh cancelled", propagated?.message)
+      } finally {
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    }
+
   private suspend fun invokeRefreshBrandingFromGateway(runtime: NodeRuntime) =
-    suspendCoroutineUninterceptedOrReturn<Unit> { continuation ->
-      NodeRuntime::class.java
-        .getDeclaredMethod("refreshBrandingFromGateway", Continuation::class.java)
-        .apply { isAccessible = true }
-        .invoke(runtime, continuation)
+    try {
+      suspendCoroutineUninterceptedOrReturn<Unit> { continuation ->
+        NodeRuntime::class.java
+          .getDeclaredMethod("refreshBrandingFromGateway", Continuation::class.java)
+          .apply { isAccessible = true }
+          .invoke(runtime, continuation)
+      }
+    } catch (wrapped: InvocationTargetException) {
+      throw wrapped.targetException
     }
 
   @Test

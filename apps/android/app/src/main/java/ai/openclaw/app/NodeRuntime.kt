@@ -6233,6 +6233,8 @@ class NodeRuntime private constructor(
             profileAccentFresh = profileAccentFresh,
           )
       }
+    } catch (cancelled: CancellationException) {
+      throw cancelled
     } catch (_: Throwable) {
       // ignore
     }
