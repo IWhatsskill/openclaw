@@ -17,7 +17,6 @@ data class SessionCatalogState(
   val agentId: String? = null,
   val loadingMoreCatalogIds: Set<String> = emptySet(),
   val continuingEntryId: String? = null,
-  val expandedHostIds: Set<String> = emptySet(),
   val loadedPageDepthsByHost: Map<String, Int> = emptyMap(),
 )
 
@@ -64,11 +63,11 @@ data class SessionCatalogEntry(
 
 internal fun sessionCatalogListParams(
   agentId: String?,
-  progressId: String? = null,
+  progressId: String,
 ): String =
   buildJsonObject {
     normalizedCatalogValue(agentId)?.let { put("agentId", JsonPrimitive(it)) }
-    normalizedCatalogValue(progressId)?.let { put("progressId", JsonPrimitive(it)) }
+    put("progressId", JsonPrimitive(progressId))
     put("limitPerHost", JsonPrimitive(40))
   }.toString()
 
@@ -169,30 +168,6 @@ internal fun mergeSessionCatalogHostProgress(
   return current.map { catalog -> if (catalog.id == mergedCatalog.id) mergedCatalog else catalog }
 }
 
-internal fun reconcileSessionCatalogRefresh(
-  fresh: List<SessionCatalog>,
-  previous: List<SessionCatalog>,
-  preserveExpandedHostIds: Set<String>,
-): List<SessionCatalog> {
-  if (preserveExpandedHostIds.isEmpty()) return fresh
-  val previousCatalogs = previous.associateBy(SessionCatalog::id)
-  return fresh.map { catalog ->
-    val previousHosts = previousCatalogs[catalog.id]?.hosts?.associateBy(SessionCatalogHost::hostId).orEmpty()
-    catalog.copy(
-      hosts =
-        catalog.hosts.map { host ->
-          val hostKey = sessionCatalogHostKey(catalog.id, host.hostId)
-          val previousHost = previousHosts[host.hostId]
-          if (previousHost != null && hostKey in preserveExpandedHostIds) {
-            preserveExpandedSessionCatalogHost(fresh = host, previous = previousHost)
-          } else {
-            host
-          }
-        },
-    )
-  }
-}
-
 internal suspend fun refetchLoadedSessionCatalogPages(
   firstPages: List<SessionCatalog>,
   previous: List<SessionCatalog>,
@@ -262,17 +237,6 @@ internal fun retainSessionCatalogPageDepths(
         catalog.hosts.map { host -> sessionCatalogHostKey(catalog.id, host.hostId) }
       }.toSet()
   return current.filterKeys(validKeys::contains)
-}
-
-internal fun isLegacySessionCatalogProgressRejection(
-  code: String,
-  message: String,
-): Boolean {
-  if (!code.equals("INVALID_REQUEST", ignoreCase = true)) return false
-  val normalized = message.lowercase()
-  return "progressid" in normalized &&
-    listOf("unexpected property", "unknown property", "unrecognized property", "additional property", "additional properties")
-      .any(normalized::contains)
 }
 
 internal fun sessionCatalogHostKey(

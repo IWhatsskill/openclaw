@@ -1,15 +1,48 @@
 package ai.openclaw.app.ui
 
+import ai.openclaw.app.GatewayConnectionDisplay
+import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.NodeApp
+import ai.openclaw.app.NodeRuntime
+import ai.openclaw.app.NodeRuntimeMode
+import ai.openclaw.app.SecurePrefs
 import ai.openclaw.app.SessionCatalog
 import ai.openclaw.app.SessionCatalogEntry
 import ai.openclaw.app.SessionCatalogHost
+import ai.openclaw.app.SessionCatalogState
+import ai.openclaw.app.chat.ChatSessionEntry
+import ai.openclaw.app.closeNodeRuntimeTestFixture
+import ai.openclaw.app.ui.design.ClawDesignTheme
+import android.content.Context
+import android.provider.Settings
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
+import androidx.lifecycle.SavedStateHandle
+import androidx.lifecycle.ViewModelStore
+import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
+import org.robolectric.annotation.Config
+import org.robolectric.util.ReflectionHelpers
+import java.util.UUID
 
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34])
 class SidebarCatalogGroupingTest {
+  @get:Rule
+  val composeRule = createComposeRule()
+
   @Test
   fun groupingKeepsHostsWorkspacesOtherWorkAndRecencyOrder() {
     val hosts =
@@ -267,6 +300,96 @@ class SidebarCatalogGroupingTest {
     assertFalse(sidebarCatalogSessionSelectionEnabled(remote, canMutateSessions = false))
     assertTrue(sidebarCatalogSessionSelectionEnabled(remote, canMutateSessions = true))
     assertFalse(sidebarCatalogSessionSelectionEnabled(unavailable, canMutateSessions = true))
+  }
+
+  @Test
+  fun adoptedCatalogRowKeepsLiveRenameAcrossCatalogRefresh() {
+    val app = RuntimeEnvironment.getApplication() as NodeApp
+    val originalAnimatorScale = Settings.Global.getString(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE)
+    val prefs = SecurePrefs(app, app.getSharedPreferences("sidebar-catalog-${UUID.randomUUID()}", Context.MODE_PRIVATE))
+    val runtime = NodeRuntime(app, prefs, NodeRuntimeMode.ScreenshotFixture)
+    val viewModel = MainViewModel(app, prefs, SavedStateHandle())
+    val viewModels = ViewModelStore().apply { put("sidebar", viewModel) }
+    val adopted = entry("adopted", cwd = "/work/project", recency = 2.0).copy(name = "Native title")
+    val liveSessions =
+      mutableStateOf(
+        listOf(
+          ChatSessionEntry(
+            key = requireNotNull(adopted.sessionKey),
+            updatedAtMs = 2,
+            ownerAgentId = "main",
+            label = "Native title",
+            displayName = "Generated title",
+          ),
+        ),
+      )
+    val catalogState = ReflectionHelpers.getField<MutableStateFlow<SessionCatalogState>>(runtime, "_sessionCatalogState")
+    val catalog = SessionCatalog(id = "codex", label = "Codex", hosts = listOf(host("codex", sessions = listOf(adopted))))
+
+    try {
+      Settings.Global.putFloat(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 0f)
+      catalogState.value = SessionCatalogState(agentId = "main", catalogs = listOf(catalog))
+      ReflectionHelpers.getField<MutableStateFlow<Boolean>>(runtime, "_sessionCatalogAvailable").value = true
+      ReflectionHelpers.getField<MutableStateFlow<NodeRuntime?>>(viewModel, "runtimeRef").value = runtime
+      composeRule.setContent {
+        ClawDesignTheme {
+          OpenClawSidebar(
+            viewModel = viewModel,
+            agents = emptyList(),
+            selectedAgentId = "main",
+            sessions = liveSessions.value,
+            activeSessionKey = requireNotNull(adopted.sessionKey),
+            activeDestination = null,
+            connection = GatewayConnectionDisplay(false, "Offline", null),
+            drawerActive = true,
+            showCloseButton = false,
+            onClose = {},
+            onDragActiveChange = {},
+            onNewSession = {},
+            onSelectAgent = {},
+            onSelectSession = {},
+            onSelectCatalogSession = {},
+            onCreateCatalogSession = {},
+            onSelectDestination = {},
+          )
+        }
+      }
+      composeRule.onNodeWithText("Codex").performScrollTo().performClick()
+      composeRule.onNodeWithText("Native title").performScrollTo().assertIsDisplayed()
+
+      composeRule.runOnIdle {
+        liveSessions.value = liveSessions.value.map { it.copy(label = "Renamed in OpenClaw") }
+      }
+      composeRule.onNodeWithText("Renamed in OpenClaw").performScrollTo().assertIsDisplayed()
+      composeRule.onNodeWithText("Native title").assertDoesNotExist()
+
+      composeRule.runOnIdle {
+        val refreshedHost = host("codex", sessions = listOf(adopted.copy(name = "Refreshed native title")))
+        catalogState.value =
+          catalogState.value.copy(
+            catalogs = listOf(catalog.copy(hosts = listOf(refreshedHost))),
+          )
+      }
+      composeRule.onNodeWithText("Renamed in OpenClaw").assertIsDisplayed()
+      composeRule.onNodeWithText("Refreshed native title").assertDoesNotExist()
+
+      composeRule.runOnIdle {
+        liveSessions.value = liveSessions.value.map { it.copy(label = null) }
+      }
+      composeRule.onNodeWithText("Generated title").assertIsDisplayed()
+
+      composeRule.runOnIdle {
+        liveSessions.value = liveSessions.value.map { it.copy(displayName = null) }
+      }
+      composeRule.onNodeWithText("Refreshed native title").assertIsDisplayed()
+    } finally {
+      viewModels.clear()
+      try {
+        closeNodeRuntimeTestFixture(runtime)
+      } finally {
+        Settings.Global.putString(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, originalAnimatorScale)
+      }
+    }
   }
 
   private fun host(

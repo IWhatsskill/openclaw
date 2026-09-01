@@ -13,12 +13,11 @@ Goal: one coherent visual system across onboarding, settings, and future screens
 
 ## 2. Style Baseline
 
-The Control UI palette is authoritative. The Android app shares its colors with the
-Control UI so one product does not read as two, and keeps its own native geometry:
-compact spacing, phone-sized touch targets, and the existing sidebar shell. Do not copy
-the Control UI web layout.
+The Android app shares the Control UI theme families, color modes, and accent colors,
+but keeps native geometry: compact spacing, phone-sized touch targets, and the
+existing sidebar shell. Do not copy the Control UI web layout.
 
-Baseline traits:
+Baseline traits for the Claw family:
 
 - Dark canvas with a slight blue cast; panels barely lighter than the canvas.
 - Red accent for the current page, the selected state, and the primary action.
@@ -28,10 +27,14 @@ Baseline traits:
 
 ## 3. Core Tokens
 
-These are the shared Control UI tokens. Dark is the default theme; light mirrors the
-same hierarchy and the same red accent family on a neutral canvas.
+These are the Claw family's shared Control UI tokens. Other families and custom
+accents use the same semantic roles; components must not hardcode Claw colors.
 
-Dark (default):
+New local settings start in Dark mode. Gateway appearance settings can select Light
+or System mode; System follows the device. Keep geometry consistent across modes
+and families.
+
+Dark:
 
 - Canvas: `#0E1015`
 - Card surface: `#161920`
@@ -58,7 +61,7 @@ Light:
 
 Rules:
 
-- Do not introduce per-screen colors when a token fits; there is no second palette.
+- Do not introduce per-screen colors when a theme token fits.
 - Soft status and accent fills are alpha-based so one token composites over canvas,
   card, and row surfaces.
 - Do not rely on the Material default color roles. `ClawTheme.kt` maps every token

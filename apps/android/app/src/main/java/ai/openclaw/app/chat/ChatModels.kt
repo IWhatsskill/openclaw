@@ -412,6 +412,7 @@ data class ChatSessionEntry(
   val thinkingDefault: String? = null,
   val permissionMode: ChatPermissionMode? = null,
   val hasPermissionModeMetadata: Boolean = permissionMode != null,
+  val permissionModePending: Boolean? = null,
   val fastMode: ChatFastMode? = null,
   val effectiveFastMode: ChatFastMode? = null,
   val hasFastModeMetadata: Boolean = fastMode != null,

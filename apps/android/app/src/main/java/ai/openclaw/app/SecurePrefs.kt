@@ -110,7 +110,6 @@ class SecurePrefs(
     private const val appearanceThemeModeKey = "appearance.themeMode"
     private const val appearanceThemeFamilyKey = "appearance.themeFamily"
     private const val appearanceAccentArgbKey = "appearance.accentArgb"
-    private const val legacyAppearancePendingSyncKeysKey = "appearance.pendingSyncKeys"
     private const val appearancePendingPreferencesKey = "appearance.pendingPreferences"
     private const val appearanceLocalOnlyKeysKey = "appearance.localOnlyKeys"
     private const val appearanceSyncMigrationVersionKey = "appearance.syncMigrationVersion"
@@ -771,11 +770,7 @@ class SecurePrefs(
         },
       )
     }
-    return plainPrefs
-      .getStringSet(legacyAppearancePendingSyncKeysKey, emptySet())
-      .orEmpty()
-      .filter(appearanceSyncKeys::contains)
-      .map { key -> PendingAppearancePreference(key = key, value = currentAppearancePreferenceValue(key)) }
+    return emptyList()
   }
 
   @Synchronized
@@ -1072,7 +1067,11 @@ class SecurePrefs(
     val byOwnerAndKey =
       linkedMapOf<Triple<String?, String?, String>, PendingAppearancePreference>()
     preferences.forEach { preference ->
-      byOwnerAndKey[Triple(preference.gatewayStableId, preference.profileId, preference.key)] = preference
+      val key = Triple(preference.gatewayStableId, preference.profileId, preference.key)
+      // Adoption can merge unknown-profile and profile-owned edits. Preserve last-edit
+      // order across persistence rather than keeping a replaced entry's first position.
+      byOwnerAndKey.remove(key)
+      byOwnerAndKey[key] = preference
     }
     return byOwnerAndKey.values.toList()
   }
@@ -1132,7 +1131,6 @@ class SecurePrefs(
     } else {
       editor.putString(appearancePendingPreferencesKey, json.encodeToString(preferences))
     }
-    editor.remove(legacyAppearancePendingSyncKeysKey)
   }
 
   private fun persistLocalOnlyAppearancePreferenceKeys(
@@ -1145,14 +1143,6 @@ class SecurePrefs(
       editor.putStringSet(appearanceLocalOnlyKeysKey, keys)
     }
   }
-
-  private fun currentAppearancePreferenceValue(key: String): String? =
-    when (key) {
-      "ui.theme" -> _appearanceThemeFamily.value.rawValue
-      "ui.themeMode" -> _appearanceThemeMode.value.rawValue
-      "ui.accent" -> appearanceAccentPreferenceValue(_appearanceAccentArgb.value)
-      else -> null
-    }
 
   private fun incrementAppearancePreferenceRevision(key: String) {
     appearancePreferenceRevisions[key] = (appearancePreferenceRevisions[key] ?: 0L) + 1L

@@ -1,6 +1,7 @@
 package ai.openclaw.app.ui
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -92,13 +93,45 @@ class SessionDashboardScreenTest {
   }
 
   @Test
-  fun dashboardUrlUsesUuidPrefixLikeTheWebUiContract() {
-    assertEquals(
-      "https://gateway.example.com/dashboard/main/12345678",
-      sessionDashboardUrl(
-        baseUrl = "https://gateway.example.com",
-        sessionKey = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef",
-      ),
-    )
+  fun dashboardUrlPreservesExactSessionIdentity() {
+    val uuid = "12345678-90ab-cdef-1234-567890abcdef"
+    listOf(
+      "agent:main:dashboard:$uuid" to "dashboard/$uuid",
+      "agent:main:$uuid" to "~key/$uuid",
+      "agent:main:sessions" to "~key/sessions",
+      "agent:main:main" to "~key/main",
+    ).forEach { (sessionKey, rest) ->
+      assertEquals(
+        sessionKey,
+        "https://gateway.example.com/dashboard/main/$rest",
+        sessionDashboardUrl(
+          baseUrl = "https://gateway.example.com",
+          sessionKey = sessionKey,
+          mainSessionKey = "workspace",
+        ),
+      )
+    }
+  }
+
+  @Test
+  fun dashboardUrlRejectsIncompleteSessionIdentity() {
+    listOf(
+      "" to "main",
+      "agent:main" to "main",
+      "agent::control-link" to "main",
+      "agent:main:" to "main",
+      "agent:main:telegram::12345" to "main",
+      "telegram::12345" to "main",
+      "telegram:12345" to null,
+    ).forEach { (sessionKey, fallbackAgentId) ->
+      assertNull(
+        "sessionKey=$sessionKey, fallbackAgentId=$fallbackAgentId",
+        sessionDashboardUrl(
+          baseUrl = "https://gateway.example.com",
+          sessionKey = sessionKey,
+          fallbackAgentId = fallbackAgentId,
+        ),
+      )
+    }
   }
 }

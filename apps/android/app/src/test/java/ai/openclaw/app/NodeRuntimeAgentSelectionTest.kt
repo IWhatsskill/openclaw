@@ -1,16 +1,22 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.chat.ChatController
 import ai.openclaw.app.chat.ChatSessionDeletion
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.gateway.GatewayEndpoint
 import android.content.Context
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.job
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -32,10 +38,14 @@ class NodeRuntimeAgentSelectionTest {
       )
     val runtime = NodeRuntime(app, SecurePrefs(app, securePrefsOverride = securePrefs))
 
-    runtime.selectChatAgent(" scout ")
+    try {
+      runtime.selectChatAgent(" scout ")
 
-    assertEquals("scout", resolveAgentIdFromMainSessionKey(runtime.mainSessionKey.value))
-    assertEquals(runtime.mainSessionKey.value, runtime.chatSessionKey.value)
+      assertEquals("scout", resolveAgentIdFromMainSessionKey(runtime.mainSessionKey.value))
+      assertEquals(runtime.mainSessionKey.value, runtime.chatSessionKey.value)
+    } finally {
+      closeNodeRuntimeTestFixture(runtime)
+    }
   }
 
   @Test
@@ -148,6 +158,68 @@ class NodeRuntimeAgentSelectionTest {
     }
 
   @Test
+  fun newSessionWinsWhenAgentLookupReturnsBeforeCreation() = assertNewSessionWinsOverAgentLookup(catalogId = null, lookupBeforeCreation = true)
+
+  @Test
+  fun newSessionWinsWhenAgentLookupReturnsAfterCreation() = assertNewSessionWinsOverAgentLookup(catalogId = null, lookupBeforeCreation = false)
+
+  @Test
+  fun newCatalogSessionWinsWhenAgentLookupReturnsBeforeCreation() = assertNewSessionWinsOverAgentLookup(catalogId = "codex", lookupBeforeCreation = true)
+
+  @Test
+  fun newCatalogSessionWinsWhenAgentLookupReturnsAfterCreation() = assertNewSessionWinsOverAgentLookup(catalogId = "codex", lookupBeforeCreation = false)
+
+  @Test
+  fun pendingCatalogContinuationRetiresLateAgentSessionLookup() =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      val lookupStarted = CompletableDeferred<Job>()
+      val releaseLookup = CompletableDeferred<Unit>()
+      val continueStarted = CompletableDeferred<Unit>()
+      val releaseContinue = CompletableDeferred<Unit>()
+      try {
+        runtime.chatAgentSessionCandidatesOverrideForTests = {
+          lookupStarted.complete(currentCoroutineContext().job)
+          releaseLookup.await()
+          listOf(ChatSessionEntry(key = "agent:scout:old", updatedAtMs = 20, ownerAgentId = "scout"))
+        }
+        runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
+          check(method == "sessions.catalog.continue")
+          continueStarted.complete(Unit)
+          releaseContinue.await()
+          """{"sessionKey":"agent:scout:catalog"}"""
+        }
+        runtime.selectChatAgent("scout")
+        val lookupJob = withTimeout(2_000) { lookupStarted.await() }
+        val mainSessionKey = runtime.chatSessionKey.value
+        val entry =
+          SessionCatalogEntry(
+            catalogId = "codex",
+            hostId = "desktop",
+            threadId = "remote-thread",
+            agentId = "scout",
+            status = "idle",
+            archived = false,
+            canContinue = true,
+          )
+
+        val continuation = async { runtime.continueSessionCatalogEntry(entry) }
+        withTimeout(2_000) { continueStarted.await() }
+        releaseLookup.complete(Unit)
+        withTimeout(2_000) { lookupJob.join() }
+        assertEquals(mainSessionKey, runtime.chatSessionKey.value)
+
+        releaseContinue.complete(Unit)
+        assertTrue(withTimeout(2_000) { continuation.await() })
+        assertEquals("agent:scout:catalog", runtime.chatSessionKey.value)
+      } finally {
+        releaseLookup.complete(Unit)
+        releaseContinue.complete(Unit)
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    }
+
+  @Test
   fun newerAgentSelectionWinsOverLatePreviousAgentLookup() =
     runBlocking {
       val runtime = createConnectedRuntime()
@@ -240,6 +312,83 @@ class NodeRuntimeAgentSelectionTest {
 
         assertEquals(scoutMain, runtime.chatSessionKey.value)
       } finally {
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    }
+
+  private fun assertNewSessionWinsOverAgentLookup(
+    catalogId: String?,
+    lookupBeforeCreation: Boolean,
+  ): Unit =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      val lookupStarted = CompletableDeferred<Job>()
+      val releaseLookup = CompletableDeferred<Unit>()
+      val createStarted = CompletableDeferred<Job>()
+      val releaseCreate = CompletableDeferred<Unit>()
+      val createdKey = "agent:scout:created"
+      try {
+        val requestGateway: suspend (String, String?) -> String = { method, _ ->
+          when (method) {
+            "sessions.describe" -> """{"session":{"label":"App"}}"""
+            "sessions.create" -> {
+              createStarted.complete(currentCoroutineContext().job)
+              releaseCreate.await()
+              """{"ok":true,"key":"$createdKey"}"""
+            }
+            "chat.history" -> """{"sessionId":"test-session","messages":[]}"""
+            "sessions.list" -> """{"sessions":[]}"""
+            "health" -> """{"ok":true}"""
+            "chat.metadata" -> "{}"
+            "question.list" -> """{"questions":[]}"""
+            else -> error("Unexpected gateway request: $method")
+          }
+        }
+        val requestGatewayForGateway: suspend (String, String, String?) -> String = { _, method, params ->
+          requestGateway(method, params)
+        }
+        val chat = ReflectionHelpers.getField<ChatController>(runtime, "chat")
+        ReflectionHelpers.setField(chat, "requestGateway", requestGateway)
+        ReflectionHelpers.setField(chat, "requestGatewayForGateway", requestGatewayForGateway)
+        runtime.chatAgentSessionCandidatesOverrideForTests = {
+          lookupStarted.complete(currentCoroutineContext().job)
+          releaseLookup.await()
+          listOf(ChatSessionEntry(key = "agent:scout:old", updatedAtMs = 20, ownerAgentId = "scout"))
+        }
+
+        runtime.selectChatAgent("scout")
+        val lookupJob = withTimeout(5_000) { lookupStarted.await() }
+        withTimeout(5_000) {
+          runtime.chatSessionId.first { it != null }
+          runtime.chatHistoryLoading.first { !it }
+        }
+        val catalogCreation =
+          if (catalogId == null) {
+            runtime.startNewChat()
+            null
+          } else {
+            async { runtime.createSessionCatalogEntry(catalogId) }
+          }
+        val createJob = withTimeout(5_000) { createStarted.await() }
+
+        if (lookupBeforeCreation) {
+          releaseLookup.complete(Unit)
+          withTimeout(5_000) { lookupJob.join() }
+          releaseCreate.complete(Unit)
+          withTimeout(5_000) { createJob.join() }
+        } else {
+          releaseCreate.complete(Unit)
+          withTimeout(5_000) { createJob.join() }
+          assertEquals(createdKey, runtime.chatSessionKey.value)
+          releaseLookup.complete(Unit)
+          withTimeout(5_000) { lookupJob.join() }
+        }
+
+        assertEquals(createdKey, runtime.chatSessionKey.value)
+        catalogCreation?.let { assertTrue(it.await()) }
+      } finally {
+        releaseLookup.complete(Unit)
+        releaseCreate.complete(Unit)
         closeNodeRuntimeTestFixture(runtime)
       }
     }

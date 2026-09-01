@@ -47,6 +47,15 @@ internal fun SessionDashboardScreen(
   val sessionOwnerAgentId by viewModel.chatSessionOwnerAgentId.collectAsState()
   val gatewayDefaultAgentId by viewModel.gatewayDefaultAgentId.collectAsState()
   val mainSessionKey by viewModel.mainSessionKey.collectAsState()
+  val dashboardUrl =
+    controlPage?.let { page ->
+      sessionDashboardUrl(
+        baseUrl = page.baseUrl,
+        sessionKey = sessionKey,
+        fallbackAgentId = sessionOwnerAgentId ?: gatewayDefaultAgentId,
+        mainSessionKey = mainSessionKey,
+      )
+    }
   var showingDesktop by rememberSaveable(sessionKey) { mutableStateOf(false) }
   if (showingDesktop) {
     // The viewer replaces this screen in place rather than pushing a shell tab, so it must
@@ -77,7 +86,7 @@ internal fun SessionDashboardScreen(
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
         )
-        if (desktopObserveAvailable) {
+        if (desktopObserveAvailable && dashboardUrl != null) {
           ClawPlainIconButton(
             icon = Icons.Outlined.DesktopWindows,
             contentDescription = nativeString("Open desktop"),
@@ -92,17 +101,11 @@ internal fun SessionDashboardScreen(
       }
       Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
         val page = controlPage
-        if (isConnected && page != null) {
-          key(page, sessionKey, sessionOwnerAgentId, gatewayDefaultAgentId, mainSessionKey) {
+        if (isConnected && page != null && dashboardUrl != null) {
+          key(page, dashboardUrl) {
             ControlUiWebView(
               page = page,
-              url =
-                sessionDashboardUrl(
-                  baseUrl = page.baseUrl,
-                  sessionKey = sessionKey,
-                  fallbackAgentId = sessionOwnerAgentId ?: gatewayDefaultAgentId,
-                  mainSessionKey = mainSessionKey,
-                ),
+              url = dashboardUrl,
               modifier = Modifier.fillMaxSize(),
             )
           }
@@ -113,12 +116,22 @@ internal fun SessionDashboardScreen(
             verticalArrangement = Arrangement.spacedBy(6.dp),
           ) {
             Text(
-              text = nativeString("Dashboard needs a connected gateway"),
+              text =
+                if (isConnected && page != null) {
+                  nativeString("Session dashboard unavailable")
+                } else {
+                  nativeString("Dashboard needs a connected gateway")
+                },
               style = ClawTheme.type.section,
               color = ClawTheme.colors.text,
             )
             Text(
-              text = nativeString("Connect to your gateway to open this session dashboard."),
+              text =
+                if (isConnected && page != null) {
+                  nativeString("Go back and select a session to open its dashboard.")
+                } else {
+                  nativeString("Connect to your gateway to open this session dashboard.")
+                },
               style = ClawTheme.type.body,
               color = ClawTheme.colors.textMuted,
             )
@@ -130,19 +143,23 @@ internal fun SessionDashboardScreen(
 }
 
 /**
- * Mirrors the Control UI session-path contract without placing credentials in the URL.
- * The direct dashboard route preserves a configured gateway.controlUi.basePath.
+ * Mirrors buildControlUiSessionPath(exactKey = true), preserving the Control UI base path.
+ * A known session key must not become an ambiguous short session reference.
  */
 internal fun sessionDashboardUrl(
   baseUrl: String,
   sessionKey: String,
   fallbackAgentId: String? = null,
   mainSessionKey: String? = null,
-): String {
-  val rawKey = sessionKey.trim().ifEmpty { "main" }
+): String? {
+  val rawKey = sessionKey.trim().takeIf(String::isNotEmpty) ?: return null
   val parsed = parseAgentSessionKey(rawKey)
-  val agentId = normalizeDashboardAgentId(parsed?.first ?: fallbackAgentId)
+  if (parsed == null && rawKey.startsWith("agent:", ignoreCase = true)) return null
+  val rawAgentId = (parsed?.first ?: fallbackAgentId)?.trim()?.takeIf(String::isNotEmpty) ?: return null
+  val agentId = normalizeDashboardAgentId(rawAgentId)
   val rest = parsed?.second ?: rawKey
+  val segments = rest.split(':')
+  if (segments.any(String::isEmpty)) return null
   val configuredMainKey =
     mainSessionKey
       ?.trim()
@@ -156,7 +173,10 @@ internal fun sessionDashboardUrl(
       (parsed == null && normalizedRest == "main") ||
         normalizedRest == configuredMainKey ||
         normalizedRest == "global" -> emptyList()
-      else -> dashboardSessionRestSegments(rest, configuredMainKey)
+      segments.size == 1 &&
+        (normalizedRest in dashboardReservedSessionRests || dashboardShortSessionRef.matches(rest)) ->
+        listOf("~key", encodeDashboardPathSegment(rest))
+      else -> segments.map(::encodeDashboardPathSegment)
     }
   val uri = baseUrl.trimEnd('/').toUri()
   val basePath = uri.encodedPath.orEmpty().trimEnd('/')
@@ -175,8 +195,7 @@ internal fun sessionDashboardUrl(
     .toString()
 }
 
-private val dashboardSessionUuidSuffix =
-  Regex("([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$", RegexOption.IGNORE_CASE)
+private val dashboardReservedSessionRests = setOf("main", "global", "boot", "sessions")
 private val dashboardShortSessionRef = Regex("^(?:.*-)?[0-9a-f]{8,32}$", RegexOption.IGNORE_CASE)
 
 private fun parseAgentSessionKey(sessionKey: String): Pair<String, String>? {
@@ -188,38 +207,14 @@ private fun parseAgentSessionKey(sessionKey: String): Pair<String, String>? {
   return agentId to rest.joinToString(":")
 }
 
-private fun normalizeDashboardAgentId(agentId: String?): String {
-  val trimmed = agentId?.trim().orEmpty()
+private fun normalizeDashboardAgentId(agentId: String): String {
   val normalized =
-    trimmed
+    agentId
       .lowercase(Locale.ROOT)
       .replace(Regex("[^a-z0-9_-]+"), "-")
       .trim('-')
       .take(64)
   return normalized.ifEmpty { "main" }
-}
-
-private fun dashboardSessionRestSegments(
-  rest: String,
-  configuredMainKey: String,
-): List<String> {
-  val uuid =
-    dashboardSessionUuidSuffix
-      .find(rest)
-      ?.groupValues
-      ?.get(1)
-      ?.replace("-", "")
-      ?.lowercase(Locale.ROOT)
-  if (uuid != null) {
-    var length = 8
-    while (length < uuid.length && uuid.take(length).equals(configuredMainKey, ignoreCase = true)) length += 1
-    return listOf(uuid.take(length))
-  }
-  val segments = rest.split(':')
-  if (segments.size == 1 && dashboardShortSessionRef.matches(segments.first())) {
-    return listOf("~key", encodeDashboardPathSegment(segments.first()))
-  }
-  return segments.map(::encodeDashboardPathSegment)
 }
 
 private fun encodeDashboardPathSegment(segment: String): String =

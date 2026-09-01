@@ -16,6 +16,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
@@ -23,7 +24,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import kotlin.math.pow
 
 internal val clawFontFamily =
   FontFamily(
@@ -293,18 +293,6 @@ private fun familyColors(
   )
 }
 
-private fun readableAccentInk(accent: Color): Color {
-  val linearChannel: (Float) -> Double = { channel ->
-    val value = channel.toDouble()
-    if (value <= 0.04045) value / 12.92 else ((value + 0.055) / 1.055).pow(2.4)
-  }
-  val luminance =
-    0.2126 * linearChannel(accent.red) +
-      0.7152 * linearChannel(accent.green) +
-      0.0722 * linearChannel(accent.blue)
-  return if (luminance > 0.179) Color.Black else Color.White
-}
-
 internal fun clawColorsForTheme(
   dark: Boolean,
   family: AppearanceThemeFamily = AppearanceThemeFamily.Claw,
@@ -312,7 +300,7 @@ internal fun clawColorsForTheme(
 ): ClawColors {
   val base = familyColors(dark = dark, family = family)
   val accent = accentArgb?.let(::Color) ?: return base
-  val accentInk = readableAccentInk(accent)
+  val accentInk = if (accent.luminance() > 0.179f) Color.Black else Color.White
   return base.copy(
     accent = accent,
     accentSoft = accent.copy(alpha = if (dark) 0.25f else 0.08f).compositeOver(base.canvas),

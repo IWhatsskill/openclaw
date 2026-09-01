@@ -2,28 +2,15 @@
 
 OpenClaw Android is the officially released Google Play app. It connects to an OpenClaw Gateway as a companion node for chat, voice, approvals, screen, and device-aware automation.
 
-### Current App Surface
+### App features
 
-- [x] New 4-step onboarding flow
-- [x] Connect tab with `Setup Code` + `Manual` modes
-- [x] Encrypted persistence for gateway setup/auth state
-- [x] Chat UI restyled
-- [x] Settings UI restyled and de-duplicated (gateway controls moved to Connect)
-- [x] QR code scanning in onboarding
-- [x] Performance improvements
-- [x] Streaming support in chat UI
-- [x] Dedicated per-device Android chat session created/adopted on connect without resetting history
-- [x] Request camera/location and other permissions in onboarding/settings flow
-- [x] Push notifications for gateway/chat status updates
-- [x] Security hardening (biometric lock, token handling, safer defaults)
-- [x] Authenticated background presence beacons
-- [x] Voice tab full functionality
-- [x] Foreground on-device Voice Wake with Gateway-synced wake words
-- [x] Skill Workshop settings can filter proposals, inspect proposal content, and apply/reject/quarantine drafts through Gateway RPCs
-- [x] Skills settings can search installed skills, enable or disable them, and install Gateway-verified ClawHub releases
-- [x] Per-app language selection for translated resources follows Android system settings and persistence
-- [x] Cron job settings support details, run history, run now, edits, enable/disable, and deletion with admin-scoped Gateway access
-- [x] Wear OS companion proxies sessions, transcripts, replies, aborts, and realtime Talk through the paired phone without storing Gateway credentials on the watch
+- Pair with a Gateway using a QR code, setup code, or manual connection. Gateway credentials are stored encrypted.
+- Stream chat replies, choose models and reasoning effort, manage session permissions, and expand task progress. Dictation, voice messages, and Talk are part of Chat, not a separate Voice tab.
+- Select agents, pin sessions, and browse available native session catalogs from the sidebar. Connecting creates or adopts a dedicated Android session without resetting its history.
+- Choose a theme family, color mode, accent, and app language in **Settings → Appearance**. Appearance choices sync with a connected writable profile; read-only connections keep edits on the device.
+- Enable camera, location, and other phone capabilities through onboarding or Settings. Biometric locking, Gateway/chat notifications, and authenticated background presence are supported.
+- Manage installed skills and Gateway-verified ClawHub releases, review Skill Workshop proposals, and inspect or edit automations with the required Gateway access.
+- Use the Wear OS companion for sessions, replies, aborts, and realtime Talk through the paired phone without storing Gateway credentials on the watch.
 
 ## Open in Android Studio
 
@@ -204,15 +191,15 @@ Hotspot script behavior:
 
 ## Run on a Real Android Phone (USB)
 
-1) On phone, enable **Developer options** + **USB debugging**.
-2) Connect by USB and accept the debugging trust prompt on phone.
-3) Verify ADB can see the device:
+1. On phone, enable **Developer options** + **USB debugging**.
+2. Connect by USB and accept the debugging trust prompt on phone.
+3. Verify ADB can see the device:
 
 ```bash
 adb devices -l
 ```
 
-4) Install + launch debug build:
+4. Install + launch debug build:
 
 ```bash
 pnpm android:install
@@ -253,18 +240,18 @@ This app is native Kotlin + Jetpack Compose.
 
 ## Connect / Pair
 
-1) Start the gateway (on your main machine):
+1. Start the gateway (on your main machine):
 
 ```bash
 pnpm openclaw gateway --port 18789 --verbose
 ```
 
-2) In the Android app:
+2. In the Android app:
 
-- Open the **Connect** tab.
-- Use **Setup Code** or **Manual** mode to connect.
+- Follow the first-run connection screen, or open **Settings → Gateway** to change a saved connection.
+- Use a setup code or enter the Gateway manually.
 
-3) Approve pairing (on the gateway machine):
+3. Approve pairing (on the gateway machine):
 
 ```bash
 openclaw devices list
@@ -336,12 +323,12 @@ This suite assumes setup is already done manually. It does **not** install/run/p
 
 Pre-req checklist:
 
-1) Gateway is running and reachable from the Android app.
-2) Android app is connected to that gateway and `openclaw nodes status` shows it as paired + connected.
-3) App stays unlocked and in foreground for the whole run.
-4) Grant runtime permissions for capabilities you expect to pass (camera/mic/location/notification listener/location, etc.).
-5) No interactive system dialogs should be pending before test start.
-6) Local operator test client pairing is approved. If first run fails with `pairing required`, preview the latest pending request, approve the printed request ID, then rerun:
+1. Gateway is running and reachable from the Android app.
+2. Android app is connected to that gateway and `openclaw nodes status` shows it as paired + connected.
+3. App stays unlocked and in foreground for the whole run.
+4. Grant runtime permissions for capabilities you expect to pass (camera/mic/location/notification listener/location, etc.).
+5. No interactive system dialogs should be pending before test start.
+6. Local operator test client pairing is approved. If first run fails with `pairing required`, preview the latest pending request, approve the printed request ID, then rerun:
 
 ```bash
 openclaw devices list
@@ -375,6 +362,7 @@ Common failure quick-fixes:
 
 - `pairing required` before tests start:
   - list pending requests (`openclaw devices list`), then approve with the exact ID (`openclaw devices approve <requestId>`) and rerun.
+
 ## Contributions
 
 Maintainer: @obviyus. For issues/questions/contributions, please open an issue or reach out on Discord.

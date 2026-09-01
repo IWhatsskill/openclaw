@@ -1222,6 +1222,7 @@ private fun SidebarCatalogSessionRow(
   onDragActiveChange: (Boolean) -> Unit,
 ) {
   val enabled = sidebarCatalogSessionSelectionEnabled(session, canMutateSessions)
+  val nativeTitle = session.name?.takeIf(String::isNotBlank) ?: session.threadId
   val pinned = liveSession?.pinned == true
   val draggableSession = liveSession?.takeIf { canMutateSessions }
   val activity =
@@ -1250,7 +1251,7 @@ private fun SidebarCatalogSessionRow(
   ) {
     Column(modifier = Modifier.weight(1f)) {
       Text(
-        text = session.name?.takeIf(String::isNotBlank) ?: session.threadId,
+        text = liveSession?.let { sessionPresentationTitle(it) { nativeTitle } } ?: nativeTitle,
         style = ClawTheme.type.body,
         color = if (enabled) palette.text else palette.muted,
         maxLines = 1,

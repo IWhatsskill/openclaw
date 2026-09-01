@@ -155,7 +155,6 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
@@ -166,7 +165,6 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -259,16 +257,16 @@ internal enum class ChatComposerTrailingAction {
   Send,
 }
 
-/** Talk must remain stoppable even when the active session adds text to the draft. */
+/** A retained draft stays a Send action while admission waits; active Talk and runs remain stoppable. */
 internal fun resolveChatComposerTrailingAction(
   talkActive: Boolean,
   runActive: Boolean,
-  sendEnabled: Boolean,
+  hasContent: Boolean,
 ): ChatComposerTrailingAction =
   when {
     talkActive -> ChatComposerTrailingAction.StopTalk
     runActive -> ChatComposerTrailingAction.Stop
-    sendEnabled -> ChatComposerTrailingAction.Send
+    hasContent -> ChatComposerTrailingAction.Send
     else -> ChatComposerTrailingAction.StartTalk
   }
 
@@ -398,6 +396,8 @@ fun ChatScreen(
       )
     }
   val fastMode = (activeSession?.effectiveFastMode ?: activeSession?.fastMode ?: ChatFastMode.Off).isEnabled
+  val permissionModePending = activeSession?.permissionModePending == true
+  val sessionSettingsPending = sessionKey in pendingSessionSettingsKeys
   val fastModeProviderSupported =
     fastModeProviderSupportedForSelection(
       selectedModelRef = selectedModelRef,
@@ -866,11 +866,13 @@ fun ChatScreen(
           sending = sendInFlight,
           activeRun = pendingRunCount > 0,
           streaming = streamingAssistantText != null,
-          settingsMutationPending = sessionKey in pendingSessionSettingsKeys,
+          settingsMutationPending = sessionSettingsPending,
         ),
       contextUsage = contextUsage,
       permissionMode = activeSession?.permissionMode,
-      permissionPickerEnabled = gatewayConnectionDisplay.isConnected && canWriteSessionSettings,
+      permissionModePending = permissionModePending,
+      permissionPickerEnabled =
+        gatewayConnectionDisplay.isConnected && canWriteSessionSettings && !permissionModePending && !sessionSettingsPending,
       modelPickerExpanded = showModelPicker,
       canSelectFullPermission = canAdminSessionSettings,
       selectedModelLabel = selectedModelLabel,
@@ -2159,6 +2161,7 @@ internal fun progressCardIsComplete(
 private fun ProgressCardPill(
   card: ChatProgressCard,
   hasActiveRun: Boolean,
+  modifier: Modifier = Modifier,
 ) {
   val steps = card.steps
   val currentStep =
@@ -2173,9 +2176,9 @@ private fun ProgressCardPill(
       (steps.indexOf(currentStep) + 1).coerceAtLeast(1)
     }
   val complete = progressCardIsComplete(card, hasActiveRun)
-  var expanded by rememberSaveable { mutableStateOf(!complete) }
+  var expanded by rememberSaveable { mutableStateOf(false) }
   LaunchedEffect(complete) {
-    expanded = !complete
+    if (complete) expanded = false
   }
   val activityTime = relativeSessionTime(card.updatedAt.takeIf { it > 0L } ?: System.currentTimeMillis())
   val activityLabel =
@@ -2191,7 +2194,7 @@ private fun ProgressCardPill(
       nativeString("\$activityLabel \u00b7 \$currentPosition/\${steps.size}", activityLabel, currentPosition, steps.size)
     }
 
-  Column(modifier = Modifier.fillMaxWidth()) {
+  Column(modifier = modifier.fillMaxWidth().heightIn(max = 240.dp)) {
     Surface(
       onClick = { expanded = !expanded },
       modifier = Modifier.fillMaxWidth().heightIn(min = 42.dp),
@@ -2259,7 +2262,12 @@ private fun ProgressCardPill(
 
     if (expanded) {
       Column(
-        modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 16.dp, bottom = 14.dp),
+        modifier =
+          Modifier
+            .weight(1f, fill = false)
+            .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
+            .padding(start = 12.dp, end = 16.dp, bottom = 14.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
       ) {
         card.markdown?.let { markdown ->
@@ -2326,6 +2334,7 @@ private fun ChatComposer(
   fastModeEnabled: Boolean,
   contextUsage: ChatContextUsage,
   permissionMode: ChatPermissionMode?,
+  permissionModePending: Boolean,
   permissionPickerEnabled: Boolean,
   modelPickerExpanded: Boolean,
   canSelectFullPermission: Boolean,
@@ -2376,13 +2385,14 @@ private fun ChatComposer(
 
   val dictationActive =
     dictationState is ChatDictationState.Starting || dictationState is ChatDictationState.Listening
+  val hasContent = value.trim().isNotEmpty() || attachments.isNotEmpty()
   // Offline sends queue durably too (text, images, and voice notes), so the gate is identical
   // to the connected one; admission errors keep the draft when the durable queue refuses it.
   val sendEnabled =
     chatComposerSendEnabled(
       voiceNoteState = voiceNoteState,
       pendingRunCount = pendingRunCount,
-      hasContent = value.trim().isNotEmpty() || attachments.isNotEmpty(),
+      hasContent = hasContent,
       shareStaging = shareStaging,
       sendInFlight = sendInFlight,
       dictationActive = dictationActive,
@@ -2441,7 +2451,12 @@ private fun ChatComposer(
     ) {
       Column(modifier = Modifier.fillMaxWidth()) {
         progressCard?.let { card ->
-          ProgressCardPill(card = card, hasActiveRun = pendingRunCount > 0)
+          ProgressCardPill(
+            card = card,
+            hasActiveRun = pendingRunCount > 0,
+            // The editor and Stop own their height before progress receives the remaining space.
+            modifier = Modifier.weight(1f, fill = false),
+          )
           HorizontalDivider(thickness = 1.dp, color = ClawTheme.colors.border)
         }
         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -2471,6 +2486,7 @@ private fun ChatComposer(
               onToggleTalk = onToggleTalk,
               runActive = pendingRunCount > 0,
               onAbort = onAbort,
+              hasContent = hasContent,
               sendEnabled = sendEnabled,
               onSend = onSend,
               selectedModelLabel = selectedModelLabel,
@@ -2481,6 +2497,7 @@ private fun ChatComposer(
               thinkingSupported = thinkingSupported,
               fastMode = fastMode,
               permissionMode = permissionMode,
+              permissionModePending = permissionModePending,
               permissionPickerEnabled = permissionPickerEnabled,
               canSelectFullPermission = canSelectFullPermission,
               onPermissionModeChange = onPermissionModeChange,
@@ -2521,11 +2538,10 @@ private fun ChatThinkingLevelSelector(
 ) {
   val normalizedSelected = selectedId.trim().lowercase(Locale.US)
   val languageTag = currentAppLanguage().languageTag
-  val selectedLabel =
-    options
-      .firstOrNull { it.id.trim().lowercase(Locale.US) == normalizedSelected }
-      ?.let { option -> chatThinkingOptionLabel(option, languageTag) }
-      .orEmpty()
+  val selectedOption =
+    options.firstOrNull { it.id.trim().lowercase(Locale.US) == normalizedSelected }
+      ?: ChatThinkingLevelOption(id = selectedId, label = selectedId)
+  val selectedLabel = chatThinkingOptionLabel(selectedOption, languageTag)
   Surface(
     modifier = Modifier.fillMaxWidth(),
     shape = RoundedCornerShape(24.dp),
@@ -2547,20 +2563,16 @@ private fun ChatThinkingLevelSelector(
             Text(
               text = nativeString("Effort"),
               style = ClawTheme.type.caption.copy(fontWeight = FontWeight.SemiBold),
+              modifier = Modifier.weight(1f),
             )
-            Text(
-              text = selectedLabel,
-              style = ClawTheme.type.caption.copy(fontWeight = FontWeight.SemiBold),
-              color = ClawTheme.colors.textMuted,
+            ChatThinkingEffortPicker(
+              options = options,
+              selectedId = selectedId,
+              selectedLabel = selectedLabel,
+              enabled = thinkingLevelEnabled,
+              onSelect = onSelect,
             )
           }
-          ChatThinkingEffortSlider(
-            options = options,
-            selectedId = selectedId,
-            selectedLabel = selectedLabel,
-            enabled = thinkingLevelEnabled,
-            onSelect = onSelect,
-          )
         }
         HorizontalDivider(color = ClawTheme.colors.border)
       }
@@ -2600,106 +2612,59 @@ private fun ChatThinkingLevelSelector(
   }
 }
 
-internal fun chatThinkingSliderIndex(
-  selectedId: String,
-  options: List<ChatThinkingLevelOption>,
-): Int {
-  if (options.isEmpty()) return 0
-  val normalized = selectedId.trim().lowercase(Locale.US)
-  return options.indexOfFirst { option -> option.id.trim().lowercase(Locale.US) == normalized }.coerceAtLeast(0)
-}
-
-internal fun chatThinkingSliderSelection(
-  sliderValue: Float,
-  options: List<ChatThinkingLevelOption>,
-): String? {
-  if (options.isEmpty()) return null
-  val index = sliderValue.roundToInt().coerceIn(0, options.lastIndex)
-  return options[index].id
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ChatThinkingEffortSlider(
+private fun ChatThinkingEffortPicker(
   options: List<ChatThinkingLevelOption>,
   selectedId: String,
   selectedLabel: String,
   enabled: Boolean,
   onSelect: (String) -> Unit,
 ) {
-  if (options.isEmpty()) return
-  val selectedIndex = chatThinkingSliderIndex(selectedId, options)
-  var sliderValue by remember(options, selectedId) { mutableFloatStateOf(selectedIndex.toFloat()) }
-  val lastIndex = options.lastIndex
-  val trackColor = ClawTheme.colors.surfacePressed
-  val trackBorderColor = ClawTheme.colors.borderStrong
-  val markerColor = ClawTheme.colors.textSubtle
-
-  Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-    if (lastIndex > 0) {
-      Slider(
-        value = sliderValue.coerceIn(0f, lastIndex.toFloat()),
-        enabled = enabled,
-        onValueChange = { sliderValue = it },
-        onValueChangeFinished = {
-          chatThinkingSliderSelection(sliderValue, options)?.let(onSelect)
-        },
-        valueRange = 0f..lastIndex.toFloat(),
-        steps = (options.size - 2).coerceAtLeast(0),
-        modifier =
-          Modifier
-            .fillMaxWidth()
-            .height(32.dp)
-            .semantics {
-              contentDescription = nativeString("Effort")
-              stateDescription = selectedLabel
-            },
-        thumb = {
-          Surface(
-            modifier = Modifier.size(width = 28.dp, height = 20.dp),
-            shape = RoundedCornerShape(10.dp),
-            color = ClawTheme.colors.text,
-            shadowElevation = 1.dp,
-          ) {}
-        },
-        track = { _ ->
-          Canvas(modifier = Modifier.fillMaxWidth().height(24.dp)) {
-            val trackRadius = 12.dp.toPx()
-            drawRoundRect(
-              color = trackColor,
-              cornerRadius = CornerRadius(trackRadius, trackRadius),
-            )
-            drawRoundRect(
-              color = trackBorderColor,
-              cornerRadius = CornerRadius(trackRadius, trackRadius),
-              style = Stroke(width = 1.dp.toPx()),
-            )
-            val edgeInset = 14.dp.toPx()
-            val usableWidth = (size.width - edgeInset * 2f).coerceAtLeast(0f)
-            options.indices.forEach { index ->
-              val fraction = index.toFloat() / lastIndex.toFloat()
-              drawCircle(
-                color = markerColor,
-                radius = 2.dp.toPx(),
-                center = Offset(edgeInset + usableWidth * fraction, size.height / 2f),
-              )
-            }
-          }
-        },
-      )
-    } else {
-      Box(
-        modifier =
-          Modifier
-            .fillMaxWidth()
-            .height(24.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .background(ClawTheme.colors.surfacePressed),
-      )
+  var expanded by remember { mutableStateOf(false) }
+  LaunchedEffect(enabled) {
+    if (!enabled) expanded = false
+  }
+  Box {
+    Surface(
+      onClick = { expanded = true },
+      enabled = enabled && options.isNotEmpty(),
+      modifier =
+        Modifier
+          .widthIn(max = 200.dp)
+          .heightIn(min = ClawTheme.spacing.touchTarget)
+          .semantics {
+            contentDescription = nativeString("Effort")
+            stateDescription = selectedLabel
+          },
+      shape = RoundedCornerShape(ClawTheme.radii.panel),
+      color = Color.Transparent,
+    ) {
+      Row(
+        modifier = Modifier.padding(horizontal = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+      ) {
+        Text(selectedLabel, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+        Icon(Icons.Default.ArrowDropDown, contentDescription = null)
+      }
     }
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-      Text(nativeString("Faster"), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
-      Text(nativeString("Smarter"), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+    DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+      // Effective metadata may retain a value absent from lightweight picker options.
+      // Display it above, but only Gateway-advertised choices may issue a mutation.
+      options.forEach { option ->
+        DropdownMenuItem(
+          text = { Text(chatThinkingOptionLabel(option)) },
+          trailingIcon = {
+            if (option.id.equals(selectedId, ignoreCase = true)) {
+              Icon(Icons.Default.Check, contentDescription = nativeString("Selected"))
+            }
+          },
+          onClick = {
+            expanded = false
+            onSelect(option.id)
+          },
+        )
+      }
     }
   }
 }
@@ -3036,6 +3001,7 @@ private fun ChatInputPill(
   onToggleTalk: () -> Unit,
   runActive: Boolean,
   onAbort: () -> Unit,
+  hasContent: Boolean,
   sendEnabled: Boolean,
   onSend: () -> Unit,
   selectedModelLabel: String,
@@ -3046,6 +3012,7 @@ private fun ChatInputPill(
   thinkingSupported: Boolean,
   fastMode: Boolean,
   permissionMode: ChatPermissionMode?,
+  permissionModePending: Boolean,
   permissionPickerEnabled: Boolean,
   canSelectFullPermission: Boolean,
   onPermissionModeChange: (ChatPermissionMode?) -> Unit,
@@ -3073,12 +3040,13 @@ private fun ChatInputPill(
       thinkingSelectorExpanded ||
       modelPickerExpanded
   val auxiliaryControlsPinned =
-    chatComposerAuxiliaryControlsPinned(
-      menuExpanded = menuExpanded,
-      dictationActive = dictationActive,
-      talkActive = talkActive,
-      touchExplorationEnabled = touchExplorationEnabled,
-    )
+    permissionModePending ||
+      chatComposerAuxiliaryControlsPinned(
+        menuExpanded = menuExpanded,
+        dictationActive = dictationActive,
+        talkActive = talkActive,
+        touchExplorationEnabled = touchExplorationEnabled,
+      )
   val revealAuxiliaryControls = {
     auxiliaryControlsVisible = true
     interactionGeneration += 1
@@ -3151,6 +3119,14 @@ private fun ChatInputPill(
         )
       }
     }
+    if (permissionModePending) {
+      Text(
+        text = nativeString("Applying permissions…"),
+        style = ClawTheme.type.caption,
+        color = ClawTheme.colors.textMuted,
+        modifier = Modifier.padding(horizontal = 14.dp),
+      )
+    }
     Row(
       modifier = Modifier.fillMaxWidth().padding(start = 2.dp, end = 8.dp, top = 2.dp, bottom = 6.dp),
       verticalAlignment = Alignment.CenterVertically,
@@ -3218,11 +3194,15 @@ private fun ChatInputPill(
                   },
               ) {
                 Box(contentAlignment = Alignment.Center) {
-                  ChatPermissionIcon(
-                    mode = permissionMode,
-                    contentDescription = nativeString("Permissions: \${mode}", chatPermissionModeLabel(permissionMode)),
-                    modifier = Modifier.size(16.dp),
-                  )
+                  if (permissionModePending) {
+                    Icon(Icons.Default.HourglassEmpty, contentDescription = nativeString("Applying permissions…"), modifier = Modifier.size(16.dp))
+                  } else {
+                    ChatPermissionIcon(
+                      mode = permissionMode,
+                      contentDescription = nativeString("Permissions: \${mode}", chatPermissionModeLabel(permissionMode)),
+                      modifier = Modifier.size(16.dp),
+                    )
+                  }
                 }
               }
               ChatPermissionMenu(
@@ -3285,8 +3265,8 @@ private fun ChatInputPill(
           }
         }
       }
-      when (resolveChatComposerTrailingAction(talkActive = talkActive, runActive = runActive, sendEnabled = sendEnabled)) {
-        ChatComposerTrailingAction.Send -> SendButton(enabled = true, onClick = onSend)
+      when (resolveChatComposerTrailingAction(talkActive = talkActive, runActive = runActive, hasContent = hasContent)) {
+        ChatComposerTrailingAction.Send -> SendButton(enabled = sendEnabled, onClick = onSend)
         ChatComposerTrailingAction.StartTalk -> LiveTalkButton(active = false, onClick = onToggleTalk)
         ChatComposerTrailingAction.StopTalk -> {
           if (runActive) StopButton(onClick = onAbort)
@@ -3387,8 +3367,6 @@ private fun ChatPermissionMenu(
 }
 
 internal data class ChatContextSummary(
-  val usedTokens: Long,
-  val contextTokens: Long,
   val fraction: Float,
   val percent: Int,
   val approximate: Boolean,
@@ -3406,8 +3384,6 @@ internal fun chatContextSummary(
   val approximation = if (approximate) "~" else ""
   val percent = (fraction * 100).roundToInt()
   return ChatContextSummary(
-    usedTokens = used,
-    contextTokens = context,
     fraction = fraction,
     percent = percent,
     approximate = approximate,
@@ -3606,7 +3582,7 @@ private fun ChatComposerFooterChip(
 internal fun chatThinkingGaugeFraction(
   thinkingLevel: String,
   options: List<ChatThinkingLevelOption>,
-): Float {
+): Float? {
   val normalizedLevel = thinkingLevel.trim().lowercase(Locale.US)
   val normalizedOptions = options.map { it.id.trim().lowercase(Locale.US) }
   val selectedIndex = normalizedOptions.indexOf(normalizedLevel)
@@ -3619,8 +3595,8 @@ internal fun chatThinkingGaugeFraction(
     "low" -> 0.4f
     "medium" -> 0.6f
     "high" -> 0.8f
-    "xhigh", "max", "ultimate" -> 1f
-    else -> 0.5f
+    "xhigh", "max", "ultra" -> 1f
+    else -> null
   }
 }
 
@@ -3715,14 +3691,16 @@ private fun ChatComposerThinkingChip(
               cap = StrokeCap.Round,
             )
           }
-          val needleAngle = startAngle + sweepAngle * chatThinkingGaugeFraction(thinkingLevel, thinkingOptions)
-          drawLine(
-            color = gaugeColor,
-            start = pivot,
-            end = gaugePoint(needleAngle, radius - 3.4.dp.toPx()),
-            strokeWidth = 1.5.dp.toPx(),
-            cap = StrokeCap.Round,
-          )
+          chatThinkingGaugeFraction(thinkingLevel, thinkingOptions)?.let { fraction ->
+            val needleAngle = startAngle + sweepAngle * fraction
+            drawLine(
+              color = gaugeColor,
+              start = pivot,
+              end = gaugePoint(needleAngle, radius - 3.4.dp.toPx()),
+              strokeWidth = 1.5.dp.toPx(),
+              cap = StrokeCap.Round,
+            )
+          }
           drawCircle(color = gaugeColor, radius = 1.7.dp.toPx(), center = pivot)
         }
         if (fastMode) {
@@ -3987,17 +3965,6 @@ internal fun contextMeterWidth(usage: ChatContextUsage): Float? {
   return (total.toDouble() / context.toDouble()).coerceIn(0.0, 1.0).toFloat()
 }
 
-internal fun contextMeterThinkingLabel(value: String): String {
-  val normalized = value.trim().lowercase(Locale.US).ifEmpty { "off" }
-  return when (normalized) {
-    "off" -> nativeString("Off")
-    "low" -> nativeString("Low")
-    "medium" -> nativeString("Medium")
-    "high" -> nativeString("High")
-    else -> normalized
-  }
-}
-
 internal fun chatThinkingSupported(
   selection: ChatThinkingLevelSelection,
   fallbackSupported: Boolean,
@@ -4028,12 +3995,6 @@ internal fun chatFastModeControlEnabled(
     !activeRun &&
     !streaming &&
     !settingsMutationPending
-
-internal fun chatThinkingOptionRows(options: List<ChatThinkingLevelOption>): List<List<ChatThinkingLevelOption>> {
-  if (options.isEmpty()) return emptyList()
-  if (options.size <= 4) return listOf(options)
-  return options.chunked((options.size + 1) / 2)
-}
 
 internal fun chatThinkingOptionLabel(
   option: ChatThinkingLevelOption,

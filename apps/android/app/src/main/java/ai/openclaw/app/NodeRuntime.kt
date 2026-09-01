@@ -239,6 +239,7 @@ internal data class AppearancePreferenceEditTarget(
 private data class GatewayAppearanceScopeOwner(
   val scope: AppearancePreferenceScope,
   val generation: Long,
+  val lease: GatewaySession.RequestLease,
 )
 
 private val appearancePreferenceKeys = setOf("ui.theme", "ui.themeMode", "ui.accent")
@@ -1278,9 +1279,6 @@ class NodeRuntime private constructor(
   @Volatile
   private var appearancePreferenceScopeOwner: GatewayAppearanceScopeOwner? = null
 
-  @Volatile
-  private var appearancePreferenceNoDurableOwner: GatewayAppearanceScopeOwner? = null
-
   private val appearancePreferenceRefreshGuard = LatestGatewayRefreshGuard()
   private val appearancePreferenceWriteMutexes = appearancePreferenceKeys.associateWith { Mutex() }
   private val _modelCatalog = MutableStateFlow<List<GatewayModelSummary>>(emptyList())
@@ -1371,7 +1369,6 @@ class NodeRuntime private constructor(
   private val sessionCatalogSelectionSeq = AtomicLong(0)
   private val sessionCatalogContinueMutex = Mutex()
   private val sessionCatalogProgressOwner = AtomicReference<SessionCatalogProgressOwner?>(null)
-  private var sessionCatalogProgressiveListSupported = true
   private val _clawHubSkillMethodsAvailable = MutableStateFlow(false)
   val clawHubSkillMethodsAvailable: StateFlow<Boolean> = _clawHubSkillMethodsAvailable.asStateFlow()
   private val systemAgentChatSupported = MutableStateFlow<Boolean?>(null)
@@ -1804,6 +1801,8 @@ class NodeRuntime private constructor(
     _operatorScopes.value = emptyList()
     _devicePairingCapabilities.value = GatewayDevicePairingCapabilities()
     _gatewayAccentArgb.value = null
+    appearancePreferenceScopeOwner = null
+    appearancePreferenceRefreshGuard.invalidate()
     _gatewayAgents.value = emptyList()
     selectedChatAgentId = null
     chatAgentSelectionSeq.incrementAndGet()
@@ -1841,7 +1840,6 @@ class NodeRuntime private constructor(
     sessionCatalogRefreshSeq.incrementAndGet()
     sessionCatalogContinueSeq.incrementAndGet()
     sessionCatalogProgressOwner.set(null)
-    sessionCatalogProgressiveListSupported = true
     _sessionCatalogState.value = SessionCatalogState()
     _skillMutationKeys.value = emptySet()
     clawHubSkillSearchSeq.incrementAndGet()
@@ -2708,6 +2706,7 @@ class NodeRuntime private constructor(
           _sessionCatalogState.value.copy(errorText = nativeString("This session cannot be continued."))
         return false
       }
+      retirePendingChatSelection()
       continueSessionCatalogEntryFromGateway(entry)
     } finally {
       sessionCatalogContinueMutex.unlock()
@@ -2715,8 +2714,7 @@ class NodeRuntime private constructor(
   }
 
   suspend fun createSessionCatalogEntry(catalogId: String): Boolean {
-    retirePendingSessionCatalogContinuation()
-    stopMessageSpeech()
+    retirePendingChatSelection()
     return chat.startNewChatAwait(catalogId = catalogId)
   }
 
@@ -5191,9 +5189,7 @@ class NodeRuntime private constructor(
     sessionKey: String,
     ownerAgentId: String? = null,
   ) {
-    chatAgentSelectionSeq.incrementAndGet()
-    retirePendingSessionCatalogContinuation()
-    stopMessageSpeech()
+    retirePendingChatSelection()
     chat.switchSession(sessionKey, ownerAgentId)
     rememberSelectedChatSession(sessionKey, ownerAgentId)
   }
@@ -5234,10 +5230,8 @@ class NodeRuntime private constructor(
   fun selectChatAgent(agentId: String) {
     val normalizedAgentId = agentId.trim()
     if (normalizedAgentId.isEmpty()) return
-    val selectionSequence = chatAgentSelectionSeq.incrementAndGet()
+    val selectionSequence = retirePendingChatSelection()
     val selectionOwner = chatAgentSessionSelectionOwner(normalizedAgentId)
-    retirePendingSessionCatalogContinuation()
-    stopMessageSpeech()
     // Agent selection owns every main-session consumer; switching chat alone would
     // leave Talk mode bound to the previous agent.
     selectedChatAgentId = normalizedAgentId
@@ -5310,8 +5304,7 @@ class NodeRuntime private constructor(
   }
 
   fun startNewChat(worktree: Boolean = false) {
-    retirePendingSessionCatalogContinuation()
-    stopMessageSpeech()
+    retirePendingChatSelection()
     chat.startNewChat(worktree = worktree)
   }
 
@@ -5447,7 +5440,7 @@ class NodeRuntime private constructor(
                   mergeSessionCatalogHostProgress(
                     current = current.catalogs,
                     progress = progress,
-                    preserveExpandedHostIds = current.expandedHostIds,
+                    preserveExpandedHostIds = current.loadedPageDepthsByHost.keys,
                   ),
               )
           }
@@ -5782,9 +5775,7 @@ class NodeRuntime private constructor(
     }
   }
 
-  private suspend fun refreshSessionCatalogFromGateway(agentId: String?) = refreshSessionCatalogLocked(agentId)
-
-  private suspend fun refreshSessionCatalogLocked(agentId: String?) {
+  private suspend fun refreshSessionCatalogFromGateway(agentId: String?) {
     val normalizedAgentId = agentId?.trim()?.takeIf(String::isNotEmpty)
     if (!sessionCatalogAvailable.value) {
       sessionCatalogProgressOwner.set(null)
@@ -5819,7 +5810,6 @@ class NodeRuntime private constructor(
         previous.copy(
           loading = true,
           catalogs = if (previous.agentId == normalizedAgentId) previous.catalogs else emptyList(),
-          expandedHostIds = if (previous.agentId == normalizedAgentId) previous.expandedHostIds else emptySet(),
           loadedPageDepthsByHost = previousPageDepths,
           errorText = null,
           agentId = normalizedAgentId,
@@ -5827,40 +5817,17 @@ class NodeRuntime private constructor(
         )
     }
     val progressOwner =
-      if (sessionCatalogProgressiveListSupported) {
-        SessionCatalogProgressOwner(
-          progressId = UUID.randomUUID().toString(),
-          agentId = normalizedAgentId,
-        ).also(sessionCatalogProgressOwner::set)
-      } else {
-        null
-      }
+      SessionCatalogProgressOwner(
+        progressId = UUID.randomUUID().toString(),
+        agentId = normalizedAgentId,
+      ).also(sessionCatalogProgressOwner::set)
     try {
       val response =
-        try {
-          requestGatewayData(
-            gatewayScope,
-            "sessions.catalog.list",
-            sessionCatalogListParams(normalizedAgentId, progressOwner?.progressId),
-          )
-        } catch (err: GatewayRequestRejected) {
-          if (
-            progressOwner == null ||
-            !isLegacySessionCatalogProgressRejection(
-              code = err.gatewayError.code,
-              message = err.gatewayError.message,
-            )
-          ) {
-            throw err
-          }
-          sessionCatalogProgressOwner.compareAndSet(progressOwner, null)
-          sessionCatalogProgressiveListSupported = false
-          requestGatewayData(
-            gatewayScope,
-            "sessions.catalog.list",
-            sessionCatalogListParams(normalizedAgentId),
-          )
-        }
+        requestGatewayData(
+          gatewayScope,
+          "sessions.catalog.list",
+          sessionCatalogListParams(normalizedAgentId, progressOwner.progressId),
+        )
       val firstPageCatalogs = parseSessionCatalogs(response, normalizedAgentId, json)
       val freshCatalogs =
         refetchLoadedSessionCatalogPages(
@@ -5989,12 +5956,6 @@ class NodeRuntime private constructor(
                     pageMerge.advancedHostIds,
                   )
                 },
-              expandedHostIds =
-                latest.expandedHostIds +
-                  pageMerge
-                    ?.advancedHostIds
-                    .orEmpty()
-                    .map { sessionCatalogHostKey(normalizedCatalogId, it) },
               loadingMoreCatalogIds = latest.loadingMoreCatalogIds - normalizedCatalogId,
             )
         }
@@ -6046,7 +6007,6 @@ class NodeRuntime private constructor(
             _sessionCatalogState.value = _sessionCatalogState.value.copy(continuingEntryId = null)
             if (sessionCatalogSelectionSeq.compareAndSet(selectionSeq, selectionSeq + 1)) {
               stopMessageSpeech()
-              chatAgentSelectionSeq.incrementAndGet()
               chat.switchSession(sessionKey, entry.agentId)
               rememberSelectedChatSession(sessionKey, entry.agentId)
               opened = true
@@ -6070,12 +6030,16 @@ class NodeRuntime private constructor(
     }
   }
 
-  private fun retirePendingSessionCatalogContinuation() {
+  private fun retirePendingChatSelection(): Long {
+    // Every explicit destination, including New, supersedes an agent's pending session lookup.
+    val selectionSequence = chatAgentSelectionSeq.incrementAndGet()
     sessionCatalogSelectionSeq.incrementAndGet()
-    if (_sessionCatalogState.value.continuingEntryId == null) return
-    sessionCatalogContinueSeq.incrementAndGet()
-    _sessionCatalogState.value =
-      _sessionCatalogState.value.copy(continuingEntryId = null)
+    if (_sessionCatalogState.value.continuingEntryId != null) {
+      sessionCatalogContinueSeq.incrementAndGet()
+      _sessionCatalogState.value = _sessionCatalogState.value.copy(continuingEntryId = null)
+    }
+    stopMessageSpeech()
+    return selectionSequence
   }
 
   /** Publishes approval state only while the response's operator socket still owns the method catalog. */
@@ -6117,32 +6081,65 @@ class NodeRuntime private constructor(
       providerModelCatalogRefreshGuard.publishIfCurrent(refreshGeneration) { publish() }
     }
 
-  private inline fun publishAppearancePreferenceRefresh(
+  private fun publishAppearancePreferences(
     gatewayScope: GatewayDataScope,
-    refreshGeneration: Long,
-    crossinline publish: () -> Unit,
+    lease: GatewaySession.RequestLease,
+    refreshGeneration: Long? = null,
+    publish: () -> Unit,
   ): Boolean {
-    var refreshPublished = false
-    val scopePublished =
+    var published = false
+    // Match GatewaySession's physical -> caller lock order. A profile belongs to
+    // this authenticated socket, even when the endpoint survives a reconnect.
+    lease.commitIfCurrent {
       publishGatewayData(gatewayScope) {
-        refreshPublished =
-          appearancePreferenceRefreshGuard.publishIfCurrent(refreshGeneration) {
+        published =
+          if (refreshGeneration == null) {
             publish()
+            true
+          } else {
+            appearancePreferenceRefreshGuard.publishIfCurrent(refreshGeneration, publish)
           }
       }
-    return scopePublished && refreshPublished
+    }
+    return published
+  }
+
+  private suspend fun requestAppearancePreference(
+    gatewayScope: GatewayDataScope,
+    lease: GatewaySession.RequestLease,
+    method: String,
+    paramsJson: String,
+    preferenceScope: AppearancePreferenceScope? = null,
+  ): String {
+    val response =
+      lease.request(method, paramsJson) { enqueue ->
+        val enqueued =
+          publishGatewayData(gatewayScope) {
+            if (preferenceScope != null && appearancePreferenceScopeOwner?.scope != preferenceScope) {
+              throw GatewayRequestNotEnqueued("appearance profile changed")
+            }
+            enqueue()
+          }
+        if (!enqueued) {
+          throw GatewayRequestNotEnqueued("appearance gateway changed")
+        }
+      }
+    if (!lease.isCurrent() || !isGatewayDataScopeCurrent(gatewayScope)) {
+      throw CancellationException("appearance connection changed")
+    }
+    return response
   }
 
   private suspend fun refreshBrandingFromGateway() {
     val gatewayScope = captureGatewayDataScope() ?: return
-    if (!gatewayConnectionDisplay.value.isConnected) return
+    val lease = operatorSession.captureRequestLease(gatewayScope.stableId) ?: return
     val refreshGeneration = appearancePreferenceRefreshGuard.begin()
     try {
       val revisionSnapshot = appearancePreferenceKeys.associateWith(prefs::appearancePreferenceRevision)
-      val res = requestGatewayData(gatewayScope, "config.get", "{}")
+      val res = requestAppearancePreference(gatewayScope, lease, "config.get", "{}")
       val root = json.parseToJsonElement(res).asObjectOrNull()
       val config = root?.get("config").asObjectOrNull()
-      val profileRead = fetchProfileAppearancePreferences(gatewayScope)
+      val profileRead = fetchProfileAppearancePreferences(gatewayScope, lease)
       if (profileRead is GatewayAppearancePreferencesRead.Unavailable) return
       val profile =
         (profileRead as? GatewayAppearancePreferencesRead.Available)
@@ -6156,23 +6153,13 @@ class NodeRuntime private constructor(
       var pendingAtRefreshStart = emptyMap<String, String?>()
       var protectedPendingKeysAtRefreshStart = emptySet<String>()
       val pendingScopePrepared =
-        publishAppearancePreferenceRefresh(gatewayScope, refreshGeneration) {
-          when {
-            preferenceScope != null -> {
-              appearancePreferenceScopeOwner =
-                GatewayAppearanceScopeOwner(preferenceScope, gatewayScope.generation)
-              appearancePreferenceNoDurableOwner = null
+        publishAppearancePreferences(gatewayScope, lease, refreshGeneration) {
+          appearancePreferenceScopeOwner =
+            if (preferenceScope != null || noDurableIdentity) {
+              GatewayAppearanceScopeOwner(pendingScope, gatewayScope.generation, lease)
+            } else {
+              null
             }
-            noDurableIdentity -> {
-              appearancePreferenceScopeOwner = null
-              appearancePreferenceNoDurableOwner =
-                GatewayAppearanceScopeOwner(pendingScope, gatewayScope.generation)
-            }
-            else -> {
-              appearancePreferenceScopeOwner = null
-              appearancePreferenceNoDurableOwner = null
-            }
-          }
           if (noDurableIdentity) {
             prefs.promotePendingAppearancePreferencesToLocal(gatewayScope.stableId)
             protectedPendingKeysAtRefreshStart =
@@ -6191,6 +6178,7 @@ class NodeRuntime private constructor(
         if (preferenceScope != null) {
           writePendingProfileAppearancePreference(
             gatewayScope = gatewayScope,
+            lease = lease,
             preferenceScope = preferenceScope,
             key = key,
             value = value,
@@ -6200,7 +6188,7 @@ class NodeRuntime private constructor(
       val gatewayFallbackAccentArgb = resolveGatewayAccentArgb(config)
       val gatewayFallbackThemeFamily = resolveGatewayThemeFamily(config)
       val gatewayFallbackThemeMode = resolveGatewayThemeMode(config)
-      publishAppearancePreferenceRefresh(gatewayScope, refreshGeneration) {
+      publishAppearancePreferences(gatewayScope, lease, refreshGeneration) {
         val pendingKeys =
           prefs.pendingAppearancePreferenceEntries(pendingScope).keys
         val isFresh: (String) -> Boolean = { key ->
@@ -6246,6 +6234,7 @@ class NodeRuntime private constructor(
    */
   private suspend fun fetchProfileAppearancePreferences(
     gatewayScope: GatewayDataScope,
+    lease: GatewaySession.RequestLease,
   ): GatewayAppearancePreferencesRead {
     val method = GatewayMethod.UsersPrefsGet.rawValue
     if (gatewayAdvertisesMethod(method) == false) return GatewayAppearancePreferencesRead.Unsupported
@@ -6253,8 +6242,9 @@ class NodeRuntime private constructor(
     return try {
       val keys = JsonArray(appearancePreferenceKeys.map(::JsonPrimitive))
       val res =
-        requestGatewayData(
+        requestAppearancePreference(
           gatewayScope,
+          lease,
           method,
           buildJsonObject { put("keys", keys) }.toString(),
         )
@@ -6266,7 +6256,7 @@ class NodeRuntime private constructor(
           val modeRaw = entries["ui.themeMode"].asStringOrNull()
           GatewayAppearancePreferencesRead.Available(
             GatewayAppearancePreferences(
-              profileId = fetchCurrentProfileId(gatewayScope),
+              profileId = fetchCurrentProfileId(gatewayScope, lease),
               family = AppearanceThemeFamily.entries.firstOrNull { it.rawValue == familyRaw },
               mode = AppearanceThemeMode.entries.firstOrNull { it.rawValue == modeRaw },
               accentArgb = resolveProfileAccentArgb(entries),
@@ -6289,11 +6279,15 @@ class NodeRuntime private constructor(
     }
   }
 
-  private suspend fun fetchCurrentProfileId(gatewayScope: GatewayDataScope): String? =
+  private suspend fun fetchCurrentProfileId(
+    gatewayScope: GatewayDataScope,
+    lease: GatewaySession.RequestLease,
+  ): String? =
     try {
       val res =
-        requestGatewayData(
+        requestAppearancePreference(
           gatewayScope,
+          lease,
           GatewayMethod.UsersSelf.rawValue,
           "{}",
         )
@@ -6310,34 +6304,29 @@ class NodeRuntime private constructor(
       null
     }
 
-  private fun normalizedAppearancePreferenceValue(
-    key: String,
-    value: String?,
-  ): String? =
-    when (key) {
-      "ui.theme" -> value?.takeIf { candidate -> AppearanceThemeFamily.entries.any { it.rawValue == candidate } }
-      "ui.themeMode" -> value?.takeIf { candidate -> AppearanceThemeMode.entries.any { it.rawValue == candidate } }
-      "ui.accent" -> value?.takeIf { it.matches(Regex("^#[0-9a-fA-F]{6}$")) }
-      else -> null
-    }
-
   private suspend fun writeProfileAppearancePreference(
     gatewayScope: GatewayDataScope,
+    lease: GatewaySession.RequestLease,
+    preferenceScope: AppearancePreferenceScope,
     key: String,
     value: String?,
-  ): Boolean {
-    if (key !in appearancePreferenceKeys) return false
-    val normalized = normalizedAppearancePreferenceValue(key, value)
-    if (value != null && normalized == null) return false
-    return try {
+  ): Boolean =
+    try {
       val params =
         buildJsonObject {
           put(
             "entries",
-            buildJsonObject { put(key, normalized?.let(::JsonPrimitive) ?: kotlinx.serialization.json.JsonNull) },
+            buildJsonObject { put(key, value?.let(::JsonPrimitive) ?: kotlinx.serialization.json.JsonNull) },
           )
         }
-      val res = requestGatewayData(gatewayScope, GatewayMethod.UsersPrefsSet.rawValue, params.toString())
+      val res =
+        requestAppearancePreference(
+          gatewayScope,
+          lease,
+          GatewayMethod.UsersPrefsSet.rawValue,
+          params.toString(),
+          preferenceScope,
+        )
       val root = json.parseToJsonElement(res).asObjectOrNull()
       (root?.get("status") as? JsonPrimitive)?.contentOrNull == "ok"
     } catch (cancelled: CancellationException) {
@@ -6345,40 +6334,37 @@ class NodeRuntime private constructor(
     } catch (_: Throwable) {
       false
     }
-  }
 
   private suspend fun writePendingProfileAppearancePreference(
     gatewayScope: GatewayDataScope,
+    lease: GatewaySession.RequestLease,
     preferenceScope: AppearancePreferenceScope,
     key: String,
     value: String?,
   ): Boolean {
     val writeMutex = appearancePreferenceWriteMutexes[key] ?: return false
     return writeMutex.withLock {
-      if (!isGatewayDataScopeCurrent(gatewayScope) || !gatewayConnectionDisplay.value.isConnected) {
+      val owner = appearancePreferenceScopeOwner
+      if (owner?.scope != preferenceScope || owner.generation != gatewayScope.generation || !owner.lease.isCurrent()) {
         return@withLock false
       }
-      val resolvedScope = resolveAppearancePreferenceScope(gatewayScope) ?: return@withLock false
-      if (resolvedScope != preferenceScope) return@withLock false
       var pending = emptyMap<String, String?>()
       val pendingScopePrepared =
-        publishGatewayData(gatewayScope) {
-          pending =
-            prefs.pendingAppearancePreferenceEntries(preferenceScope, adoptUnscoped = true)
+        publishAppearancePreferences(gatewayScope, lease) {
+          if (appearancePreferenceScopeOwner?.scope == preferenceScope) {
+            pending =
+              prefs.pendingAppearancePreferenceEntries(preferenceScope, adoptUnscoped = true)
+          }
         }
       if (!pendingScopePrepared) {
         return@withLock false
       }
       if (key !in pending || pending[key] != value) return@withLock false
-      if (!writeProfileAppearancePreference(gatewayScope, key, value)) return@withLock false
-      val currentOwner = appearancePreferenceScopeOwner
-      if (
-        isGatewayDataScopeCurrent(gatewayScope) &&
-        gatewayConnectionDisplay.value.isConnected &&
-        currentOwner?.generation == gatewayScope.generation &&
-        currentOwner.scope == preferenceScope
-      ) {
-        prefs.completePendingAppearancePreferenceWrite(key, value, preferenceScope)
+      if (!writeProfileAppearancePreference(gatewayScope, lease, preferenceScope, key, value)) return@withLock false
+      publishAppearancePreferences(gatewayScope, lease) {
+        if (appearancePreferenceScopeOwner?.scope == preferenceScope) {
+          prefs.completePendingAppearancePreferenceWrite(key, value, preferenceScope)
+        }
       }
       true
     }
@@ -6398,54 +6384,49 @@ class NodeRuntime private constructor(
         scope = fallbackScope,
       )
     }
-    if (!operatorScopesAllowWrite(_operatorScopes.value)) {
-      return AppearancePreferenceEditTarget(
-        mode = AppearancePreferenceEditMode.DeviceLocal,
-        scope = null,
-      )
-    }
-    val noDurableIdentity =
-      appearancePreferenceNoDurableOwner?.takeIf {
+    val owner =
+      appearancePreferenceScopeOwner?.takeIf {
         it.generation == gatewayScope.generation &&
-          it.scope.gatewayStableId == gatewayScope.stableId
-      } != null
-    if (noDurableIdentity) {
+          it.scope.gatewayStableId == gatewayScope.stableId &&
+          it.lease.isCurrent()
+      }
+    if (!operatorScopesAllowWrite(_operatorScopes.value) || (owner != null && owner.scope.profileId == null)) {
       return AppearancePreferenceEditTarget(
         mode = AppearancePreferenceEditMode.DeviceLocal,
         scope = null,
       )
     }
-    val profileScope =
-      appearancePreferenceScopeOwner
-        ?.takeIf {
-          it.generation == gatewayScope.generation &&
-            it.scope.gatewayStableId == gatewayScope.stableId &&
-            it.scope.profileId != null
-        }?.scope
     return AppearancePreferenceEditTarget(
       mode = AppearancePreferenceEditMode.Writable,
-      scope = profileScope ?: fallbackScope,
+      scope = owner?.scope ?: fallbackScope,
     )
   }
 
-  private suspend fun resolveAppearancePreferenceScope(
+  private suspend fun resolveAppearancePreferenceOwner(
     gatewayScope: GatewayDataScope,
-  ): AppearancePreferenceScope? {
+  ): GatewayAppearanceScopeOwner? {
     val cached =
       appearancePreferenceScopeOwner?.takeIf {
         it.generation == gatewayScope.generation &&
           it.scope.gatewayStableId == gatewayScope.stableId &&
-          it.scope.profileId != null
+          it.lease.isCurrent()
       }
-    if (cached != null) return cached.scope
-    val profileId = fetchCurrentProfileId(gatewayScope) ?: return null
-    val scope = AppearancePreferenceScope(gatewayScope.stableId, profileId)
-    appearancePreferenceScopeOwner =
-      GatewayAppearanceScopeOwner(
-        scope = scope,
-        generation = gatewayScope.generation,
-      )
-    return scope
+    if (cached != null) return cached.takeIf { it.scope.profileId != null }
+    val lease = operatorSession.captureRequestLease(gatewayScope.stableId) ?: return null
+    val profileId = fetchCurrentProfileId(gatewayScope, lease) ?: return null
+    var owner: GatewayAppearanceScopeOwner? = null
+    publishAppearancePreferences(gatewayScope, lease) {
+      // A concurrent refresh may have already established the current profile.
+      owner =
+        appearancePreferenceScopeOwner?.takeIf { it.lease.isCurrent() }
+          ?: GatewayAppearanceScopeOwner(
+            scope = AppearancePreferenceScope(gatewayScope.stableId, profileId),
+            generation = gatewayScope.generation,
+            lease = lease,
+          )
+      appearancePreferenceScopeOwner = owner
+    }
+    return owner?.takeIf { it.scope.profileId != null }
   }
 
   /** Writes one normalized appearance preference already queued for a writable profile. */
@@ -6454,10 +6435,9 @@ class NodeRuntime private constructor(
     value: String?,
   ): Boolean {
     val gatewayScope = captureGatewayDataScope() ?: return false
-    if (!gatewayConnectionDisplay.value.isConnected) return false
-    val preferenceScope = resolveAppearancePreferenceScope(gatewayScope) ?: return false
+    val owner = resolveAppearancePreferenceOwner(gatewayScope) ?: return false
     val written =
-      writePendingProfileAppearancePreference(gatewayScope, preferenceScope, key, value)
+      writePendingProfileAppearancePreference(gatewayScope, owner.lease, owner.scope, key, value)
     if (written && key == "ui.accent") refreshBrandingFromGateway()
     return written
   }

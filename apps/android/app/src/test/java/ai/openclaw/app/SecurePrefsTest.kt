@@ -432,6 +432,44 @@ class SecurePrefsTest {
   }
 
   @Test
+  fun adoptingPendingAppearanceWritesPreservesTheLatestEditAfterRestart() {
+    val context = RuntimeEnvironment.getApplication()
+    context
+      .getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
+      .edit()
+      .clear()
+      .commit()
+    val securePrefs = context.getSharedPreferences("secure-prefs-test-${UUID.randomUUID()}", Context.MODE_PRIVATE)
+    val gatewayScope = AppearancePreferenceScope("gateway-a", profileId = null)
+    val profileScope = AppearancePreferenceScope("gateway-a", "profile-a")
+    val prefs = SecurePrefs(context, securePrefs)
+
+    prefs.setAppearanceThemeFamily(
+      AppearanceThemeFamily.Dash,
+      pendingSync = true,
+      pendingScope = gatewayScope,
+    )
+    prefs.setAppearanceThemeFamily(
+      AppearanceThemeFamily.Tide,
+      pendingSync = true,
+      pendingScope = profileScope,
+    )
+    prefs.setAppearanceThemeFamily(
+      AppearanceThemeFamily.Rose,
+      pendingSync = true,
+      pendingScope = gatewayScope,
+    )
+
+    val restored = SecurePrefs(context, securePrefs)
+    assertEquals(
+      mapOf("ui.theme" to "rose"),
+      restored.pendingAppearancePreferenceEntries(profileScope, adoptUnscoped = true),
+    )
+    assertTrue(restored.completePendingAppearancePreferenceWrite("ui.theme", "rose", profileScope))
+    assertEquals(AppearanceThemeFamily.Rose, SecurePrefs(context, securePrefs).appearanceThemeFamily.value)
+  }
+
+  @Test
   fun existingThemeModeMigratesToDeviceLocalStateExactlyOnce() {
     val context = RuntimeEnvironment.getApplication()
     val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)

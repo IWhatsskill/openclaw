@@ -25,6 +25,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -430,13 +431,8 @@ internal fun ChatComposerMicButton(
           },
         ),
     shape = CircleShape,
-    color = ClawTheme.colors.surfaceRaised.copy(alpha = 0f),
-    contentColor =
-      when {
-        dictationActive -> ClawTheme.colors.textMuted
-        dictationEnabled || voiceNoteEnabled -> ClawTheme.colors.textMuted
-        else -> ClawTheme.colors.textSubtle
-      },
+    color = Color.Transparent,
+    contentColor = if (interactionEnabled) ClawTheme.colors.textMuted else ClawTheme.colors.textSubtle,
   ) {
     Box(contentAlignment = Alignment.Center) {
       Icon(

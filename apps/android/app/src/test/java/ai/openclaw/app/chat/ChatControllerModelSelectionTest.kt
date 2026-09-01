@@ -5,6 +5,7 @@ import ai.openclaw.app.ui.chat.ChatComposerTextDraftStore
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
@@ -65,6 +66,289 @@ class ChatControllerModelSelectionTest {
       assertEquals("max", controller.thinkingLevel.value)
       controller.setThinkingLevel("adaptive")
       assertEquals("adaptive", controller.thinkingLevel.value)
+    }
+
+  @Test
+  fun successfulModelResponseDoesNotOverwriteANewerSessionSnapshot() =
+    runTest {
+      val patchStarted = CompletableDeferred<Unit>()
+      val releasePatch = CompletableDeferred<Unit>()
+      var modelProvider = "openai"
+      var model = "gpt-5"
+      val controller =
+        createScriptedChatController {
+          respond("chat.history") {
+            """{"messages":[],"sessionInfo":{"key":"main","modelProvider":"$modelProvider","model":"$model"}}"""
+          }
+          respond("sessions.list") {
+            """{"sessions":[{"key":"main","modelProvider":"$modelProvider","model":"$model"}]}"""
+          }
+          respond("sessions.patch") {
+            patchStarted.complete(Unit)
+            releasePatch.await()
+            """{"entry":{"key":"main"},"resolved":{"modelProvider":"openai","model":"gpt-5-mini"}}"""
+          }
+        }
+      controller.load("main")
+      advanceUntilIdle()
+      assertEquals("openai/gpt-5", controller.selectedModelRef.value)
+
+      val patch = async { controller.setSessionModelAwait("main", "openai/gpt-5-mini") }
+      patchStarted.await()
+      modelProvider = "anthropic"
+      model = "claude-opus-4"
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """{"sessionKey":"main","agentId":"main","phase":"message","session":{"key":"main","modelProvider":"$modelProvider","model":"$model","permissionMode":null,"permissionModePending":false}}""",
+      )
+      assertEquals(
+        model,
+        controller.sessions.value
+          .single()
+          .model,
+      )
+
+      releasePatch.complete(Unit)
+      assertTrue(patch.await())
+      advanceUntilIdle()
+
+      val session = controller.sessions.value.single()
+      assertEquals("$modelProvider/$model", "${session.modelProvider}/${session.model}")
+      assertEquals("$modelProvider/$model", controller.selectedModelRef.value)
+    }
+
+  @Test
+  fun cancelledQueuedModelSelectionDoesNotRetireItsRunningPredecessor() =
+    runTest {
+      val patchStarted = CompletableDeferred<Unit>()
+      val releasePatch = CompletableDeferred<Unit>()
+      val (controller, requests) =
+        chatControllerTestSetup {
+          respond("sessions.list", """{"sessions":[{"key":"main","modelProvider":"openai","model":"gpt-5"}]}""")
+          respond("sessions.patch") {
+            patchStarted.complete(Unit)
+            releasePatch.await()
+            """{"entry":{"key":"main"},"resolved":{"modelProvider":"openai","model":"gpt-5-mini"}}"""
+          }
+        }
+      controller.refreshSessions()
+      advanceUntilIdle()
+      val predecessor = async { controller.setSessionModelAwait("main", "openai/gpt-5-mini") }
+      patchStarted.await()
+      val successor = async { controller.setSessionModelAwait("main", "anthropic/claude-opus-4") }
+      runCurrent()
+      successor.cancelAndJoin()
+      val pendingAfterCancellation = controller.pendingSessionSettingsKeys.value
+
+      releasePatch.complete(Unit)
+      assertTrue(predecessor.await())
+      advanceUntilIdle()
+
+      assertEquals("openai/gpt-5-mini", controller.selectedModelRef.value)
+      assertEquals(
+        "gpt-5-mini",
+        controller.sessions.value
+          .single()
+          .model,
+      )
+      assertEquals(setOf("main"), pendingAfterCancellation)
+      assertTrue(controller.pendingSessionSettingsKeys.value.isEmpty())
+      assertEquals(1, requests.count { it.first == "sessions.patch" })
+    }
+
+  @Test
+  fun cancelledQueuedModelSelectionDoesNotLetLaterSelectionsOvertakeItsPredecessor() =
+    runTest {
+      for (enqueueBeforeCancellation in listOf(true, false)) {
+        val predecessorStarted = CompletableDeferred<Unit>()
+        val releasePredecessor = CompletableDeferred<Unit>()
+        val successorStarted = CompletableDeferred<Unit>()
+        val releaseSuccessor = CompletableDeferred<Unit>()
+        val models = mutableListOf<String>()
+        val controller =
+          createScriptedChatController {
+            respond("sessions.patch") { paramsJson ->
+              val params = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
+              val modelRef = (params["model"] as JsonPrimitive).content
+              models += modelRef
+              if (modelRef == "openai/gpt-5-mini") {
+                predecessorStarted.complete(Unit)
+                releasePredecessor.await()
+              } else {
+                successorStarted.complete(Unit)
+                releaseSuccessor.await()
+              }
+              "{}"
+            }
+          }
+        val predecessor = async { controller.setSessionModelAwait("main", "openai/gpt-5-mini") }
+        predecessorStarted.await()
+        val cancelled = async { controller.setSessionModelAwait("main", "anthropic/claude-opus-4") }
+        runCurrent()
+        if (!enqueueBeforeCancellation) cancelled.cancelAndJoin()
+        val successor = async { controller.setSessionModelAwait("main", "openai/gpt-5.6-luna") }
+        runCurrent()
+        if (enqueueBeforeCancellation) cancelled.cancelAndJoin()
+        runCurrent()
+
+        try {
+          assertEquals(listOf("openai/gpt-5-mini"), models)
+          releasePredecessor.complete(Unit)
+          assertTrue(predecessor.await())
+          successorStarted.await()
+          assertEquals("openai/gpt-5-mini", controller.selectedModelRef.value)
+        } finally {
+          releasePredecessor.complete(Unit)
+          releaseSuccessor.complete(Unit)
+          advanceUntilIdle()
+        }
+        assertTrue(successor.await())
+        assertEquals(listOf("openai/gpt-5-mini", "openai/gpt-5.6-luna"), models)
+        assertEquals("openai/gpt-5.6-luna", controller.selectedModelRef.value)
+        assertTrue(controller.pendingSessionSettingsKeys.value.isEmpty())
+      }
+    }
+
+  @Test
+  fun successfulThinkingResponseDoesNotOverwriteANewerSessionSnapshot() =
+    runTest {
+      val patchStarted = CompletableDeferred<Unit>()
+      val releasePatch = CompletableDeferred<Unit>()
+      var thinkingLevel = "off"
+      val controller =
+        createScriptedChatController {
+          respond("sessions.list") {
+            """{"sessions":[{"key":"main",${thinkingFields(thinkingLevel, "off", "high", "max")}}]}"""
+          }
+          respond("sessions.patch") {
+            patchStarted.complete(Unit)
+            releasePatch.await()
+            """{"entry":{"key":"main","thinkingLevel":"high"},"resolved":{${thinkingFields("high", "off", "high", "max")}}}"""
+          }
+        }
+      controller.refreshSessions()
+      advanceUntilIdle()
+      controller.setThinkingLevel("high")
+      patchStarted.await()
+
+      thinkingLevel = "max"
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """{"sessionKey":"main","agentId":"main","phase":"message","session":{"key":"main","thinkingLevel":"max","permissionMode":null,"permissionModePending":false}}""",
+      )
+      assertEquals("max", controller.thinkingLevel.value)
+
+      releasePatch.complete(Unit)
+      advanceUntilIdle()
+
+      assertEquals(
+        "max",
+        controller.sessions.value
+          .single()
+          .thinkingLevel,
+      )
+      assertEquals("max", controller.thinkingLevel.value)
+    }
+
+  @Test
+  fun failedThinkingResponseDoesNotRollBackANewerSessionSnapshot() =
+    runTest {
+      val patchStarted = CompletableDeferred<Unit>()
+      val releasePatch = CompletableDeferred<Unit>()
+      var thinkingLevel = "off"
+      val controller =
+        createScriptedChatController {
+          respond("sessions.list") {
+            """{"sessions":[{"key":"main",${thinkingFields(thinkingLevel, "off", "high", "max")}}]}"""
+          }
+          respond("sessions.patch") {
+            patchStarted.complete(Unit)
+            releasePatch.await()
+            error("Rejected response")
+          }
+        }
+      controller.refreshSessions()
+      advanceUntilIdle()
+      controller.setThinkingLevel("high")
+      patchStarted.await()
+      thinkingLevel = "max"
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """{"sessionKey":"main","agentId":"main","phase":"message","session":{"key":"main","thinkingLevel":"max","permissionMode":null,"permissionModePending":false}}""",
+      )
+      assertEquals("max", controller.thinkingLevel.value)
+
+      releasePatch.complete(Unit)
+      advanceUntilIdle()
+
+      assertEquals(
+        "max",
+        controller.sessions.value
+          .single()
+          .thinkingLevel,
+      )
+      assertEquals("max", controller.thinkingLevel.value)
+      assertEquals("Rejected response", controller.errorText.value)
+    }
+
+  @Test
+  fun thinkingResponseUsesTheObservationAtActualTransportEnqueue() =
+    runTest {
+      val transportStarted = CompletableDeferred<Unit>()
+      val releaseTransport = CompletableDeferred<Unit>()
+      val requestStarted = CompletableDeferred<Unit>()
+      val releaseResponse = CompletableDeferred<Unit>()
+      var listRequests = 0
+      val controller =
+        createChatController(
+          captureRequestLease = {
+            GatewaySession.RequestLease(endpointStableId = "") { _, _, _, withEnqueue ->
+              transportStarted.complete(Unit)
+              releaseTransport.await()
+              withEnqueue { requestStarted.complete(Unit) }
+              releaseResponse.await()
+              """{"resolved":{${thinkingFields("high", "off", "high")}}}"""
+            }
+          },
+        ) { method, _ ->
+          if (method == "sessions.list" && ++listRequests == 1) {
+            """{"sessions":[{"key":"main",${thinkingFields("off", "off", "high", "max")}}]}"""
+          } else {
+            error("List unavailable")
+          }
+        }
+      controller.refreshSessions()
+      advanceUntilIdle()
+      controller.setThinkingLevel("high")
+      transportStarted.await()
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """{"sessionKey":"main","agentId":"main","phase":"message","session":{"key":"main","thinkingLevel":"max","permissionMode":null,"permissionModePending":false}}""",
+      )
+      assertEquals(
+        "max",
+        controller.sessions.value
+          .single()
+          .thinkingLevel,
+      )
+
+      releaseTransport.complete(Unit)
+      requestStarted.await()
+      releaseResponse.complete(Unit)
+      advanceUntilIdle()
+
+      assertEquals(
+        "high",
+        controller.sessions.value
+          .single()
+          .thinkingLevel,
+      )
+      assertEquals("high", controller.thinkingLevel.value)
+      assertEquals(
+        listOf("off", "high"),
+        controller.thinkingLevelSelection.value.options
+          .map { it.id },
+      )
     }
 
   @Test
@@ -859,14 +1143,21 @@ class ChatControllerModelSelectionTest {
     runTest {
       val historyStarted = CompletableDeferred<Unit>()
       val releaseHistory = CompletableDeferred<Unit>()
+      val listStarted = CompletableDeferred<Unit>()
+      val releaseList = CompletableDeferred<Unit>()
       val controller =
         createScriptedChatController {
           respond("chat.history") { _ ->
             historyStarted.complete(Unit)
             releaseHistory.await()
-            """{"messages":[],"sessionInfo":{"key":"main","modelProvider":"anthropic","model":"claude-opus-4"}}"""
+            """{"messages":[{"role":"assistant","content":"Recovered transcript"}],"sessionInfo":{"key":"main","modelProvider":"anthropic","model":"claude-opus-4",${thinkingFields("low", "off", "low", "high")}}}"""
           }
-          respond("sessions.list", """{"sessions":[]}""")
+          respond("sessions.patch", """{"resolved":{"modelProvider":"openai","model":"gpt-5",${thinkingFields("high", "off", "high")}}}""")
+          respond("sessions.list") {
+            listStarted.complete(Unit)
+            releaseList.await()
+            """{"sessions":[{"key":"main","modelProvider":"openai","model":"gpt-5",${thinkingFields("high", "off", "high")}}]}"""
+          }
           respond("chat.metadata", """{"commands":[],"models":[]}""")
         }
 
@@ -875,9 +1166,26 @@ class ChatControllerModelSelectionTest {
       assertTrue(controller.setSessionModelAwait("main", "openai/gpt-5"))
 
       releaseHistory.complete(Unit)
-      advanceUntilIdle()
+      listStarted.await()
 
-      assertEquals("openai/gpt-5", controller.selectedModelRef.value)
+      try {
+        assertEquals(
+          "Recovered transcript",
+          controller.messages.value
+            .single()
+            .content
+            .single()
+            .text,
+        )
+        assertEquals("openai/gpt-5", controller.selectedModelRef.value)
+        val session = controller.sessions.value.single()
+        assertEquals("openai/gpt-5", "${session.modelProvider}/${session.model}")
+        assertEquals("high", session.thinkingLevel)
+        assertEquals("high", controller.thinkingLevel.value)
+      } finally {
+        releaseList.complete(Unit)
+      }
+      advanceUntilIdle()
     }
 
   @Test

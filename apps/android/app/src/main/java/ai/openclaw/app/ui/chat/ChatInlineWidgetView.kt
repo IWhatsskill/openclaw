@@ -74,19 +74,14 @@ private const val INLINE_WIDGET_FETCH_TIMEOUT_SECONDS = 8L
 private const val HTTP_HEADER_ACCEPT = "Accept"
 private const val HTTP_HEADER_CACHE_CONTROL = "Cache-Control"
 
+// Socket closure may block and must finish after the widget's composition is gone.
 private val inlineWidgetCleanupScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-internal fun closePinnedWidgetClientAsync(
-  client: OkHttpClient,
-  scope: CoroutineScope = inlineWidgetCleanupScope,
-  cleanup: (OkHttpClient) -> Unit = ::closePinnedWidgetClientResources,
-) {
-  scope.launch { cleanup(client) }
-}
-
-private fun closePinnedWidgetClientResources(client: OkHttpClient) {
-  client.dispatcher.cancelAll()
-  client.connectionPool.evictAll()
+internal fun closePinnedWidgetClientAsync(client: OkHttpClient) {
+  inlineWidgetCleanupScope.launch {
+    client.dispatcher.cancelAll()
+    client.connectionPool.evictAll()
+  }
 }
 
 @Composable

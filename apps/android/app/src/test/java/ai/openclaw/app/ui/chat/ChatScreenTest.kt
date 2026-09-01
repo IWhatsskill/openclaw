@@ -21,23 +21,31 @@ import org.junit.Test
 
 class ChatScreenTest {
   @Test
-  fun thinkingGaugeFollowsTheSelectedSliderStep() {
+  fun thinkingGaugeFollowsAdvertisedEffortOrder() {
     val options =
       listOf("off", "low", "medium", "high", "max").map {
         ChatThinkingLevelOption(id = it, label = it)
       }
 
-    assertEquals(0f, chatThinkingGaugeFraction("off", options), 0.0001f)
-    assertEquals(0.25f, chatThinkingGaugeFraction("low", options), 0.0001f)
-    assertEquals(0.5f, chatThinkingGaugeFraction("medium", options), 0.0001f)
-    assertEquals(0.75f, chatThinkingGaugeFraction("high", options), 0.0001f)
-    assertEquals(1f, chatThinkingGaugeFraction("max", options), 0.0001f)
+    assertEquals(0f, chatThinkingGaugeFraction("off", options))
+    assertEquals(0.25f, chatThinkingGaugeFraction("low", options))
+    assertEquals(0.5f, chatThinkingGaugeFraction("medium", options))
+    assertEquals(0.75f, chatThinkingGaugeFraction("high", options))
+    assertEquals(1f, chatThinkingGaugeFraction("max", options))
   }
 
   @Test
-  fun thinkingGaugeKeepsKnownMaximumAliasesAtTheRightEdge() {
-    assertEquals(1f, chatThinkingGaugeFraction("xhigh", emptyList()), 0.0001f)
-    assertEquals(1f, chatThinkingGaugeFraction("ultimate", emptyList()), 0.0001f)
+  fun thinkingGaugeKeepsKnownMaximumEffortsAtTheRightEdge() {
+    assertEquals(1f, chatThinkingGaugeFraction("xhigh", emptyList()))
+    assertEquals(1f, chatThinkingGaugeFraction("ultra", emptyList()))
+  }
+
+  @Test
+  fun customEffortNeedsAdvertisedOrderingForAGaugePosition() {
+    val options = listOf("off", "custom", "max").map { ChatThinkingLevelOption(id = it, label = it) }
+
+    assertNull(chatThinkingGaugeFraction("custom", emptyList()))
+    assertEquals(0.5f, chatThinkingGaugeFraction("custom", options))
   }
 
   @Test
@@ -172,19 +180,19 @@ class ChatScreenTest {
   fun composerTrailingActionPreservesTalkAndRunStopPrecedence() {
     assertEquals(
       ChatComposerTrailingAction.StopTalk,
-      resolveChatComposerTrailingAction(talkActive = true, runActive = true, sendEnabled = true),
+      resolveChatComposerTrailingAction(talkActive = true, runActive = true, hasContent = true),
     )
     assertEquals(
       ChatComposerTrailingAction.Stop,
-      resolveChatComposerTrailingAction(talkActive = false, runActive = true, sendEnabled = true),
+      resolveChatComposerTrailingAction(talkActive = false, runActive = true, hasContent = true),
     )
     assertEquals(
       ChatComposerTrailingAction.Send,
-      resolveChatComposerTrailingAction(talkActive = false, runActive = false, sendEnabled = true),
+      resolveChatComposerTrailingAction(talkActive = false, runActive = false, hasContent = true),
     )
     assertEquals(
       ChatComposerTrailingAction.StartTalk,
-      resolveChatComposerTrailingAction(talkActive = false, runActive = false, sendEnabled = false),
+      resolveChatComposerTrailingAction(talkActive = false, runActive = false, hasContent = false),
     )
   }
 

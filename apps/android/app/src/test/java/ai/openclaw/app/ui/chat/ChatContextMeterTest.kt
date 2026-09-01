@@ -131,14 +131,12 @@ class ChatContextMeterTest {
   }
 
   @Test
-  fun thinkingLabelsMapKnownLevelsAndPreserveGatewayIds() {
-    assertEquals("Off", contextMeterThinkingLabel("off"))
-    assertEquals("Low", contextMeterThinkingLabel("low"))
-    assertEquals("Medium", contextMeterThinkingLabel("medium"))
-    assertEquals("High", contextMeterThinkingLabel("high"))
-    assertEquals("xhigh", contextMeterThinkingLabel("xhigh"))
-    assertEquals("adaptive", contextMeterThinkingLabel("adaptive"))
-    assertEquals("ultra", contextMeterThinkingLabel("ultra"))
+  fun thinkingLabelsLocalizeKnownLevelsAndPreserveGatewayLabels() {
+    assertEquals("Off", chatThinkingOptionLabel(ChatThinkingLevelOption("off", "off")))
+    assertEquals("High", chatThinkingOptionLabel(ChatThinkingLevelOption("high", "high")))
+    assertEquals("Xhigh", chatThinkingOptionLabel(ChatThinkingLevelOption("xhigh", "xhigh")))
+    assertEquals("Ultra", chatThinkingOptionLabel(ChatThinkingLevelOption("ultra", "ultra")))
+    assertEquals("Provider custom effort", chatThinkingOptionLabel(ChatThinkingLevelOption("custom", "Provider custom effort")))
   }
 
   @Test
@@ -166,20 +164,5 @@ class ChatContextMeterTest {
     assertFalse(chatThinkingSupported(offOnly, fallbackSupported = true))
     assertTrue(chatThinkingSupported(max, fallbackSupported = false))
     assertTrue(chatThinkingSupported(fallback, fallbackSupported = true))
-  }
-
-  @Test
-  fun largeThinkingProfilesSplitIntoBalancedInlineRows() {
-    val options =
-      listOf("off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max")
-        .map { ChatThinkingLevelOption(id = it, label = it) }
-
-    val rows = chatThinkingOptionRows(options)
-
-    assertEquals(listOf(4, 4), rows.map { it.size })
-    assertEquals("Minimal", chatThinkingOptionLabel(options[1]))
-    assertEquals("Xhigh", chatThinkingOptionLabel(options[5]))
-    assertEquals("Adaptive", chatThinkingOptionLabel(options[6]))
-    assertEquals("Max", chatThinkingOptionLabel(options.last()))
   }
 }

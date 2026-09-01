@@ -302,7 +302,7 @@ class SessionCatalogTest {
   }
 
   @Test
-  fun expandedHostReconciliationKeepsLoadedRowsAndCursor() {
+  fun hostProgressKeepsLoadedRowsAndCursor() {
     val previous =
       listOf(
         SessionCatalog(
@@ -321,9 +321,9 @@ class SessionCatalogTest {
       )
 
     val reconciled =
-      reconcileSessionCatalogRefresh(
-        fresh = fresh,
-        previous = previous,
+      mergeSessionCatalogHostProgress(
+        current = previous,
+        progress = SessionCatalogHostProgress(progressId = "refresh", agentId = "main", catalog = fresh.single()),
         preserveExpandedHostIds = setOf(sessionCatalogHostKey("codex", "desktop")),
       ).single().hosts.single()
 
@@ -407,13 +407,6 @@ class SessionCatalogTest {
 
     assertEquals(2, depths[desktopKey])
     assertEquals(1, depths[sessionCatalogHostKey("codex", "laptop")])
-  }
-
-  @Test
-  fun legacyProgressRejectionRequiresTheFieldAndInvalidRequestCode() {
-    assertTrue(isLegacySessionCatalogProgressRejection("INVALID_REQUEST", "unexpected property progressId"))
-    assertFalse(isLegacySessionCatalogProgressRejection("UNAVAILABLE", "unexpected property progressId"))
-    assertFalse(isLegacySessionCatalogProgressRejection("INVALID_REQUEST", "unknown catalog"))
   }
 
   private fun host(
