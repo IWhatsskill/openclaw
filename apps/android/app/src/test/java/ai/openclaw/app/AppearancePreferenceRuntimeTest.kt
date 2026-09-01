@@ -496,7 +496,10 @@ class AppearancePreferenceRuntimeTest {
         operatorScopes.value = listOf("operator.write")
         viewModel.setAppearanceThemeFamily(AppearanceThemeFamily.Tide)
         withTimeout(2_000) {
-          while (preferenceWrites.get() != 1) {
+          while (
+            preferenceWrites.get() != 1 ||
+            prefs.pendingAppearancePreferenceEntries(profileScope).containsKey("ui.theme")
+          ) {
             yield()
           }
         }
