@@ -39,12 +39,21 @@ check(
 );
 
 const composition = registrySource.match(
-  /export const ProtocolSchemas = composeProtocolSchemaFragments\(\[([\s\S]*?)\]\s+as const\);/u,
+  /export const ProtocolSchemas: ([\s\S]*?) = composeProtocolSchemaFragments\(\[([\s\S]*?)\]\s+as const\);/u,
 );
-const composedBindings = (composition?.[1] ?? "")
+const composedBindings = (composition?.[2] ?? "")
   .split("\n")
   .map((line) => line.trim().replace(/,$/u, ""))
   .filter(Boolean);
+const declaredBindings = (composition?.[1] ?? "")
+  .split("&")
+  .map((part) => part.trim().replace(/^\((.*)\)$/u, "$1"))
+  .map((part) => /^typeof ([A-Za-z0-9_]+)$/u.exec(part)?.[1]);
+check(
+  declaredBindings.length === composedBindings.length &&
+    declaredBindings.every((binding, index) => binding === composedBindings[index]),
+  `${registryPath} must retain every composed fragment type in its declaration`,
+);
 const importedBindings = fragmentImports.map(({ binding }) => binding);
 check(Boolean(composition), `${registryPath} must explicitly compose an ordered fragment array`);
 check(
