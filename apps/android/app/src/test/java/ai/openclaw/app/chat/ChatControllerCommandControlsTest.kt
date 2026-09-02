@@ -197,9 +197,9 @@ class ChatControllerCommandControlsTest {
     }
 
   @Test
-  fun lockedParentRejectsGenericForkAndLinkedNewChats() =
+  fun lockedParentRejectsGenericForkAndWorktreeChats() =
     runTest {
-      for (action in listOf("fork", "new-chat", "worktree")) {
+      for (action in listOf("fork", "worktree")) {
         val (controller, requests) =
           chatControllerTestSetup {
             respond("sessions.create", """{"key":"agent:main:dashboard:child"}""")
@@ -339,34 +339,32 @@ class ChatControllerCommandControlsTest {
     }
 
   @Test
-  fun catalogNewSessionCreatesRootSessionFromLockedParentForSelectedAgent() =
+  fun newSessionCreatesRootSessionFromLockedParentForSelectedAgent() =
     runTest {
-      val (controller, requests) =
-        chatControllerTestSetup {
-          respond("sessions.create", """{"ok":true,"key":"agent:main:dashboard:catalog"}""")
-          respond(
-            "chat.history",
-            """{"sessionId":"catalog-session","messages":[],"sessionInfo":{"key":"main","agentId":"main","sessionId":"catalog-session","modelSelectionLocked":true,"agentRuntime":{"id":"codex","source":"session"}}}""",
-          )
-          respond("health", "{}")
-          respond("sessions.list", """{"sessions":[]}""")
-        }
-      controller.handleGatewayEvent("health", null)
-      controller.load("main")
-      advanceUntilIdle()
+      for (catalogId in listOf(null, "codex")) {
+        val (controller, requests) =
+          chatControllerTestSetup {
+            respond("sessions.create", """{"ok":true,"key":"agent:main:dashboard:fresh"}""")
+            respond(
+              "chat.history",
+              """{"sessionId":"locked-session","messages":[],"sessionInfo":{"key":"main","agentId":"main","sessionId":"locked-session","modelSelectionLocked":true,"agentRuntime":{"id":"codex","source":"session"}}}""",
+            )
+            respond("health", "{}")
+            respond("sessions.list", """{"sessions":[]}""")
+          }
+        controller.handleGatewayEvent("health", null)
+        controller.load("main")
+        advanceUntilIdle()
 
-      assertTrue(controller.startNewChatAwait(catalogId = "codex"))
+        assertTrue("New session must work with catalog=$catalogId", controller.startNewChatAwait(catalogId = catalogId))
 
-      val create = requests.first { it.first == "sessions.create" }.second.orEmpty()
-      assertTrue(create.contains("\"agentId\":\"main\""))
-      assertTrue(create.contains("\"catalogId\":\"codex\""))
-      assertFalse(create.contains("\"parentSessionKey\""))
-      assertFalse(create.contains("\"emitCommandHooks\""))
-      assertFalse(create.contains("\"succeedsParent\""))
-      assertFalse(create.contains("\"worktree\""))
-      assertFalse(create.contains("\"model\""))
-      assertFalse(create.contains("\"key\""))
-      assertEquals("agent:main:dashboard:catalog", controller.sessionKey.value)
+        val create = json.parseToJsonElement(requests.single { it.first == "sessions.create" }.second.orEmpty()).jsonObject
+        assertEquals(setOfNotNull("agentId", catalogId?.let { "catalogId" }), create.keys)
+        assertEquals(JsonPrimitive("main"), create["agentId"])
+        assertEquals(catalogId?.let(::JsonPrimitive), create["catalogId"])
+        assertEquals("agent:main:dashboard:fresh", controller.sessionKey.value)
+        assertEquals(null, controller.errorText.value)
+      }
     }
 
   @Test

@@ -2359,14 +2359,20 @@ class ChatController internal constructor(
     _historyLoading.value = true
     val normalizedCatalogId = catalogId?.trim()?.takeIf(String::isNotEmpty)
     return try {
-      val hasLoadedParentSession = !_sessionId.value.isNullOrBlank()
+      val inheritParent =
+        synchronized(gatewayScopeApplyLock) {
+          // Plain New starts independently of a native thread. Explicit worktree
+          // requests retain their parent so the creation guard can reject them.
+          !_sessionId.value.isNullOrBlank() &&
+            (worktree || !isSessionModelSelectionLocked(sessionSettingsKey(parentKey, createGatewayScope, ownerAgentId)))
+        }
       val params =
         buildJsonObject {
           put("agentId", JsonPrimitive(ownerAgentId))
           if (normalizedCatalogId != null) {
             put("catalogId", JsonPrimitive(normalizedCatalogId))
           } else {
-            if (hasLoadedParentSession) {
+            if (inheritParent) {
               put("parentSessionKey", JsonPrimitive(parentKey))
               put("emitCommandHooks", JsonPrimitive(true))
               put("succeedsParent", JsonPrimitive(false))
@@ -7874,14 +7880,7 @@ class ChatController internal constructor(
 
     fun requireMutableParent() {
       if (gatewayScope != currentCacheScope()) throw GatewayRequestNotEnqueued("gateway connection changed")
-      val entry =
-        parent?.let { key ->
-          pendingSettingsMutations[key]?.confirmed
-            ?: _sessions.value.firstOrNull {
-              it.key == key.sessionKey && (it.ownerAgentId ?: resolveAgentIdFromMainSessionKey(it.key)) == key.ownerAgentId
-            }
-        }
-      if (entry?.modelSelectionLocked == true) {
+      if (parent != null && isSessionModelSelectionLocked(parent)) {
         throw GatewayRequestNotEnqueued("Model-selection-locked sessions cannot create child sessions from parent context.")
       }
     }
@@ -7921,6 +7920,14 @@ class ChatController internal constructor(
   }
 
   private fun currentCacheScope(): ChatCacheScope? = normalizedChatCacheScope(cacheScope())
+
+  private fun isSessionModelSelectionLocked(key: SessionSettingsKey): Boolean =
+    (
+      pendingSettingsMutations[key]?.confirmed
+        ?: _sessions.value.firstOrNull {
+          it.key == key.sessionKey && (it.ownerAgentId ?: resolveAgentIdFromMainSessionKey(it.key)) == key.ownerAgentId
+        }
+    )?.modelSelectionLocked == true
 
   /** Keeps an unscoped chat bound to its verified agent only while the same gateway reconnects. */
   private fun effectiveDefaultAgentId(): String? {
