@@ -298,7 +298,7 @@ fun ShellScreen(
         },
       ) {
         when (nav.activeTab) {
-          Tab.Overview ->
+          Tab.Overview -> {
             OverviewScreen(
               viewModel = viewModel,
               showSidebarButton = true,
@@ -307,7 +307,9 @@ fun ShellScreen(
               onOpenSettingsRoute = nav::openSettingsRoute,
               onOpenCommand = { commandOpen = true },
             )
-          Tab.Chat ->
+          }
+
+          Tab.Chat -> {
             UnifiedChatShellScreen(
               viewModel = viewModel,
               showSidebarButton = true,
@@ -316,37 +318,49 @@ fun ShellScreen(
               onOpenGatewaySettings = { nav.openSettingsRoute(SettingsRoute.Gateway) },
               onOpenProvidersModels = { nav.openDetailTab(Tab.ProvidersModels) },
             )
-          Tab.Voice ->
+          }
+
+          Tab.Voice -> {
             VoiceShellScreen(
               viewModel = viewModel,
               onOpenCommand = { commandOpen = true },
               onOpenGatewaySettings = { nav.openSettingsRoute(SettingsRoute.Gateway) },
               onOpenVoiceSettings = { nav.openSettingsRoute(SettingsRoute.Voice) },
             )
-          Tab.ProvidersModels ->
+          }
+
+          Tab.ProvidersModels -> {
             ProvidersModelsScreen(
               viewModel = viewModel,
               onBack = nav::back,
             )
-          Tab.Sessions ->
+          }
+
+          Tab.Sessions -> {
             SessionsScreen(
               viewModel = viewModel,
               showSidebarButton = true,
               onOpenSidebar = openSidebar,
               onOpenChat = { nav.selectTab(Tab.Chat) },
             )
-          Tab.Files ->
+          }
+
+          Tab.Files -> {
             WorkspaceFilesScreen(
               viewModel = viewModel,
               onBack = nav::back,
             )
-          Tab.Dashboard ->
+          }
+
+          Tab.Dashboard -> {
             SessionDashboardScreen(
               viewModel = viewModel,
               sessionKey = nav.dashboardSessionKey,
               onBack = nav::back,
             )
-          Tab.Settings ->
+          }
+
+          Tab.Settings -> {
             SettingsShellScreen(
               viewModel = viewModel,
               route = nav.settingsRoute,
@@ -356,6 +370,7 @@ fun ShellScreen(
               onBack = nav::back,
               onOpenCommand = { commandOpen = true },
             )
+          }
         }
       }
 
@@ -422,18 +437,23 @@ private fun GatewayTrustDialog(
   val normalizedManualFingerprint = normalizeGatewayTlsFingerprintInput(manualFingerprint)
   val message =
     when {
-      manualEntry ->
+      manualEntry -> {
         nativeString(
           "The gateway certificate could not be read automatically. Paste the SHA-256 fingerprint obtained on the gateway host.",
         )
-      prompt.previousFingerprintSha256.isNullOrBlank() ->
+      }
+
+      prompt.previousFingerprintSha256.isNullOrBlank() -> {
         stringResource(R.string.gateway_trust_first_seen, prompt.fingerprintSha256)
-      else ->
+      }
+
+      else -> {
         stringResource(
           R.string.gateway_trust_changed,
           prompt.previousFingerprintSha256,
           prompt.fingerprintSha256,
         )
+      }
     }
 
   AlertDialog(
@@ -1871,11 +1891,13 @@ private fun skillsSummaryText(skills: List<GatewaySkillSummary>): String {
 private fun skillsStatus(skills: List<GatewaySkillSummary>): Boolean? =
   when {
     skills.isEmpty() -> null
+
     skills.any {
       it.blockedByAllowlist ||
         it.blockedByAgentFilter ||
         (!it.disabled && (!it.eligible || it.missingCount > 0))
     } -> false
+
     else -> true
   }
 
@@ -2028,6 +2050,7 @@ internal fun settingsSectionTitleForRoute(route: SettingsRoute): NativeText =
     -> nativeText("Profile & device")
 
     SettingsRoute.Health -> nativeText("Diagnostics")
+
     SettingsRoute.Home -> nativeText("Diagnostics")
   }
 

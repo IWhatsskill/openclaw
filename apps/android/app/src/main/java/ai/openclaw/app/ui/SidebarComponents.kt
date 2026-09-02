@@ -356,9 +356,13 @@ internal fun sidebarSessionActivity(
       normalizedStatus == "timeout" ||
       normalizedStatus == "killed" ||
       normalizedStatus == "error" -> SidebarSessionActivity.Failed
+
     normalizedStatus == "queued" -> SidebarSessionActivity.Queued
+
     hasActiveRun || normalizedStatus == "active" || normalizedStatus == "running" -> SidebarSessionActivity.Running
+
     unread -> SidebarSessionActivity.Unread
+
     else -> null
   }
 }
@@ -369,20 +373,24 @@ internal fun SidebarSessionActivityIndicator(
   palette: SidebarPalette,
 ) {
   when (activity) {
-    SidebarSessionActivity.Queued ->
+    SidebarSessionActivity.Queued -> {
       Icon(
         imageVector = Icons.Default.HourglassEmpty,
         contentDescription = nativeString("Queued"),
         modifier = Modifier.size(15.dp),
         tint = palette.muted,
       )
-    SidebarSessionActivity.Running ->
+    }
+
+    SidebarSessionActivity.Running -> {
       CircularProgressIndicator(
         modifier = Modifier.size(15.dp).clearAndSetSemantics { stateDescription = nativeString("Working") },
         color = ClawTheme.colors.primary,
         strokeWidth = 2.dp,
       )
-    SidebarSessionActivity.Unread ->
+    }
+
+    SidebarSessionActivity.Unread -> {
       Box(
         modifier =
           Modifier
@@ -391,13 +399,16 @@ internal fun SidebarSessionActivityIndicator(
             .background(ClawTheme.colors.primary)
             .clearAndSetSemantics { stateDescription = nativeString("Needs attention") },
       )
-    SidebarSessionActivity.Failed ->
+    }
+
+    SidebarSessionActivity.Failed -> {
       Icon(
         imageVector = Icons.Default.ErrorOutline,
         contentDescription = nativeString("Run failed"),
         modifier = Modifier.size(16.dp),
         tint = ClawTheme.colors.danger,
       )
+    }
   }
 }
 

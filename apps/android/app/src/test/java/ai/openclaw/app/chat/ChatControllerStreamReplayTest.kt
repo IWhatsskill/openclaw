@@ -274,16 +274,19 @@ class ChatControllerStreamReplayTest {
     assertTrue(controller.sendMessageAwaitAcceptance("failed send", "off", emptyList()))
     val runId = if (rekey) "canonical-run" else requireNotNull(gateway.lastRunId)
     when (priorTerminalEvent) {
-      "agent" ->
+      "agent" -> {
         controller.handleGatewayEvent(
           "agent",
           """{"sessionKey":"main","runId":"$runId","seq":1,"stream":"lifecycle","data":{"phase":"error","error":"Preparation failed"}}""",
         )
-      "sessions.changed" ->
+      }
+
+      "sessions.changed" -> {
         controller.handleGatewayEvent(
           "sessions.changed",
           """{"sessionKey":"main","agentId":"main","phase":"error","runId":"$runId","session":{"key":"main","agentId":"main","status":"failed","lastRunId":"$runId","lastRunError":"Preparation failed","hasActiveRun":false,"activeRunIds":[]}}""",
         )
+      }
     }
     val terminal =
       if (priorTerminalEvent == null) {
@@ -478,11 +481,13 @@ class ChatControllerStreamReplayTest {
       val staleMainGate = CompletableDeferred<Unit>()
       gateway.respond("chat.history") { paramsJson ->
         when (gateway.sessionKeyOf(paramsJson)) {
-          "other" ->
+          "other" -> {
             historyResponse(
               sessionId = "session-other",
               messages = listOf(ReplayHistoryMessage("assistant", "other transcript", 3_000)),
             )
+          }
+
           else -> {
             staleMainGate.await()
             historyResponse(

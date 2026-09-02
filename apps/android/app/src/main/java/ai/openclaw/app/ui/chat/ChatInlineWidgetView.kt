@@ -238,16 +238,20 @@ internal fun ChatInlineWidget(
           }
         }
       }
-      unavailable || resolvedResource != null ->
+
+      unavailable || resolvedResource != null -> {
         Text(
           text = nativeString("Widget unavailable"),
           style = ClawTheme.type.caption,
           color = ClawTheme.colors.textMuted,
         )
-      else ->
+      }
+
+      else -> {
         Box(modifier = Modifier.fillMaxWidth().height(44.dp), contentAlignment = Alignment.Center) {
           CircularProgressIndicator(color = ClawTheme.colors.textMuted)
         }
+      }
     }
   }
 }

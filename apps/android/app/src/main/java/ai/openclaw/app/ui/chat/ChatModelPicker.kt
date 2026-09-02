@@ -68,12 +68,17 @@ private fun resolveFastModeProvider(
     }
     when {
       qualifiedProviders.size == 1 -> qualifiedProviders.first()
+
       sessionProvider != null &&
         sessionProvider in idProviders &&
         sessionProvider !in qualifiedProviders -> sessionProvider
+
       idProviders.size == 1 -> idProviders.first()
+
       hasCatalogMatch -> null
+
       '/' in selected -> normalizeFastModeProvider(selected.substringBefore('/'))
+
       else -> sessionProvider
     }
   }
@@ -135,8 +140,10 @@ internal fun chatModelSendBlocked(
 internal fun chatModelPickerAction(model: GatewayModelSummary): ChatModelPickerAction =
   when {
     model.available != false -> ChatModelPickerAction.Select
+
     model.unavailableReason == GatewayModelUnavailableReason.MissingAuth ||
       model.unavailableReason == GatewayModelUnavailableReason.AuthFailed -> ChatModelPickerAction.OpenProviders
+
     else -> ChatModelPickerAction.Disabled
   }
 
@@ -145,6 +152,7 @@ internal fun chatModelUnavailableText(reason: GatewayModelUnavailableReason?): N
     GatewayModelUnavailableReason.MissingAuth,
     GatewayModelUnavailableReason.AuthFailed,
     -> nativeText("Authentication needed")
+
     else -> null
   }
 

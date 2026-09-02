@@ -238,6 +238,55 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
+  it.each([
+    "packages/mermaid-renderer/package.json",
+    "packages/mermaid-renderer/vite.config.ts",
+    "packages/mermaid-renderer/native/index.html",
+    "packages/mermaid-renderer/src/renderer.ts",
+    "packages/mermaid-renderer/src/frame.js",
+    "packages/mermaid-renderer/src/native.ts",
+  ])("runs both Mermaid browser boundaries when %s changes", (changedPath) => {
+    expectSingleVitestRunPlan(
+      buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [changedPath]),
+      {
+        config: "test/vitest/vitest.ui-browser.config.ts",
+        includePatterns: [
+          "ui/src/components/markdown-mermaid.runtime.browser.test.ts",
+          "ui/src/components/markdown-mermaid-native.browser.test.ts",
+        ],
+      },
+    );
+  });
+
+  it.each([
+    [
+      "packages/normalization-core/src/record-coerce.ts",
+      "packages/normalization-core/src/record-coerce.test.ts",
+    ],
+    [
+      "packages/normalization-core/package.json",
+      "packages/normalization-core/src/package-exports.test.ts",
+    ],
+    ["tsconfig.json", "test/scripts/changed-lanes.test.ts"],
+  ])("retains owner proof and adds both Mermaid boundaries for %s", (changedPath, ownerTest) => {
+    const plan = resolveChangedTestTargetPlan([changedPath]);
+    const browserTargets = [
+      "ui/src/components/markdown-mermaid.runtime.browser.test.ts",
+      "ui/src/components/markdown-mermaid-native.browser.test.ts",
+    ];
+    expect(plan.mode).toBe("targets");
+    expect(plan.targets).toEqual(expect.arrayContaining([ownerTest, ...browserTargets]));
+    const runPlans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
+      changedPath,
+    ]);
+    expect(runPlans).toContainEqual({
+      config: "test/vitest/vitest.ui-browser.config.ts",
+      forwardedArgs: [],
+      includePatterns: browserTargets,
+      watchMode: false,
+    });
+  });
+
   it("bounds extensionless prefix probes while excluding deleted cached matches", () => {
     const target = "src/selector/topic";
     const rejectedFiles = [
@@ -2078,7 +2127,6 @@ describe("scripts/test-projects changed-target routing", () => {
     expectChangedTargets(targets, [
       "test/scripts/docker-build-helper.test.ts",
       "test/scripts/docker-e2e-plan.test.ts",
-      "test/scripts/docker-e2e-system-agent.test.ts",
       "src/cli/program/register.onboard.test.ts",
       "src/cli/run-main.test.ts",
       "src/cli/run-main.exit.test.ts",
@@ -2113,6 +2161,7 @@ describe("scripts/test-projects changed-target routing", () => {
           "test/scripts/android-version.test.ts",
           "test/scripts/ci-git-prerequisites.test.ts",
           "test/scripts/ios-release-plan.test.ts",
+          "test/scripts/mac-native-fixtures.test.ts",
         ],
         watchMode: false,
       },
@@ -4185,16 +4234,25 @@ describe("scripts/test-projects full-suite sharding", () => {
   it("keeps shared Vitest config helpers out of whole-config targets", () => {
     const args = ["test/vitest/vitest.shared.config.ts"];
 
-    expect(findUnmatchedExplicitTestTargets(args, process.cwd())).toEqual([
-      {
-        target: "test/vitest/vitest.shared.config.ts",
-        reason: "target-matched-no-test-files",
-        includePattern: "test/vitest/**/*.test.ts",
-      },
-    ]);
+    expect(findUnmatchedExplicitTestTargets(args, process.cwd())).toEqual([]);
     expectSingleVitestRunPlan(buildVitestRunPlans(args, process.cwd()), {
       config: "test/vitest/vitest.tooling.config.ts",
       includePatterns: ["test/vitest/**/*.test.ts"],
+    });
+
+    withTinyFileTree({ "test/vitest/vitest.helper.config.ts": "export default {};\n" }, (cwd) => {
+      const helperArgs = ["test/vitest/vitest.helper.config.ts"];
+      expect(findUnmatchedExplicitTestTargets(helperArgs, cwd)).toEqual([
+        {
+          target: "test/vitest/vitest.helper.config.ts",
+          reason: "target-matched-no-test-files",
+          includePattern: "test/vitest/**/*.test.ts",
+        },
+      ]);
+      expectSingleVitestRunPlan(buildVitestRunPlans(helperArgs, cwd), {
+        config: "test/vitest/vitest.tooling.config.ts",
+        includePatterns: ["test/vitest/**/*.test.ts"],
+      });
     });
   });
 

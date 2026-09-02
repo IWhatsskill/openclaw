@@ -172,11 +172,18 @@ internal fun sessionDashboardUrl(
     when {
       (parsed == null && normalizedRest == "main") ||
         normalizedRest == configuredMainKey ||
-        normalizedRest == "global" -> emptyList()
+        normalizedRest == "global" -> {
+        emptyList()
+      }
+
       segments.size == 1 &&
-        (normalizedRest in dashboardReservedSessionRests || dashboardShortSessionRef.matches(rest)) ->
+        (normalizedRest in dashboardReservedSessionRests || dashboardShortSessionRef.matches(rest)) -> {
         listOf("~key", encodeDashboardPathSegment(rest))
-      else -> segments.map(::encodeDashboardPathSegment)
+      }
+
+      else -> {
+        segments.map(::encodeDashboardPathSegment)
+      }
     }
   val uri = baseUrl.trimEnd('/').toUri()
   val basePath = uri.encodedPath.orEmpty().trimEnd('/')
@@ -219,11 +226,18 @@ private fun normalizeDashboardAgentId(agentId: String): String {
 
 private fun encodeDashboardPathSegment(segment: String): String =
   when (segment) {
-    "." -> "~dot"
-    ".." -> "~dotdot"
-    else ->
+    "." -> {
+      "~dot"
+    }
+
+    ".." -> {
+      "~dotdot"
+    }
+
+    else -> {
       android.net.Uri
         .encode(segment)
         .replace(".", "%2E")
         .let { encoded -> if (encoded.startsWith("~")) "~$encoded" else encoded }
+    }
   }

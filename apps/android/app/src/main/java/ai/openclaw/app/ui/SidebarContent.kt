@@ -571,14 +571,16 @@ internal fun OpenClawSidebar(
       if (searchState.query.isNotEmpty()) {
         SidebarSectionTitle(nativeString("Threads"), palette)
         when (sessionEmptyMode(searchState.query, searchState.loading)) {
-          SessionEmptyMode.SearchLoading ->
+          SessionEmptyMode.SearchLoading -> {
             Text(
               text = nativeString("Searching threads"),
               style = ClawTheme.type.caption,
               color = palette.muted,
               modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp),
             )
-          else ->
+          }
+
+          else -> {
             if (searchResults.isEmpty()) {
               Text(
                 text = nativeString("No matching threads"),
@@ -598,6 +600,7 @@ internal fun OpenClawSidebar(
                 }
               }
             }
+          }
         }
       } else {
         SidebarPagesHeader(
@@ -699,12 +702,18 @@ internal fun OpenClawSidebar(
 
         if (catalogAvailable) {
           when {
-            catalogState.loading && catalogSections.isEmpty() ->
+            catalogState.loading && catalogSections.isEmpty() -> {
               SidebarCatalogStatus(nativeString("Loading"), palette, progress = true)
-            catalogErrorText != null && catalogSections.isEmpty() ->
+            }
+
+            catalogErrorText != null && catalogSections.isEmpty() -> {
               SidebarCatalogStatus(catalogErrorText, palette)
-            catalogSections.isEmpty() ->
+            }
+
+            catalogSections.isEmpty() -> {
               SidebarCatalogStatus(nativeString("No sessions"), palette)
+            }
+
             else -> {
               if (catalogState.loading) {
                 SidebarCatalogStatus(nativeString("Loading"), palette, progress = true)
@@ -940,7 +949,8 @@ private fun SidebarPagesHeader(
         containerColor = palette.elevated,
       ) {
         when (menuMode) {
-          SidebarPagesMenuMode.Closed -> Unit
+          SidebarPagesMenuMode.Closed -> {}
+
           SidebarPagesMenuMode.Navigate -> {
             destinations.forEach { destination ->
               DropdownMenuItem(
@@ -983,6 +993,7 @@ private fun SidebarPagesHeader(
               onClick = { onMenuModeChange(SidebarPagesMenuMode.Edit) },
             )
           }
+
           SidebarPagesMenuMode.Edit -> {
             Text(
               text = nativeString("EDIT PINNED ITEMS"),
@@ -1047,10 +1058,14 @@ private fun SidebarSessionCatalog(
 ) {
   val hosts = sidebarCatalogHosts(listOf(catalog))
   when {
-    catalog.errorText != null && hosts.isEmpty() ->
+    catalog.errorText != null && hosts.isEmpty() -> {
       SidebarCatalogStatus(catalog.errorText, palette)
-    hosts.isEmpty() ->
+    }
+
+    hosts.isEmpty() -> {
       SidebarCatalogStatus(nativeString("No sessions"), palette)
+    }
+
     else -> {
       catalog.errorText?.let { error ->
         SidebarCatalogStatus(error, palette)
@@ -1087,27 +1102,32 @@ private fun SidebarSessionCatalog(
             maxLines = 1,
           )
           when {
-            !host.errorText.isNullOrBlank() ->
+            !host.errorText.isNullOrBlank() -> {
               Icon(
                 imageVector = Icons.Outlined.ErrorOutline,
                 contentDescription = nativeString("Host error"),
                 tint = ClawTheme.colors.danger,
                 modifier = Modifier.size(16.dp),
               )
-            !host.connected ->
+            }
+
+            !host.connected -> {
               Text(
                 text = nativeString("Offline"),
                 style = ClawTheme.type.caption,
                 color = palette.muted,
                 maxLines = 1,
               )
-            else ->
+            }
+
+            else -> {
               Text(
                 text = host.workspaces.sumOf { it.sessions.size }.toString(),
                 style = ClawTheme.type.caption,
                 color = palette.muted,
                 maxLines = 1,
               )
+            }
           }
         }
         if (hostExpanded) {

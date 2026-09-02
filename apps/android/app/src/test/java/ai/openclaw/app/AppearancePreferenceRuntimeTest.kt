@@ -202,6 +202,7 @@ class AppearancePreferenceRuntimeTest {
                 replacementHelloStarted.complete(Unit)
                 releaseReplacementHello.await()
               }
+
               "users.self" -> {
                 profileLookupStarted.complete(Unit)
                 releaseProfileLookup.await()
@@ -587,13 +588,18 @@ class AppearancePreferenceRuntimeTest {
               }
               null
             }
-            "users.prefs.get" ->
+
+            "users.prefs.get" -> {
               if (preferenceReads.incrementAndGet() == 1) {
                 """{"status":"ok","entries":{"ui.theme":"dash","ui.themeMode":"dark"}}"""
               } else {
                 """{"status":"ok","entries":{"ui.theme":"claw","ui.themeMode":"light"}}"""
               }
-            else -> null
+            }
+
+            else -> {
+              null
+            }
           }
         }
         try {
@@ -953,7 +959,7 @@ private class AppearanceGatewayFixture(
     identity: Connection,
   ): String =
     when (request.method) {
-      "connect" ->
+      "connect" -> {
         buildJsonObject {
           put("server", buildJsonObject { put("host", JsonPrimitive("appearance-" + request.connection)) })
           identity.methods?.let { methods ->
@@ -968,19 +974,27 @@ private class AppearanceGatewayFixture(
           )
           put("snapshot", json.parseToJsonElement("""{"sessionDefaults":{"mainSessionKey":"main"}}"""))
         }.toString()
-      "config.get" -> """{"config":$config}"""
-      "users.prefs.get" ->
+      }
+
+      "config.get" -> {
+        """{"config":$config}"""
+      }
+
+      "users.prefs.get" -> {
         if (request.profileId == null) {
           """{"status":"no_durable_identity"}"""
         } else {
           val entries = profiles[request.profileId] ?: JsonObject(emptyMap())
           """{"status":"ok","entries":$entries}"""
         }
+      }
+
       "users.self" -> {
         requireWriteScope(identity)
         val id = request.profileId?.let(::JsonPrimitive) ?: JsonNull
         """{"profile":{"id":$id}}"""
       }
+
       "users.prefs.set" -> {
         requireWriteScope(identity)
         val profileId = checkNotNull(request.profileId)
@@ -990,7 +1004,10 @@ private class AppearanceGatewayFixture(
         }
         """{"status":"ok"}"""
       }
-      else -> "{}"
+
+      else -> {
+        "{}"
+      }
     }
 
   private fun requireWriteScope(identity: Connection) {

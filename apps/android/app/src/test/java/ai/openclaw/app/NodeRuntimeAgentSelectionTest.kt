@@ -427,18 +427,39 @@ class NodeRuntimeAgentSelectionTest {
       try {
         val requestGateway: suspend (String, String?) -> String = { method, _ ->
           when (method) {
-            "sessions.describe" -> """{"session":{"label":"App"}}"""
+            "sessions.describe" -> {
+              """{"session":{"label":"App"}}"""
+            }
+
             "sessions.create" -> {
               createStarted.complete(currentCoroutineContext().job)
               releaseCreate.await()
               """{"ok":true,"key":"$createdKey"}"""
             }
-            "chat.history" -> """{"sessionId":"test-session","messages":[]}"""
-            "sessions.list" -> """{"sessions":[]}"""
-            "health" -> """{"ok":true}"""
-            "chat.metadata" -> "{}"
-            "question.list" -> """{"questions":[]}"""
-            else -> error("Unexpected gateway request: $method")
+
+            "chat.history" -> {
+              """{"sessionId":"test-session","messages":[]}"""
+            }
+
+            "sessions.list" -> {
+              """{"sessions":[]}"""
+            }
+
+            "health" -> {
+              """{"ok":true}"""
+            }
+
+            "chat.metadata" -> {
+              "{}"
+            }
+
+            "question.list" -> {
+              """{"questions":[]}"""
+            }
+
+            else -> {
+              error("Unexpected gateway request: $method")
+            }
           }
         }
         val requestGatewayForGateway: suspend (String, String, String?) -> String = { _, method, params ->

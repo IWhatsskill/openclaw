@@ -245,11 +245,21 @@ class ChatControllerCommandControlsTest {
           }
           withEnqueue { if (method == "sessions.create") creates += paramsJson }
           return when (method) {
-            "sessions.create" -> """{"key":"agent:main:dashboard:child"}"""
-            "chat.history" ->
+            "sessions.create" -> {
+              """{"key":"agent:main:dashboard:child"}"""
+            }
+
+            "chat.history" -> {
               """{"sessionId":"lineage-parent","messages":[],"sessionInfo":{"key":"main","agentId":"main","sessionId":"lineage-parent","modelSelectionLocked":false}}"""
-            "sessions.list" -> """{"sessions":[]}"""
-            else -> "{}"
+            }
+
+            "sessions.list" -> {
+              """{"sessions":[]}"""
+            }
+
+            else -> {
+              "{}"
+            }
           }
         }
 
@@ -970,10 +980,22 @@ class ChatControllerCommandControlsTest {
               controller.switchSession("agent:main:dashboard:other")
               """{"ok":true,"key":"agent:main:dashboard:fresh"}"""
             }
-            "chat.history" -> """{"sessionId":"other-session","messages":[]}"""
-            "health" -> "{}"
-            "sessions.list" -> """{"sessions":[]}"""
-            else -> "{}"
+
+            "chat.history" -> {
+              """{"sessionId":"other-session","messages":[]}"""
+            }
+
+            "health" -> {
+              "{}"
+            }
+
+            "sessions.list" -> {
+              """{"sessions":[]}"""
+            }
+
+            else -> {
+              "{}"
+            }
           }
         }
       controller.handleGatewayEvent("health", null)

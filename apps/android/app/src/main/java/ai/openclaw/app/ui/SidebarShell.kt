@@ -12,11 +12,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 
 /**
- * Sidebar-owned top-level navigation.
- *
- * Pages are opened from the sidebar Pages menu on every window size. The old
- * adaptive bar/rail/drawer suite is intentionally absent so there is a single
- * navigation owner and no compact bottom menu can reappear.
+ * Pages share one drawer at every window size, keeping compact layouts free
+ * of a second navigation bar.
  */
 @Composable
 internal fun SidebarNavigationShell(

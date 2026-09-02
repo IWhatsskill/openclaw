@@ -497,7 +497,10 @@ class ChatControllerPermissionSelectionTest {
                 patchStarted.complete(Unit)
                 releasePatch.await()
               }
-              "sessions.list" -> listRequests += 1
+
+              "sessions.list" -> {
+                listRequests += 1
+              }
             }
             "{}"
           }
@@ -1104,8 +1107,14 @@ class ChatControllerPermissionSelectionTest {
               releasePatch.await()
               "{}"
             }
-            "chat.send" -> """{"runId":"run-ok","status":"ok"}"""
-            else -> "{}"
+
+            "chat.send" -> {
+              """{"runId":"run-ok","status":"ok"}"""
+            }
+
+            else -> {
+              "{}"
+            }
           }
         }
       controller.handleGatewayEvent("health", null)

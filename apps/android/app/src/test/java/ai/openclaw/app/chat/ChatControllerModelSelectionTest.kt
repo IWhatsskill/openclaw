@@ -554,8 +554,14 @@ class ChatControllerModelSelectionTest {
               releasePatch.await()
               "{}"
             }
-            "chat.send" -> """{"runId":"run-ok","status":"ok"}"""
-            else -> "{}"
+
+            "chat.send" -> {
+              """{"runId":"run-ok","status":"ok"}"""
+            }
+
+            else -> {
+              "{}"
+            }
           }
         }
       controller.handleGatewayEvent("health", null)
@@ -977,14 +983,25 @@ class ChatControllerModelSelectionTest {
           cacheScope = { gatewayScope },
         ) { method, _ ->
           when {
-            method == "sessions.list" ->
+            method == "sessions.list" -> {
               """{"sessions":[{"key":"main","thinkingLevel":"off"}]}"""
-            method == "chat.history" ->
+            }
+
+            method == "chat.history" -> {
               """{"sessionId":"${gatewayScope.gatewayId}-session","messages":[],"sessionInfo":{"key":"main","thinkingLevel":"off"}}"""
-            method == "sessions.patch" && gatewayScope.gatewayId == "gateway-a" ->
+            }
+
+            method == "sessions.patch" && gatewayScope.gatewayId == "gateway-a" -> {
               """{"resolved":{"thinkingLevel":"medium"}}"""
-            method == "sessions.patch" -> error("thinking rejected")
-            else -> "{}"
+            }
+
+            method == "sessions.patch" -> {
+              error("thinking rejected")
+            }
+
+            else -> {
+              "{}"
+            }
           }
         }
 
@@ -1235,7 +1252,10 @@ class ChatControllerModelSelectionTest {
               newListFinished.complete(Unit)
               """{"sessions":[{"key":"main","thinkingLevel":"high"}]}"""
             }
-            else -> "{}"
+
+            else -> {
+              "{}"
+            }
           }
         }
 
@@ -1453,6 +1473,7 @@ class ChatControllerModelSelectionTest {
                 firstPatchStarted.complete(Unit)
                 releaseFirstPatch.await()
               }
+
               "ultra" -> {
                 secondPatchStarted.complete(Unit)
                 releaseSecondPatch.await()
@@ -1504,8 +1525,14 @@ class ChatControllerModelSelectionTest {
                 releaseFirstPatch.await()
                 """{"resolved":{"thinkingLevel":"medium"}}"""
               }
-              2 -> """{"resolved":{"thinkingLevel":"ultra"}}"""
-              else -> """{"resolved":{"thinkingLevel":"max"}}"""
+
+              2 -> {
+                """{"resolved":{"thinkingLevel":"ultra"}}"""
+              }
+
+              else -> {
+                """{"resolved":{"thinkingLevel":"max"}}"""
+              }
             }
           }
         }
@@ -1531,14 +1558,23 @@ class ChatControllerModelSelectionTest {
         createChatController { method, _ ->
           requests += method
           when (method) {
-            "chat.history" -> """{"sessionId":"model-session","messages":[],"sessionInfo":{"key":"main","thinkingLevel":"off"}}"""
+            "chat.history" -> {
+              """{"sessionId":"model-session","messages":[],"sessionInfo":{"key":"main","thinkingLevel":"off"}}"""
+            }
+
             "sessions.patch" -> {
               patchStarted.complete(Unit)
               releasePatch.await()
               error("patch failed")
             }
-            "chat.send" -> """{"runId":"run-unexpected","status":"ok"}"""
-            else -> "{}"
+
+            "chat.send" -> {
+              """{"runId":"run-unexpected","status":"ok"}"""
+            }
+
+            else -> {
+              "{}"
+            }
           }
         }
       controller.handleGatewayEvent("health", null)

@@ -935,6 +935,7 @@ class SecurePrefs(
         }
         if (applyLocally) _appearanceThemeFamily.value = family
       }
+
       "ui.themeMode" -> {
         val mode =
           AppearanceThemeMode.entries.firstOrNull { it.rawValue == expectedValue }
@@ -945,6 +946,7 @@ class SecurePrefs(
         }
         if (applyLocally) _appearanceThemeMode.value = mode
       }
+
       "ui.accent" -> {
         val argb =
           when {
@@ -963,7 +965,10 @@ class SecurePrefs(
         }
         if (applyLocally) _appearanceAccentArgb.value = argb
       }
-      else -> return false
+
+      else -> {
+        return false
+      }
     }
     pendingAppearancePreferences = next
     incrementAppearancePreferenceRevision(key)

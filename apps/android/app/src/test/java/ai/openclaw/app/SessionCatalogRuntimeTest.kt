@@ -59,12 +59,16 @@ class SessionCatalogRuntimeTest {
               releaseMain.await()
               """{"catalogs":[]}"""
             }
+
             "work" -> {
               workStarted.complete(Unit)
               releaseWork.await()
               error("Work catalog unavailable")
             }
-            else -> error("Unexpected catalog request")
+
+            else -> {
+              error("Unexpected catalog request")
+            }
           }
         }
 
@@ -334,11 +338,15 @@ class SessionCatalogRuntimeTest {
               releaseMain.await()
               """{"catalogs":[{"id":"codex","label":"Main catalog","hosts":[]}]}"""
             }
+
             "work" -> {
               workStarted.complete(Unit)
               """{"catalogs":[{"id":"codex","label":"Work catalog","hosts":[]}]}"""
             }
-            else -> error("Unexpected agent: $agentId")
+
+            else -> {
+              error("Unexpected agent: $agentId")
+            }
           }
         }
 

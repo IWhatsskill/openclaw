@@ -457,7 +457,7 @@ internal fun verifyGatewayDevicePairingMutation(
     GatewayDevicePairingMutationOutcome.NotVerified
   } else {
     when (mutation.action) {
-      GatewayDevicePairingAction.Approve ->
+      GatewayDevicePairingAction.Approve -> {
         if (
           pending.none { it.requestId == mutation.targetId } &&
           paired.any { it.deviceId == expectedDeviceId }
@@ -466,18 +466,23 @@ internal fun verifyGatewayDevicePairingMutation(
         } else {
           GatewayDevicePairingMutationOutcome.NotVerified
         }
-      GatewayDevicePairingAction.Reject ->
+      }
+
+      GatewayDevicePairingAction.Reject -> {
         if (pending.none { it.requestId == mutation.targetId }) {
           GatewayDevicePairingMutationOutcome.Rejected
         } else {
           GatewayDevicePairingMutationOutcome.NotVerified
         }
-      GatewayDevicePairingAction.Remove ->
+      }
+
+      GatewayDevicePairingAction.Remove -> {
         if (paired.none { it.deviceId == mutation.targetId }) {
           GatewayDevicePairingMutationOutcome.Removed
         } else {
           GatewayDevicePairingMutationOutcome.NotVerified
         }
+      }
     }
   }
 
@@ -608,14 +613,20 @@ internal class NotificationNodeEventOutbox(
           if (inFlight === queued) inFlight = null
           if (queued.generation == generation.get() && isAuthorized(queued.event)) {
             when (outcome) {
-              NodeEventSendOutcome.COMPLETED -> lastDeliveryAtMs.set(nowEpochMs())
+              NodeEventSendOutcome.COMPLETED -> {
+                lastDeliveryAtMs.set(nowEpochMs())
+              }
+
               NodeEventSendOutcome.DISCONNECTED -> {
                 // This outcome is rejected before send, so it is safe to retain for reconnect.
                 if (pending.size == capacity) pending.removeLast()
                 pending.addFirst(queued)
               }
+
               // Ambiguous failures may have reached the gateway: do not retry, but charge their rate slot.
-              NodeEventSendOutcome.FAILED -> lastDeliveryAtMs.set(nowEpochMs())
+              NodeEventSendOutcome.FAILED -> {
+                lastDeliveryAtMs.set(nowEpochMs())
+              }
             }
           }
         }
@@ -687,24 +698,52 @@ private fun gatewayOperatorConnectionState(operator: String): String = "Connecte
 internal fun gatewayConnectionStatusForDisplay(statusText: String): String {
   val status = statusText.trim()
   return when {
-    status.isEmpty() || status == GATEWAY_STATUS_OFFLINE -> nativeString("Offline")
-    status == GATEWAY_STATUS_CONNECTED -> nativeString("Connected")
-    status == GATEWAY_STATUS_NODE_OFFLINE -> nativeString("Connected (node offline)")
-    status == GATEWAY_STATUS_OPERATOR_OFFLINE -> nativeString("Connected (operator offline)")
-    status == "Connecting…" -> nativeString("Connecting…")
-    status == "Reconnecting…" -> nativeString("Reconnecting…")
-    status == "Failed: no secure gateway endpoint was detected. Enable gateway TLS or Tailscale Serve, or use a trusted private LAN address with Unencrypted selected." ->
+    status.isEmpty() || status == GATEWAY_STATUS_OFFLINE -> {
+      nativeString("Offline")
+    }
+
+    status == GATEWAY_STATUS_CONNECTED -> {
+      nativeString("Connected")
+    }
+
+    status == GATEWAY_STATUS_NODE_OFFLINE -> {
+      nativeString("Connected (node offline)")
+    }
+
+    status == GATEWAY_STATUS_OPERATOR_OFFLINE -> {
+      nativeString("Connected (operator offline)")
+    }
+
+    status == "Connecting…" -> {
+      nativeString("Connecting…")
+    }
+
+    status == "Reconnecting…" -> {
+      nativeString("Reconnecting…")
+    }
+
+    status == "Failed: no secure gateway endpoint was detected. Enable gateway TLS or Tailscale Serve, or use a trusted private LAN address with Unencrypted selected." -> {
       nativeString("Failed: no secure gateway endpoint was detected. Enable gateway TLS or Tailscale Serve, or use a trusted private LAN address with Unencrypted selected.")
-    status == "Failed: secure endpoint reached, but TLS fingerprint verification timed out. Check Tailscale Serve or gateway TLS and retry." ->
+    }
+
+    status == "Failed: secure endpoint reached, but TLS fingerprint verification timed out. Check Tailscale Serve or gateway TLS and retry." -> {
       nativeString("Failed: secure endpoint reached, but TLS fingerprint verification timed out. Check Tailscale Serve or gateway TLS and retry.")
-    status == "Failed: couldn't reach the secure gateway endpoint for this host." ->
+    }
+
+    status == "Failed: couldn't reach the secure gateway endpoint for this host." -> {
       nativeString("Failed: couldn't reach the secure gateway endpoint for this host.")
-    status.startsWith("Connected (operator: ") && status.endsWith(")") ->
+    }
+
+    status.startsWith("Connected (operator: ") && status.endsWith(")") -> {
       nativeString(
         "Connected (operator: \$operator)",
         status.removePrefix("Connected (operator: ").dropLast(1),
       )
-    else -> status
+    }
+
+    else -> {
+      status
+    }
   }
 }
 
@@ -726,9 +765,15 @@ internal fun gatewayConnectionDisplay(
   val operator = operatorStatusText.trim()
   val node = nodeStatusText.trim()
   return when {
-    operatorConnected && nodeConnected -> GatewayConnectionDisplay(true, GATEWAY_STATUS_CONNECTED, null)
-    operatorConnected -> GatewayConnectionDisplay(true, GATEWAY_STATUS_NODE_OFFLINE, nodeProblem)
-    nodeConnected ->
+    operatorConnected && nodeConnected -> {
+      GatewayConnectionDisplay(true, GATEWAY_STATUS_CONNECTED, null)
+    }
+
+    operatorConnected -> {
+      GatewayConnectionDisplay(true, GATEWAY_STATUS_NODE_OFFLINE, nodeProblem)
+    }
+
+    nodeConnected -> {
       GatewayConnectionDisplay(
         isConnected = false,
         statusText =
@@ -739,8 +784,15 @@ internal fun gatewayConnectionDisplay(
           },
         problem = operatorProblem,
       )
-    operator.isNotBlank() && operator != "Offline" -> GatewayConnectionDisplay(false, operator, operatorProblem)
-    else -> GatewayConnectionDisplay(false, node, nodeProblem)
+    }
+
+    operator.isNotBlank() && operator != "Offline" -> {
+      GatewayConnectionDisplay(false, operator, operatorProblem)
+    }
+
+    else -> {
+      GatewayConnectionDisplay(false, node, nodeProblem)
+    }
   }
 }
 
@@ -1608,12 +1660,16 @@ class NodeRuntime private constructor(
       },
       captureLease = { gatewayId ->
         when (mode) {
-          NodeRuntimeMode.Live -> operatorSession.captureRequestLease(gatewayId)
-          NodeRuntimeMode.ScreenshotFixture ->
+          NodeRuntimeMode.Live -> {
+            operatorSession.captureRequestLease(gatewayId)
+          }
+
+          NodeRuntimeMode.ScreenshotFixture -> {
             GatewaySession.RequestLease(endpointStableId = AndroidScreenshotFixture.gatewayId) { method, paramsJson, _, withEnqueue ->
               withEnqueue {}
               screenshotRequester(method, paramsJson)
             }
+          }
         }
       },
       json = json,
@@ -2042,7 +2098,7 @@ class NodeRuntime private constructor(
 
   private val chat: ChatController =
     when (mode) {
-      NodeRuntimeMode.Live ->
+      NodeRuntimeMode.Live -> {
         ChatController(
           scope = scope,
           session = operatorSession,
@@ -2064,7 +2120,9 @@ class NodeRuntime private constructor(
             }
           },
         )
-      NodeRuntimeMode.ScreenshotFixture ->
+      }
+
+      NodeRuntimeMode.ScreenshotFixture -> {
         ChatController(
           scope = scope,
           json = json,
@@ -2072,6 +2130,7 @@ class NodeRuntime private constructor(
           gatewayAdvertisesMethod = { _ -> true },
           gatewayAdvertisesCapability = { _ -> true },
         )
+      }
     }.also {
       it.applyMainSessionKey(_mainSessionKey.value)
     }
@@ -2590,19 +2649,26 @@ class NodeRuntime private constructor(
             refresh = cronRunShouldRefresh(outcome),
           )
         }
-        is GatewayCronRunOutcome.Skipped ->
+
+        is GatewayCronRunOutcome.Skipped -> {
           CronActionResult(
             message = outcome.reason.messageText,
             kind = GatewayCronNoticeKind.Warning,
             refresh = cronRunShouldRefresh(outcome),
           )
-        GatewayCronRunOutcome.Rejected ->
+        }
+
+        GatewayCronRunOutcome.Rejected -> {
           CronActionResult(
             message = nativeText("Gateway rejected the automation run."),
             kind = GatewayCronNoticeKind.Error,
             refresh = false,
           )
-        null -> error("Gateway returned an invalid cron run result.")
+        }
+
+        null -> {
+          error("Gateway returned an invalid cron run result.")
+        }
       }
     }
   }
@@ -3381,7 +3447,10 @@ class NodeRuntime private constructor(
     discovered: List<GatewayEndpoint> = gateways.value,
   ): GatewayEndpoint? {
     return when (entry.kind) {
-      GatewayRegistryEntryKind.MANUAL -> manualGatewayEndpoint(entry)
+      GatewayRegistryEntryKind.MANUAL -> {
+        manualGatewayEndpoint(entry)
+      }
+
       GatewayRegistryEntryKind.DISCOVERED -> {
         val endpoint = discovered.firstOrNull { it.stableId == entry.stableId } ?: return null
         val storedFingerprint = prefs.loadGatewayTlsFingerprint(endpoint.stableId)?.trim().orEmpty()
@@ -3415,13 +3484,17 @@ class NodeRuntime private constructor(
         .firstOrNull { it.stableId == stableId } ?: return false
     val endpoint =
       when (entry.kind) {
-        GatewayRegistryEntryKind.MANUAL -> manualGatewayEndpoint(entry) ?: return false
-        GatewayRegistryEntryKind.DISCOVERED ->
+        GatewayRegistryEntryKind.MANUAL -> {
+          manualGatewayEndpoint(entry) ?: return false
+        }
+
+        GatewayRegistryEntryKind.DISCOVERED -> {
           gateways.value.firstOrNull { it.stableId == stableId }
             ?: run {
               setStandaloneGatewayStatus("Gateway not currently discoverable")
               return false
             }
+        }
       }
     return connectSwitchingGateway(endpoint)
   }
@@ -3752,9 +3825,13 @@ class NodeRuntime private constructor(
               },
             )
           when (started) {
-            is TalkPttOnceStart.Busy -> cleanupFailedTalkCapture(ownershipEpoch)
-            is TalkPttOnceStart.Started ->
+            is TalkPttOnceStart.Busy -> {
+              cleanupFailedTalkCapture(ownershipEpoch)
+            }
+
+            is TalkPttOnceStart.Started -> {
               recordTalkPttOwnership(captureId = started.captureId, ownershipEpoch = ownershipEpoch)
+            }
           }
           started
         }
@@ -4245,14 +4322,18 @@ class NodeRuntime private constructor(
             micCapture.setMicEnabled(true)
           }
         }
+
         VoiceCaptureMode.TalkMode -> {
           if (_voiceCaptureMode.value == VoiceCaptureMode.TalkMode && externalAudioCaptureActive.value) {
             talkMode.setEnabled(true)
           }
         }
+
         VoiceCaptureMode.Off,
         null,
-        -> Unit
+        -> {
+          Unit
+        }
       }
     }
   }
@@ -4374,23 +4455,28 @@ class NodeRuntime private constructor(
 
   private fun isVoiceCaptureModeActive(mode: VoiceCaptureMode): Boolean =
     when (mode) {
-      VoiceCaptureMode.Off ->
+      VoiceCaptureMode.Off -> {
         !cameraAudioOwnsMic &&
           !externalAudioCaptureActive.value &&
           !micCapture.micEnabled.value &&
           !micCapture.micCooldown.value &&
           !talkMode.isEnabled.value &&
           talkMode.activePushToTalkCaptureId == null
-      VoiceCaptureMode.ManualMic ->
+      }
+
+      VoiceCaptureMode.ManualMic -> {
         externalAudioCaptureActive.value &&
           micCapture.micEnabled.value &&
           !talkMode.isEnabled.value &&
           talkMode.activePushToTalkCaptureId == null
-      VoiceCaptureMode.TalkMode ->
+      }
+
+      VoiceCaptureMode.TalkMode -> {
         externalAudioCaptureActive.value &&
           !micCapture.micEnabled.value &&
           talkMode.isEnabled.value &&
           talkMode.activePushToTalkCaptureId == null
+      }
     }
 
   fun refreshGatewayConnection() {
@@ -4565,8 +4651,11 @@ class NodeRuntime private constructor(
             registerGateway(endpoint, setActive = true)
             connectAfterTlsCheck(endpoint = endpoint, auth = auth, connectAttemptId = connectAttemptId)
           }
-          is GatewayTlsTrustDecision.PinnedTrust ->
+
+          is GatewayTlsTrustDecision.PinnedTrust -> {
             connectAfterTlsCheck(endpoint = endpoint, auth = auth, connectAttemptId = connectAttemptId)
+          }
+
           is GatewayTlsTrustDecision.PromptRequired -> {
             decision.probeFailure?.let { setStandaloneGatewayStatus(gatewayTlsProbeFailureMessage(it)) }
             publishGatewayTrustPromptIfCurrent(
@@ -4582,6 +4671,7 @@ class NodeRuntime private constructor(
                 ),
             )
           }
+
           is GatewayTlsTrustDecision.Failed -> {
             connectingEndpointStableId = null
             setStandaloneGatewayStatus(gatewayTlsProbeFailureMessage(decision.reason))
@@ -4746,16 +4836,21 @@ class NodeRuntime private constructor(
 
   private fun gatewayTlsProbeFailureMessage(failure: GatewayTlsProbeFailure): String =
     when (failure) {
-      GatewayTlsProbeFailure.TLS_UNAVAILABLE ->
+      GatewayTlsProbeFailure.TLS_UNAVAILABLE -> {
         nativeText(
           "Failed: no secure gateway endpoint was detected. Enable gateway TLS or Tailscale Serve, or use a trusted private LAN address with Unencrypted selected.",
         ).source
-      GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT ->
+      }
+
+      GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT -> {
         nativeText(
           "Failed: secure endpoint reached, but TLS fingerprint verification timed out. Check Tailscale Serve or gateway TLS and retry.",
         ).source
-      GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE ->
+      }
+
+      GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE -> {
         nativeText("Failed: couldn't reach the secure gateway endpoint for this host.").source
+      }
     }
 
   private fun hasRecordAudioPermission(): Boolean =
@@ -5614,6 +5709,7 @@ class NodeRuntime private constructor(
           }
         }
       }
+
       "exec.approval.resolved" -> {
         val approvalId = parseExecApprovalEventId(payloadJson) ?: return
         val methodsSnapshot = captureGatewayMethods()
@@ -5623,6 +5719,7 @@ class NodeRuntime private constructor(
             // Canonical readback preserves the durable winner across that race.
             scope.launch { refreshExecApprovalFromGateway(approvalId) }
           }
+
           GatewayApprovalRpcFamily.Legacy,
           GatewayApprovalRpcFamily.Unavailable,
           -> {
@@ -6293,8 +6390,14 @@ class NodeRuntime private constructor(
             ),
           )
         }
-        "no_durable_identity" -> GatewayAppearancePreferencesRead.NoDurableIdentity
-        else -> GatewayAppearancePreferencesRead.Unavailable
+
+        "no_durable_identity" -> {
+          GatewayAppearancePreferencesRead.NoDurableIdentity
+        }
+
+        else -> {
+          GatewayAppearancePreferencesRead.Unavailable
+        }
       }
     } catch (cancelled: CancellationException) {
       throw cancelled
@@ -7646,7 +7749,7 @@ class NodeRuntime private constructor(
             )
           val result = json.parseToJsonElement(response).asObjectOrNull()
           when (mutation.action) {
-            GatewayDevicePairingAction.Approve ->
+            GatewayDevicePairingAction.Approve -> {
               result?.get("requestId").asStringOrNull()?.trim() == mutation.targetId &&
                 result
                   ?.get("device")
@@ -7655,10 +7758,15 @@ class NodeRuntime private constructor(
                   .asStringOrNull()
                   ?.trim() ==
                 expectedDeviceId
-            GatewayDevicePairingAction.Reject ->
+            }
+
+            GatewayDevicePairingAction.Reject -> {
               result?.get("requestId").asStringOrNull()?.trim() == mutation.targetId
-            GatewayDevicePairingAction.Remove ->
+            }
+
+            GatewayDevicePairingAction.Remove -> {
               result?.get("deviceId").asStringOrNull()?.trim() == mutation.targetId
+            }
           }
         } catch (err: CancellationException) {
           throw err
@@ -7982,7 +8090,7 @@ class NodeRuntime private constructor(
           createdAtMs = current?.createdAtMs ?: System.currentTimeMillis(),
         )
       when (lookup) {
-        is GatewayExecApprovalSnapshot.Pending ->
+        is GatewayExecApprovalSnapshot.Pending -> {
           publishGatewayApprovalData(gatewayScope, methodsSnapshot) {
             if (id !in resolvedExecApprovalIds) {
               invalidateExecApprovalRefreshes()
@@ -7999,13 +8107,16 @@ class NodeRuntime private constructor(
               )
             }
           }
-        is GatewayExecApprovalSnapshot.Terminal ->
+        }
+
+        is GatewayExecApprovalSnapshot.Terminal -> {
           publishGatewayApprovalData(gatewayScope, methodsSnapshot) {
             if (_execApprovals.value.any { it.id == id }) {
               _execApprovalsNotice.value = gatewayExecApprovalRemoteTerminalNotice(lookup)
             }
             markExecApprovalResolved(id)
           }
+        }
       }
     } catch (err: CancellationException) {
       throw err
@@ -8023,12 +8134,14 @@ class NodeRuntime private constructor(
     createdAtMs: Long?,
   ): GatewayExecApprovalSnapshot =
     when (methodsSnapshot.approvalRpcFamily) {
-      GatewayApprovalRpcFamily.Canonical ->
+      GatewayApprovalRpcFamily.Canonical -> {
         fetchUnifiedExecApprovalDetail(
           gatewayScope = gatewayScope,
           methodsSnapshot = methodsSnapshot,
           id = id,
         )
+      }
+
       GatewayApprovalRpcFamily.Legacy -> {
         val params = buildGatewayExecApprovalGetParams(id).toString()
         val response =
@@ -8045,7 +8158,10 @@ class NodeRuntime private constructor(
           createdAtMs = createdAtMs,
         ) ?: error("Malformed exec.approval.get response")
       }
-      GatewayApprovalRpcFamily.Unavailable -> throw GatewayApprovalRpcUnavailable()
+
+      GatewayApprovalRpcFamily.Unavailable -> {
+        throw GatewayApprovalRpcUnavailable()
+      }
     }
 
   private suspend fun resolveExecApprovalOnGateway(
@@ -8170,6 +8286,7 @@ class NodeRuntime private constructor(
           expectedDecision = decision,
         ) ?: throw ExecApprovalWriteOutcomeUnknown()
       }
+
       GatewayApprovalRpcFamily.Legacy -> {
         val legacyParams =
           buildJsonObject {
@@ -8196,7 +8313,10 @@ class NodeRuntime private constructor(
           attribution = GatewayExecApprovalResolutionAttribution.Unknown,
         )
       }
-      GatewayApprovalRpcFamily.Unavailable -> throw GatewayApprovalRpcUnavailable()
+
+      GatewayApprovalRpcFamily.Unavailable -> {
+        throw GatewayApprovalRpcUnavailable()
+      }
     }
 
   private fun isGatewayExecApprovalAlreadyResolved(error: GatewaySession.ErrorShape): Boolean = error.code == "INVALID_REQUEST" && error.details?.reason == "APPROVAL_ALREADY_RESOLVED"
@@ -8301,6 +8421,7 @@ class NodeRuntime private constructor(
             _execApprovalsNotice.value = gatewayExecApprovalRemoteTerminalNotice(snapshot)
             markExecApprovalResolved(pendingWrite.id)
           }
+
           is GatewayExecApprovalSnapshot.Pending -> {
             invalidateExecApprovalRefreshes()
             pendingExecApprovalWrites.remove(pendingWrite.id)
@@ -9031,9 +9152,15 @@ class NodeRuntime private constructor(
 
   private fun cronScheduleLabel(schedule: JsonObject?): NativeText =
     when (schedule?.get("kind").asStringOrNull()) {
-      "at" -> nativeText("One time")
-      "every" -> schedule.long("everyMs")?.let(::cronIntervalText) ?: nativeText("Repeating")
-      "cron" ->
+      "at" -> {
+        nativeText("One time")
+      }
+
+      "every" -> {
+        schedule.long("everyMs")?.let(::cronIntervalText) ?: nativeText("Repeating")
+      }
+
+      "cron" -> {
         schedule
           ?.get("expr")
           .asStringOrNull()
@@ -9041,7 +9168,11 @@ class NodeRuntime private constructor(
           ?.takeIf { it.isNotEmpty() }
           ?.let(::verbatimText)
           ?: nativeText("Cron")
-      else -> nativeText("Scheduled")
+      }
+
+      else -> {
+        nativeText("Scheduled")
+      }
     }
 
   private fun cronIntervalText(everyMs: Long): NativeText {
@@ -9499,11 +9630,17 @@ sealed interface GatewayNodeCapabilityApproval {
 
 internal fun GatewayNodeCapabilityApproval.withoutExactRequestId(): GatewayNodeCapabilityApproval? =
   when (this) {
-    is GatewayNodeCapabilityApproval.PendingApproval ->
+    is GatewayNodeCapabilityApproval.PendingApproval -> {
       requestId?.let { GatewayNodeCapabilityApproval.PendingApproval(requestId = null) }
-    is GatewayNodeCapabilityApproval.PendingReapproval ->
+    }
+
+    is GatewayNodeCapabilityApproval.PendingReapproval -> {
       requestId?.let { GatewayNodeCapabilityApproval.PendingReapproval(requestId = null) }
-    else -> null
+    }
+
+    else -> {
+      null
+    }
   }
 
 internal fun GatewayNodesDevicesSummary.withoutExactApprovalRequestIds(): GatewayNodesDevicesSummary = copy(nodes = nodes.map { node -> node.copy(pendingRequestId = null) })
@@ -9552,18 +9689,33 @@ internal fun currentNodeCapabilityApproval(
 ): GatewayNodeCapabilityApproval {
   val node = nodes.firstOrNull { it.id == selfNodeId } ?: return GatewayNodeCapabilityApproval.Loading
   return when (node.approvalState) {
-    GatewayNodeApprovalState.Loading -> GatewayNodeCapabilityApproval.Loading
-    GatewayNodeApprovalState.Unsupported -> GatewayNodeCapabilityApproval.Unsupported
-    GatewayNodeApprovalState.Approved -> GatewayNodeCapabilityApproval.Approved
-    GatewayNodeApprovalState.PendingApproval ->
+    GatewayNodeApprovalState.Loading -> {
+      GatewayNodeCapabilityApproval.Loading
+    }
+
+    GatewayNodeApprovalState.Unsupported -> {
+      GatewayNodeCapabilityApproval.Unsupported
+    }
+
+    GatewayNodeApprovalState.Approved -> {
+      GatewayNodeCapabilityApproval.Approved
+    }
+
+    GatewayNodeApprovalState.PendingApproval -> {
       GatewayNodeCapabilityApproval.PendingApproval(
         normalizeGatewayApprovalRequestId(node.pendingRequestId),
       )
-    GatewayNodeApprovalState.PendingReapproval ->
+    }
+
+    GatewayNodeApprovalState.PendingReapproval -> {
       GatewayNodeCapabilityApproval.PendingReapproval(
         normalizeGatewayApprovalRequestId(node.pendingRequestId),
       )
-    GatewayNodeApprovalState.Unapproved -> GatewayNodeCapabilityApproval.Unapproved
+    }
+
+    GatewayNodeApprovalState.Unapproved -> {
+      GatewayNodeCapabilityApproval.Unapproved
+    }
   }
 }
 
@@ -9792,11 +9944,23 @@ private fun parseGatewayStringArray(items: JsonArray?): List<String> =
 
 fun providerDisplayName(provider: String): String =
   when (provider.trim().lowercase()) {
-    "openai" -> "OpenAI"
-    "openrouter" -> "OpenRouter"
-    "codex" -> "Codex"
-    "ollama", "ollama-local" -> "Ollama Local"
-    else ->
+    "openai" -> {
+      "OpenAI"
+    }
+
+    "openrouter" -> {
+      "OpenRouter"
+    }
+
+    "codex" -> {
+      "Codex"
+    }
+
+    "ollama", "ollama-local" -> {
+      "Ollama Local"
+    }
+
+    else -> {
       provider
         .replace('-', ' ')
         .replace('_', ' ')
@@ -9805,14 +9969,24 @@ fun providerDisplayName(provider: String): String =
         .joinToString(" ") { token -> token.replaceFirstChar { it.uppercase() } }
         .replace(" Ai", " AI")
         .ifBlank { "Provider" }
+    }
   }
 
 fun channelDisplayLabel(channel: String): String =
   when (channel.trim().lowercase()) {
-    "imessage" -> "iMessage"
-    "googlechat" -> "Google Chat"
-    "whatsapp" -> "WhatsApp"
-    else ->
+    "imessage" -> {
+      "iMessage"
+    }
+
+    "googlechat" -> {
+      "Google Chat"
+    }
+
+    "whatsapp" -> {
+      "WhatsApp"
+    }
+
+    else -> {
       channel
         .replace('-', ' ')
         .replace('_', ' ')
@@ -9820,6 +9994,7 @@ fun channelDisplayLabel(channel: String): String =
         .filter { it.isNotBlank() }
         .joinToString(" ") { token -> token.replaceFirstChar { it.uppercase() } }
         .ifBlank { "Channel" }
+    }
   }
 
 internal fun selectChatAgentSessionKey(
