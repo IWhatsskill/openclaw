@@ -1312,9 +1312,9 @@ private fun GatewayPrerequisites(onOpenSetupGuide: () -> Unit) {
     )
     Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
       TextButton(onClick = onOpenSetupGuide) {
-        Icon(imageVector = Icons.Default.Link, contentDescription = null, modifier = Modifier.size(16.dp), tint = ClawTheme.colors.primary)
+        Icon(imageVector = Icons.Default.Link, contentDescription = null, modifier = Modifier.size(16.dp))
         Spacer(modifier = Modifier.width(7.dp))
-        Text(text = nativeString("Android setup guide"), style = ClawTheme.type.label, color = ClawTheme.colors.primary)
+        Text(text = nativeString("Android setup guide"), style = ClawTheme.type.label)
       }
     }
   }

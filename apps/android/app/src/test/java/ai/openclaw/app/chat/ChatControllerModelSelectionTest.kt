@@ -25,6 +25,112 @@ class ChatControllerModelSelectionTest {
   private val json = chatControllerTestJson
 
   @Test
+  fun nativeModelLockSurvivesHistoryAndPartialSettingsWithoutLockingThinking() =
+    runTest {
+      val sessionKey = "agent:main:native"
+      val thinking = thinkingFields("off", "off", "high")
+      val (controller, requests) =
+        chatControllerTestSetup {
+          respond(
+            "chat.history",
+            """{"sessionId":"native-model-session","messages":[],"sessionInfo":{"key":"$sessionKey","agentId":"main","sessionId":"native-model-session","modelProvider":"synthetic","model":"outer-default","modelSelectionLocked":true,"agentRuntime":{"id":"codex","source":"session"},$thinking}}""",
+          )
+          respond("sessions.list", """{"sessions":[]}""")
+          respond("sessions.patch", """{"resolved":{"thinkingLevel":"high"}}""")
+        }
+      controller.load(sessionKey)
+      advanceUntilIdle()
+
+      assertFalse(controller.setSessionModelAwait(sessionKey, "openai/gpt-5.6-sol"))
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """{"sessionKey":"$sessionKey","agentId":"main","phase":"message","session":{"key":"$sessionKey","thinkingLevel":"off","contextTokens":200000}}""",
+      )
+      controller.setThinkingLevel("high")
+      advanceUntilIdle()
+
+      assertEquals("high", controller.thinkingLevel.value)
+      assertFalse(controller.setSessionModelAwait(sessionKey, null))
+      val patch = json.parseToJsonElement(requests.single { it.first == "sessions.patch" }.second.orEmpty()) as JsonObject
+      assertEquals(JsonPrimitive("high"), patch["thinkingLevel"])
+      assertFalse("model" in patch)
+
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """{"sessionKey":"$sessionKey","agentId":"main","phase":"message","session":{"key":"$sessionKey","modelSelectionLocked":false}}""",
+      )
+      assertTrue(controller.setSessionModelAwait(sessionKey, "openai/gpt-5.6-sol"))
+    }
+
+  @Test
+  fun queuedModelSelectionRechecksNativeLockAtTransportEnqueue() =
+    runTest {
+      for (lockFromResponse in listOf(true, false)) {
+        val thinkingStarted = CompletableDeferred<Unit>()
+        val releaseThinking = CompletableDeferred<Unit>()
+        val modelTransportStarted = CompletableDeferred<Unit>()
+        val releaseModelTransport = CompletableDeferred<Unit>()
+        val patches = mutableListOf<JsonObject>()
+        val controller =
+          createChatController(
+            captureRequestLease = {
+              GatewaySession.RequestLease(endpointStableId = "") { _, paramsJson, _, withEnqueue ->
+                val patch = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
+                if ("model" in patch && !lockFromResponse) {
+                  modelTransportStarted.complete(Unit)
+                  releaseModelTransport.await()
+                }
+                withEnqueue { patches += patch }
+                if ("thinkingLevel" in patch) {
+                  thinkingStarted.complete(Unit)
+                  releaseThinking.await()
+                  if (lockFromResponse) {
+                    """{"key":"main","entry":{"sessionId":"native-model-session","agentHarnessId":"codex","modelSelectionLocked":true},"resolved":{"thinkingLevel":"high","agentRuntime":{"id":"codex","source":"session"}}}"""
+                  } else {
+                    "{}"
+                  }
+                } else {
+                  "{}"
+                }
+              }
+            },
+          ) { method, _ ->
+            if (method == "sessions.list") {
+              """{"sessions":[{"key":"main","agentId":"main","thinkingLevel":"off","modelSelectionLocked":false}]}"""
+            } else {
+              "{}"
+            }
+          }
+        controller.refreshSessions()
+        advanceUntilIdle()
+        controller.setThinkingLevel("high")
+        thinkingStarted.await()
+        val queued = async { controller.setSessionModelAwait("main", "openai/gpt-5.6-sol") }
+        runCurrent()
+        assertEquals(1, patches.size)
+
+        try {
+          releaseThinking.complete(Unit)
+          if (!lockFromResponse) {
+            modelTransportStarted.await()
+            controller.handleGatewayEvent(
+              "sessions.changed",
+              """{"sessionKey":"main","agentId":"main","phase":"message","session":{"key":"main","modelSelectionLocked":true,"agentRuntime":{"id":"codex","source":"session"}}}""",
+            )
+          }
+        } finally {
+          releaseThinking.complete(Unit)
+          releaseModelTransport.complete(Unit)
+        }
+
+        assertFalse("A newer native lock must retire the queued model choice", queued.await())
+        advanceUntilIdle()
+        assertEquals(listOf(JsonPrimitive("high")), patches.map { it["thinkingLevel"] })
+        assertTrue(controller.pendingSessionSettingsKeys.value.isEmpty())
+      }
+    }
+
+  @Test
   fun successfulSelectionRecordsRecentAndUpdatesSelectedModel() =
     runTest {
       val recents = mutableListOf<String>()
@@ -652,54 +758,68 @@ class ChatControllerModelSelectionTest {
   @Test
   fun deletionRetiresActiveAndQueuedModelSelectionsBeforeTheirAcknowledgements() =
     runTest {
-      val sessionKey = "agent:main:conversation"
-      val patchStarted = CompletableDeferred<Unit>()
-      val releasePatch = CompletableDeferred<Unit>()
-      var deleted = false
-      val (controller, requests) =
-        chatControllerTestSetup {
-          respond("sessions.list") {
-            if (deleted) {
-              """{"sessions":[]}"""
-            } else {
-              """{"sessions":[{"key":"$sessionKey","sessionId":"conversation-id","modelProvider":"synthetic","model":"original"}]}"""
+      for (sessionKey in listOf("agent:main:conversation", "global")) {
+        val patchStarted = CompletableDeferred<Unit>()
+        val releasePatch = CompletableDeferred<Unit>()
+        var deleted = false
+        val (controller, requests) =
+          chatControllerTestSetup {
+            cacheScope = { ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1) }
+            respond("sessions.list") {
+              if (deleted) {
+                """{"sessions":[]}"""
+              } else {
+                """{"sessions":[{"key":"$sessionKey","sessionId":"conversation-id","modelProvider":"synthetic","model":"original"}]}"""
+              }
+            }
+            respond("sessions.patch") { paramsJson ->
+              val params = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
+              val model = (params["model"] as JsonPrimitive).content.removePrefix("synthetic/")
+              if (model == "first") {
+                patchStarted.complete(Unit)
+                releasePatch.await()
+              }
+              """{"entry":{"key":"$sessionKey","sessionId":"conversation-id"},"resolved":{"modelProvider":"synthetic","model":"$model"}}"""
             }
           }
-          respond("sessions.patch") { paramsJson ->
-            val params = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
-            val model = (params["model"] as JsonPrimitive).content.removePrefix("synthetic/")
-            if (model == "first") {
-              patchStarted.complete(Unit)
-              releasePatch.await()
-            }
-            """{"entry":{"key":"$sessionKey","sessionId":"conversation-id"},"resolved":{"modelProvider":"synthetic","model":"$model"}}"""
+        controller.load(sessionKey, ownerAgentId = "main")
+        advanceUntilIdle()
+        val first = async { controller.setSessionModelAwait(sessionKey, "synthetic/first") }
+        patchStarted.await()
+        val queued = async { controller.setSessionModelAwait(sessionKey, "synthetic/queued") }
+        runCurrent()
+
+        // The patch committed before deletion, but its response is still in flight.
+        deleted = true
+        try {
+          if (sessionKey == "global") {
+            controller.handleGatewayEvent(
+              "sessions.changed",
+              """{"sessionKey":"$sessionKey","reason":"delete","ts":3}""",
+            )
+            runCurrent()
+            assertTrue(controller.sessions.value.any { it.key == sessionKey })
+            assertEquals(setOf(sessionKey), controller.pendingSessionSettingsKeys.value)
           }
+          controller.handleGatewayEvent(
+            "sessions.changed",
+            """{"sessionKey":"$sessionKey","sessionId":"conversation-id","agentId":"main","reason":"delete","ts":3}""",
+          )
+          runCurrent()
+          assertFalse(controller.sessions.value.any { it.key == sessionKey })
+          assertTrue(controller.pendingSessionSettingsKeys.value.isEmpty())
+          assertEquals("main", controller.sessionKey.value)
+        } finally {
+          releasePatch.complete(Unit)
         }
-      controller.refreshSessions()
-      advanceUntilIdle()
-      val first = async { controller.setSessionModelAwait(sessionKey, "synthetic/first") }
-      patchStarted.await()
-      val queued = async { controller.setSessionModelAwait(sessionKey, "synthetic/queued") }
-      runCurrent()
+        assertTrue(first.await())
+        runCurrent()
 
-      // The patch committed before deletion, but its response is still in flight.
-      deleted = true
-      try {
-        controller.handleGatewayEvent(
-          "sessions.changed",
-          """{"sessionKey":"$sessionKey","sessionId":"conversation-id","agentId":"main","reason":"delete","ts":3}""",
-        )
         assertFalse(controller.sessions.value.any { it.key == sessionKey })
-      } finally {
-        releasePatch.complete(Unit)
+        assertFalse(queued.await())
+        assertEquals(1, requests.count { it.first == "sessions.patch" })
+        assertTrue(controller.pendingSessionSettingsKeys.value.isEmpty())
       }
-      assertTrue(first.await())
-      runCurrent()
-
-      assertFalse(controller.sessions.value.any { it.key == sessionKey })
-      assertFalse(queued.await())
-      assertEquals(1, requests.count { it.first == "sessions.patch" })
-      assertTrue(controller.pendingSessionSettingsKeys.value.isEmpty())
     }
 
   @Test
@@ -822,14 +942,16 @@ class ChatControllerModelSelectionTest {
     runTest {
       val modelPatchStarted = CompletableDeferred<Unit>()
       val releaseModelPatch = CompletableDeferred<Unit>()
+      val acceptedThinking = thinkingFields("high", "off", "high", "ultra")
       val controller =
         createScriptedChatController {
+          respond("chat.history", """{"sessionId":"thinking-session","messages":[],"sessionInfo":{"key":"main","sessionId":"thinking-session",$acceptedThinking}}""")
           respond("sessions.patch") { paramsJson ->
             val params = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
             if ("model" in params) {
               modelPatchStarted.complete(Unit)
               releaseModelPatch.await()
-              """{"resolved":{"thinkingLevel":"high","thinkingLevels":[{"id":"off","label":"off"},{"id":"high","label":"high"},{"id":"ultra","label":"ultra"}]}}"""
+              """{"resolved":{$acceptedThinking}}"""
             } else {
               error("thinking rejected")
             }
@@ -857,6 +979,8 @@ class ChatControllerModelSelectionTest {
           when {
             method == "sessions.list" ->
               """{"sessions":[{"key":"main","thinkingLevel":"off"}]}"""
+            method == "chat.history" ->
+              """{"sessionId":"${gatewayScope.gatewayId}-session","messages":[],"sessionInfo":{"key":"main","thinkingLevel":"off"}}"""
             method == "sessions.patch" && gatewayScope.gatewayId == "gateway-a" ->
               """{"resolved":{"thinkingLevel":"medium"}}"""
             method == "sessions.patch" -> error("thinking rejected")
@@ -914,6 +1038,7 @@ class ChatControllerModelSelectionTest {
       val controller =
         createScriptedChatController {
           cacheScope = { gatewayScope }
+          respond("chat.history", """{"sessionId":"current-session","messages":[],"sessionInfo":{"key":"main","thinkingLevel":"off"}}""")
           respond("sessions.patch") { paramsJson ->
             val params = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
             val level = (params["thinkingLevel"] as? JsonPrimitive)?.content
@@ -948,6 +1073,7 @@ class ChatControllerModelSelectionTest {
       val controller =
         createScriptedChatController {
           cacheScope = { gatewayScope }
+          respond("chat.history", """{"sessionId":"current-session","messages":[],"sessionInfo":{"key":"main","thinkingLevel":"off"}}""")
           respond("sessions.patch") { paramsJson ->
             val params = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
             if ("model" in params) {
@@ -1053,6 +1179,7 @@ class ChatControllerModelSelectionTest {
       var listRequests = 0
       val controller =
         createScriptedChatController {
+          respond("chat.history", """{"sessionId":"thinking-session","messages":[],"sessionInfo":{"key":"main","thinkingLevel":"high"}}""")
           respond("sessions.list") { _ ->
             listRequests += 1
             if (listRequests == 1) {
@@ -1404,6 +1531,7 @@ class ChatControllerModelSelectionTest {
         createChatController { method, _ ->
           requests += method
           when (method) {
+            "chat.history" -> """{"sessionId":"model-session","messages":[],"sessionInfo":{"key":"main","thinkingLevel":"off"}}"""
             "sessions.patch" -> {
               patchStarted.complete(Unit)
               releasePatch.await()
@@ -1495,6 +1623,7 @@ class ChatControllerModelSelectionTest {
               "messages": [],
               "sessionInfo": {
                 "key": "agent:ops:main",
+                "sessionId": "session-ops",
                 "modelProvider": "anthropic",
                 "model": "claude-opus-4"
               }
@@ -1532,6 +1661,22 @@ class ChatControllerModelSelectionTest {
       )
       val metadataRequest = requests.single { it.first == "chat.metadata" }
       assertTrue(metadataRequest.second.orEmpty().contains("\"agentId\":\"ops\""))
+
+      val selectedBeforeEvent = controller.sessions.value.singleOrNull { it.key == "agent:ops:main" }
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """{"sessionKey":"agent:ops:main","agentId":"ops","phase":"start","runId":"ops-run","session":{"key":"agent:ops:main","thinkingLevel":"high","totalTokens":24000,"totalTokensFresh":true,"contextTokens":200000}}""",
+      )
+
+      assertEquals("anthropic/claude-opus-4", controller.selectedModelRef.value)
+      assertEquals("session-ops", selectedBeforeEvent?.sessionId)
+      val selectedAfterEvent = controller.sessions.value.single { it.key == "agent:ops:main" }
+      assertEquals("session-ops", selectedAfterEvent.sessionId)
+      assertEquals("ops", selectedAfterEvent.ownerAgentId)
+      assertEquals("anthropic", selectedAfterEvent.modelProvider)
+      assertEquals("claude-opus-4", selectedAfterEvent.model)
+      assertEquals("high", controller.thinkingLevel.value)
+      assertEquals(24_000L, selectedAfterEvent.totalTokens)
     }
 
   @Test

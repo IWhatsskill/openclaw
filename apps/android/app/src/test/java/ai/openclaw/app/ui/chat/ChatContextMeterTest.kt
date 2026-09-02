@@ -96,7 +96,7 @@ class ChatContextMeterTest {
   }
 
   @Test
-  fun contextPopoverSummaryMatchesWebUiAndMarksStaleUsage() {
+  fun contextSummaryMarksStaleUsage() {
     val fresh =
       requireNotNull(
         chatContextSummary(
@@ -119,7 +119,7 @@ class ChatContextMeterTest {
   }
 
   @Test
-  fun contextPopoverFormatsGatewaySessionUsageWithoutInventingData() {
+  fun contextDetailsFormatGatewayUsageWithoutInventingData() {
     assertEquals("18.4k", formatContextUsageTokens(18_420L, Locale.US))
     assertEquals("\u2014", formatContextUsageTokens(null, Locale.US))
     assertEquals("\u00240.0063", formatContextEstimatedCost(0.0063))
@@ -128,15 +128,6 @@ class ChatContextMeterTest {
     assertEquals("\u2014", formatContextEstimatedCost(null))
     assertEquals("\u2014", formatContextEstimatedCost(Double.NaN))
     assertEquals("\u2014", formatContextEstimatedCost(-0.5))
-  }
-
-  @Test
-  fun thinkingLabelsLocalizeKnownLevelsAndPreserveGatewayLabels() {
-    assertEquals("Off", chatThinkingOptionLabel(ChatThinkingLevelOption("off", "off")))
-    assertEquals("High", chatThinkingOptionLabel(ChatThinkingLevelOption("high", "high")))
-    assertEquals("Xhigh", chatThinkingOptionLabel(ChatThinkingLevelOption("xhigh", "xhigh")))
-    assertEquals("Ultra", chatThinkingOptionLabel(ChatThinkingLevelOption("ultra", "ultra")))
-    assertEquals("Provider custom effort", chatThinkingOptionLabel(ChatThinkingLevelOption("custom", "Provider custom effort")))
   }
 
   @Test
@@ -164,5 +155,13 @@ class ChatContextMeterTest {
     assertFalse(chatThinkingSupported(offOnly, fallbackSupported = true))
     assertTrue(chatThinkingSupported(max, fallbackSupported = false))
     assertTrue(chatThinkingSupported(fallback, fallbackSupported = true))
+  }
+
+  @Test
+  fun thinkingOptionsKeepLocalizedKnownLevelsAndGatewayLabels() {
+    listOf("Off", "Minimal", "Low", "Medium", "High", "Xhigh", "Adaptive", "Max", "Ultra").forEach { label ->
+      assertEquals(label, chatThinkingOptionLabel(ChatThinkingLevelOption(id = label.lowercase(), label = label.lowercase())))
+    }
+    assertEquals("Custom effort", chatThinkingOptionLabel(ChatThinkingLevelOption(id = "custom", label = "Custom effort")))
   }
 }

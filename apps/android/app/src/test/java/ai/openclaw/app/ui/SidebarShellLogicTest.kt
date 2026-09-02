@@ -71,10 +71,10 @@ class SidebarShellLogicTest {
 
   @Test
   fun sessionDragMutatesOnlyTowardARealSidebarDestination() {
-    assertEquals(true, sidebarSessionPinnedAfterDrag(SidebarSessionDragSource.Codex, direction = -1))
-    assertNull(sidebarSessionPinnedAfterDrag(SidebarSessionDragSource.Codex, direction = 1))
-    assertEquals(false, sidebarSessionPinnedAfterDrag(SidebarSessionDragSource.Codex, direction = 1, currentlyPinned = true))
-    assertNull(sidebarSessionPinnedAfterDrag(SidebarSessionDragSource.Codex, direction = -1, currentlyPinned = true))
+    assertEquals(true, sidebarSessionPinnedAfterDrag(SidebarSessionDragSource.Catalog, direction = -1))
+    assertNull(sidebarSessionPinnedAfterDrag(SidebarSessionDragSource.Catalog, direction = 1))
+    assertEquals(false, sidebarSessionPinnedAfterDrag(SidebarSessionDragSource.Catalog, direction = 1, currentlyPinned = true))
+    assertNull(sidebarSessionPinnedAfterDrag(SidebarSessionDragSource.Catalog, direction = -1, currentlyPinned = true))
     assertEquals(false, sidebarSessionPinnedAfterDrag(SidebarSessionDragSource.Pinned, direction = 1))
     assertNull(sidebarSessionPinnedAfterDrag(SidebarSessionDragSource.Pinned, direction = -1))
     assertEquals(true, sidebarSessionPinnedAfterDrag(SidebarSessionDragSource.Recent, direction = -1))

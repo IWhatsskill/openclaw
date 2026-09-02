@@ -112,14 +112,37 @@ class ChatModelPickerTest {
 
   @Test
   fun providerIconsFollowCanonicalWebAliasesAndSafeFallbacks() {
-    assertEquals("claude", providerIconSlug("anthropic"))
-    assertEquals("bedrock", providerIconSlug("aws-bedrock"))
-    assertEquals("gemini", providerIconSlug("google"))
-    assertEquals("copilot", providerIconSlug("github-copilot"))
-    assertEquals("codex", providerIconSlug("openai"))
-    assertEquals("grok", providerIconSlug("xAI"))
-    assertEquals("vertexai", providerIconSlug("vertex-ai"))
-    assertEquals("openrouter", providerIconSlug("open-router"))
+    mapOf(
+      "amazon-bedrock" to "bedrock",
+      "anthropic" to "claude",
+      "aws-bedrock" to "bedrock",
+      "claude-cli" to "claude",
+      "cloudflare-ai-gateway" to "cloudflare",
+      "copilot-proxy" to "copilot",
+      "github-copilot" to "copilot",
+      "google" to "gemini",
+      "google-gemini-cli" to "gemini",
+      "kilocode" to "kilo",
+      "kimi-coding" to "kimi",
+      "microsoft-foundry" to "microsoft",
+      "minimax-portal" to "minimax",
+      "moonshot" to "kimi",
+      "ollama-cloud" to "ollama",
+      "open-router" to "openrouter",
+      "openai" to "codex",
+      "qwen" to "alibaba",
+      "qwen-token-plan" to "alibaba",
+      "stepfun-plan" to "stepfun",
+      "tencent-tokenhub" to "tencent",
+      "tencent-tokenplan" to "tencent",
+      "vercel-ai-gateway" to "vercel",
+      "vertex-ai" to "vertexai",
+      "xAI" to "grok",
+      "xiaomi" to "mimo",
+      "xiaomi-token-plan" to "mimo",
+    ).forEach { (provider, slug) ->
+      assertEquals(provider, slug, providerIconSlug(provider))
+    }
     assertEquals("O", providerFallbackLabel(" openai"))
     assertEquals("", providerFallbackLabel(" -- "))
     assertEquals(0xFF10A37FL, providerBrandTintArgb("codex"))

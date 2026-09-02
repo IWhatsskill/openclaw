@@ -113,11 +113,12 @@ fun ChatMarkdown(
   bodyStyle: TextStyle = ClawTheme.type.body,
 ) {
   val blocks = remember(text, isStreaming) { segmentChatMarkdown(text, isStreaming) }
+  // Parsed nodes survive theme changes; span caches must also key on these styles.
   val inlineStyles =
     InlineStyles(
       inlineCodeBg = ClawTheme.colors.codeBg,
       inlineCodeColor = ClawTheme.colors.codeText,
-      linkColor = ClawTheme.colors.accent,
+      linkColor = textColor,
       baseCallout = bodyStyle,
     )
 
@@ -185,7 +186,7 @@ private fun RenderCommonMarkBlock(
       RenderParagraph(current, textColor = textColor, inlineStyles = inlineStyles)
     }
     is Heading -> {
-      val headingText = remember(current) { buildInlineMarkdown(current.firstChild, inlineStyles) }
+      val headingText = remember(current, inlineStyles) { buildInlineMarkdown(current.firstChild, inlineStyles) }
       Text(
         text = headingText,
         style = headingStyle(current.level, inlineStyles.baseCallout),
@@ -361,7 +362,7 @@ private fun RenderParagraph(
     return
   }
 
-  val annotated = remember(paragraph) { buildInlineMarkdown(paragraph.firstChild, inlineStyles) }
+  val annotated = remember(paragraph, inlineStyles) { buildInlineMarkdown(paragraph.firstChild, inlineStyles) }
   if (annotated.text.trimEnd().isEmpty()) {
     return
   }
@@ -483,7 +484,7 @@ private fun RenderTableBlock(
   textColor: Color,
   inlineStyles: InlineStyles,
 ) {
-  val rows = remember(table) { buildTableRows(table, inlineStyles) }
+  val rows = remember(table, inlineStyles) { buildTableRows(table, inlineStyles) }
   if (rows.isEmpty()) return
 
   val maxCols = rows.maxOf { row -> row.cells.size }.coerceAtLeast(1)

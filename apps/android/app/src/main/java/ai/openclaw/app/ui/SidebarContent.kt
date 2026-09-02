@@ -86,11 +86,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.Collections
 
-private val CodexBrandColor = Color(0xFF10A37F)
 private const val SIDEBAR_CATALOG_REFRESH_MS = 30_000L
 
 internal enum class SidebarSessionDragSource {
-  Codex,
+  Catalog,
   Pinned,
   Recent,
 }
@@ -101,8 +100,8 @@ internal fun sidebarSessionPinnedAfterDrag(
   currentlyPinned: Boolean = false,
 ): Boolean? =
   when {
-    source == SidebarSessionDragSource.Codex && direction < 0 && !currentlyPinned -> true
-    source == SidebarSessionDragSource.Codex && direction > 0 && currentlyPinned -> false
+    source == SidebarSessionDragSource.Catalog && direction < 0 && !currentlyPinned -> true
+    source == SidebarSessionDragSource.Catalog && direction > 0 && currentlyPinned -> false
     source == SidebarSessionDragSource.Pinned && direction > 0 -> false
     source == SidebarSessionDragSource.Recent && direction < 0 -> true
     else -> null
@@ -314,7 +313,7 @@ internal fun sidebarCatalogHosts(catalogs: List<SessionCatalog>): List<SidebarCa
               normalizedPath
                 ?.substringAfterLast('/')
                 ?.takeIf(String::isNotEmpty)
-                ?: "Other work"
+                ?: nativeString("Other work")
             SidebarCatalogWorkspace(
               stableId = listOf(catalog.id, host.hostId, cwd.orEmpty()).joinToString("::"),
               label = label,
@@ -326,7 +325,7 @@ internal fun sidebarCatalogHosts(catalogs: List<SessionCatalog>): List<SidebarCa
                 ),
             )
           }.sortedWith(
-            compareBy<SidebarCatalogWorkspace> { it.label == "Other work" }
+            compareBy<SidebarCatalogWorkspace> { it.path == null }
               .thenBy(String.CASE_INSENSITIVE_ORDER, SidebarCatalogWorkspace::label),
           )
       // Android has no archived catalog view; hide a fully filtered host only after pagination is exhausted.
@@ -1244,7 +1243,7 @@ private fun SidebarCatalogSessionRow(
     onDragCommit =
       draggableSession?.let { live ->
         { direction: Int ->
-          sidebarSessionPinnedAfterDrag(SidebarSessionDragSource.Codex, direction, pinned)?.let { nextPinned ->
+          sidebarSessionPinnedAfterDrag(SidebarSessionDragSource.Catalog, direction, pinned)?.let { nextPinned ->
             onPinSession(live.key, live.ownerAgentId, nextPinned)
           }
         }
@@ -1263,7 +1262,6 @@ private fun SidebarCatalogSessionRow(
         listOfNotNull(
           nativeString("Pinned").takeIf { pinned },
           session.gitBranch,
-          session.status.takeIf { it != "unknown" },
         ).joinToString(" \u00b7 ")
       if (detail.isNotEmpty()) {
         Text(text = detail, style = ClawTheme.type.caption, color = palette.muted, maxLines = 1)
@@ -1289,7 +1287,7 @@ private fun SidebarCatalogStatus(
     if (progress) {
       CircularProgressIndicator(
         modifier = Modifier.size(14.dp),
-        color = CodexBrandColor,
+        color = palette.text,
         strokeWidth = 2.dp,
       )
     }

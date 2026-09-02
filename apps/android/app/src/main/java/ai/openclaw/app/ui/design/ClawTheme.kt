@@ -457,17 +457,15 @@ private fun clawMaterialColorScheme(
   dark: Boolean,
 ) = if (dark) {
   darkColorScheme(
-    primary = colors.primary,
-    onPrimary = colors.primaryText,
+    // Material also uses primary for text actions; branded fills supply their Claw color pair.
+    primary = colors.text,
+    onPrimary = colors.canvas,
     primaryContainer = colors.accentSoft,
-    onPrimaryContainer = colors.accent,
+    onPrimaryContainer = colors.text,
     secondary = colors.secondary,
     onSecondary = colors.canvas,
-    // Material paints navigation and drawer selection from the secondary container.
-    // Tinting it with the accent keeps every selected state on brand instead of
-    // falling back to the stock Material purple.
     secondaryContainer = colors.accentSoft,
-    onSecondaryContainer = colors.accent,
+    onSecondaryContainer = colors.text,
     background = colors.canvas,
     onBackground = colors.text,
     surface = colors.surface,
@@ -487,14 +485,14 @@ private fun clawMaterialColorScheme(
   )
 } else {
   lightColorScheme(
-    primary = colors.primary,
-    onPrimary = colors.primaryText,
+    primary = colors.text,
+    onPrimary = colors.canvas,
     primaryContainer = colors.accentSoft,
-    onPrimaryContainer = colors.accent,
+    onPrimaryContainer = colors.text,
     secondary = colors.secondary,
     onSecondary = colors.primaryText,
     secondaryContainer = colors.accentSoft,
-    onSecondaryContainer = colors.accent,
+    onSecondaryContainer = colors.text,
     background = colors.canvas,
     onBackground = colors.text,
     surface = colors.surface,

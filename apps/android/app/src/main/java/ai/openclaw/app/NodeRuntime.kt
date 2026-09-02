@@ -1351,6 +1351,8 @@ class NodeRuntime private constructor(
   val skillsErrorText: StateFlow<String?> = _skillsErrorText.resolveOptionalNativeText()
   private val _sessionCatalogAvailable = MutableStateFlow(false)
   val sessionCatalogAvailable: StateFlow<Boolean> = _sessionCatalogAvailable.asStateFlow()
+  private val chatPermissionSettingsAvailableState = MutableStateFlow(false)
+  internal val chatPermissionSettingsAvailable: StateFlow<Boolean> = chatPermissionSettingsAvailableState.asStateFlow()
   private val _sessionCatalogState = MutableStateFlow(SessionCatalogState())
   val sessionCatalogState: StateFlow<SessionCatalogState> = _sessionCatalogState.asStateFlow()
   private val sessionCatalogRefreshSeq = AtomicLong(0)
@@ -1431,9 +1433,6 @@ class NodeRuntime private constructor(
   internal val gatewayCatalogRevision: StateFlow<Long> = gatewayMethodsEpoch.asStateFlow()
 
   @Volatile internal var gatewayDataRequestOverrideForTests: GatewayDataRequestOverride? = null
-
-  @Volatile internal var chatAgentSessionCandidatesOverrideForTests:
-    (suspend (String) -> List<ChatSessionEntry>?)? = null
 
   @Volatile internal var gatewayDataRequestTimeoutObserverForTests: ((method: String, timeoutMs: Long) -> Unit)? = null
 
@@ -5243,8 +5242,7 @@ class NodeRuntime private constructor(
     scope.launch {
       val candidates =
         try {
-          chatAgentSessionCandidatesOverrideForTests?.invoke(normalizedAgentId)
-            ?: chat.fetchSessionSelectionCandidates(normalizedAgentId)
+          chat.fetchSessionSelectionCandidates(normalizedAgentId)
         } catch (err: CancellationException) {
           throw err
         } catch (_: Throwable) {
@@ -8360,6 +8358,7 @@ class NodeRuntime private constructor(
       gatewayMethodCatalogPresent = present
       val advertisedMethods = methods.orEmpty()
       gatewayAdvertisedMethods = methods
+      chatPermissionSettingsAvailableState.value = chat.canSetSessionPermissionMode()
       gatewayApprovalRpcFamily = selectGatewayApprovalRpcFamily(advertisedMethods)
       _clawHubSkillMethodsAvailable.value = supportsClawHubSkillManagement(advertisedMethods)
       _sessionCatalogAvailable.value = sessionCatalogAvailableFor(advertisedMethods, _operatorScopes.value)
@@ -8374,6 +8373,7 @@ class NodeRuntime private constructor(
   private fun replaceGatewayCapabilities(capabilities: Set<String>?) {
     synchronized(gatewayMethodsLock) {
       gatewayAdvertisedCapabilities = capabilities
+      chatPermissionSettingsAvailableState.value = chat.canSetSessionPermissionMode()
     }
   }
 

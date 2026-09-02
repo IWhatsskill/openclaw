@@ -407,6 +407,8 @@ data class ChatSessionEntry(
   val totalTokensFresh: Boolean? = null,
   val modelProvider: String? = null,
   val model: String? = null,
+  val modelSelectionLocked: Boolean? = null,
+  val agentRuntimeId: String? = null,
   val thinkingLevel: String? = null,
   val thinkingLevels: List<ChatThinkingLevelOption>? = null,
   val thinkingDefault: String? = null,

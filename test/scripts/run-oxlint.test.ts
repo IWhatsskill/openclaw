@@ -759,12 +759,13 @@ describe("run-oxlint", () => {
     );
     expect(new Set(selected.map((shard) => shard.name))).toHaveProperty("size", shards.length);
     expect(selectExtensionOxlintStripe(shards, { index: 9, total: 9 })).toEqual([]);
+    expect(selectExtensionOxlintStripe([], { index: 1, total: 6 })).toEqual([]);
     expect(() =>
       selectExtensionOxlintStripe(createOxlintShards({ cwd: "/repo" }), {
         index: 1,
         total: 2,
       }),
-    ).toThrow("--extension-stripe requires a non-empty extension-only shard selection");
+    ).toThrow("--extension-stripe requires an extension-only shard selection");
   });
 
   it.runIf(process.platform !== "win32")(

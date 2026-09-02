@@ -89,8 +89,8 @@ export function createOxlintShards({
   splitExtensions = false,
 }: PlatformShardOptions = {}) {
   const coreShards = splitCore ? createCoreOxlintShards({ cwd, readDir }) : [CORE_SHARD];
-  // Explicit stripes require chunked input even when resource policy keeps
-  // ordinary plugin lint unsplit.
+  // Unsplit plugin lint can exceed small-host RAM even with a single lint thread.
+  // Chunk serial runs, and give explicit stripes independently bounded Programs.
   const chunkExtensions =
     splitExtensions ||
     platform === "win32" ||
@@ -470,8 +470,11 @@ export function selectExtensionOxlintStripe(
   if (!stripe) {
     return shards;
   }
-  if (shards.length === 0 || shards.some((shard) => !shard.name.startsWith("extensions:"))) {
-    throw new Error("--extension-stripe requires a non-empty extension-only shard selection");
+  if (shards.length === 0) {
+    return [];
+  }
+  if (shards.some((shard) => !shard.name.startsWith("extensions:"))) {
+    throw new Error("--extension-stripe requires an extension-only shard selection");
   }
   return shards.filter((_, index) => index % stripe.total === stripe.index - 1);
 }

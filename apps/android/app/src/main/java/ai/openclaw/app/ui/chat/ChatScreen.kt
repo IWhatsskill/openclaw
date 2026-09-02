@@ -84,25 +84,16 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.focusGroup
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -135,9 +126,7 @@ import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.GppMaybe
-import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.HourglassEmpty
-import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Menu
@@ -158,10 +147,9 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -171,7 +159,6 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -181,25 +168,24 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.input.key.onPreInterceptKeyBeforeSoftKeyboard
 import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.input.pointer.PointerEventPass
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
@@ -212,7 +198,6 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.DateFormat
@@ -220,7 +205,7 @@ import java.time.Instant
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
-import kotlin.math.cos
+import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlin.math.sin
 
@@ -256,38 +241,25 @@ internal fun chatReaderListBottomInset(showJumpToLatest: Boolean): Dp =
     0.dp
   }
 
-internal enum class ChatComposerTrailingAction {
+internal enum class ChatComposerPrimaryAction {
   StartTalk,
-  StopTalk,
+  None,
   Stop,
   Send,
 }
 
-/** A retained draft stays a Send action while admission waits; active Talk and runs remain stoppable. */
-internal fun resolveChatComposerTrailingAction(
+/** Drafts keep their Send action while admission waits; active Talk owns its separate voice control. */
+internal fun resolveChatComposerPrimaryAction(
   talkActive: Boolean,
   runActive: Boolean,
   hasContent: Boolean,
-): ChatComposerTrailingAction =
+): ChatComposerPrimaryAction =
   when {
-    talkActive -> ChatComposerTrailingAction.StopTalk
-    runActive -> ChatComposerTrailingAction.Stop
-    hasContent -> ChatComposerTrailingAction.Send
-    else -> ChatComposerTrailingAction.StartTalk
+    runActive -> ChatComposerPrimaryAction.Stop
+    talkActive -> ChatComposerPrimaryAction.None
+    hasContent -> ChatComposerPrimaryAction.Send
+    else -> ChatComposerPrimaryAction.StartTalk
   }
-
-internal const val CHAT_COMPOSER_AUXILIARY_IDLE_MS = 3_000L
-
-internal fun chatComposerAuxiliaryControlsPinned(
-  menuExpanded: Boolean,
-  dictationActive: Boolean,
-  talkActive: Boolean,
-  touchExplorationEnabled: Boolean,
-): Boolean =
-  menuExpanded ||
-    dictationActive ||
-    talkActive ||
-    touchExplorationEnabled
 
 internal object ChatUserMessageDisclosurePolicy {
   const val collapsedLineLimit = 12
@@ -342,6 +314,7 @@ fun ChatScreen(
   val healthOk by viewModel.chatHealthOk.collectAsState()
   val gatewayConnectionDisplay by viewModel.gatewayConnectionDisplay.collectAsState()
   val operatorScopes by viewModel.operatorScopes.collectAsState()
+  val permissionSettingsAvailable by viewModel.chatPermissionSettingsAvailable.collectAsState()
   val canWriteSessionSettings = operatorScopesAllowWrite(operatorScopes)
   val canAdminSessionSettings = operatorScopesAllowAdmin(operatorScopes)
   val activeGatewayStableId by viewModel.activeGatewayStableId.collectAsState()
@@ -403,6 +376,7 @@ fun ChatScreen(
       )
     }
   val fastMode = (activeSession?.effectiveFastMode ?: activeSession?.fastMode ?: ChatFastMode.Off).isEnabled
+  val modelSelectionLocked = activeSession?.modelSelectionLocked == true
   val permissionModePending = activeSession?.permissionModePending == true
   val sessionSettingsPending = sessionKey in pendingSessionSettingsKeys
   val fastModeProviderSupported =
@@ -500,7 +474,15 @@ fun ChatScreen(
         recents = modelRecents,
       )
     }
-  val selectedModelLabel = chatComposerModelLabel(selectedModelRef) ?: nativeString("Model")
+  val selectedModelLabel =
+    if (modelSelectionLocked) {
+      if (activeSession.agentRuntimeId == "codex") nativeString("Native Codex model") else nativeString("Locked session model")
+    } else {
+      selectedModelRef?.let { selected ->
+        modelCatalog.firstOrNull { it.providerQualifiedRef() == selected }?.name?.takeIf { it.isNotBlank() }
+          ?: selected.substringAfterLast('/')
+      } ?: nativeString("Model")
+    }
   val modelUnavailableReason =
     selectedChatModelSendBlockingReason(
       gatewayReady = healthOk,
@@ -718,11 +700,12 @@ fun ChatScreen(
   }
 
   val newChatEnabled =
-    canStartNewChat(
-      pendingRunCount = pendingRunCount,
-      hasQueuedMessage = pendingAssistantAutoSend != null,
-      gatewayReady = healthOk && !gatewayOffline,
-    )
+    !modelSelectionLocked &&
+      canStartNewChat(
+        pendingRunCount = pendingRunCount,
+        hasQueuedMessage = pendingAssistantAutoSend != null,
+        gatewayReady = healthOk && !gatewayOffline,
+      )
 
   val startNewChat: (Boolean) -> Unit = { worktree ->
     if (newChatEnabled) {
@@ -736,7 +719,7 @@ fun ChatScreen(
     modifier =
       Modifier
         .fillMaxSize()
-        .padding(horizontal = 16.dp, vertical = 10.dp),
+        .padding(vertical = 10.dp),
     verticalArrangement = Arrangement.spacedBy(8.dp),
   ) {
     ChatHeader(
@@ -851,7 +834,7 @@ fun ChatScreen(
       resolveInlineWidgetResource = viewModel::resolveInlineWidgetResource,
       loadImageArtifact = viewModel::loadChatImageArtifact,
       loadMediaArtifact = viewModel::loadChatMediaArtifact,
-      modifier = Modifier.weight(1f),
+      modifier = Modifier.weight(1f).padding(horizontal = 16.dp),
     )
 
     ChatSwarmProgress(groups = swarmGroups)
@@ -883,12 +866,6 @@ fun ChatScreen(
           settingsMutationPending = sessionSettingsPending,
         ),
       contextUsage = contextUsage,
-      permissionMode = activeSession?.permissionMode,
-      permissionModePending = permissionModePending,
-      permissionPickerEnabled =
-        gatewayConnectionDisplay.isConnected && canWriteSessionSettings && !permissionModePending && !sessionSettingsPending,
-      modelPickerExpanded = showModelPicker,
-      canSelectFullPermission = canAdminSessionSettings,
       selectedModelLabel = selectedModelLabel,
       modelPickerEnabled = gatewayConnectionDisplay.isConnected && canWriteSessionSettings,
       healthOk = healthOk,
@@ -912,9 +889,6 @@ fun ChatScreen(
           enabled = enabled,
           clearOverride = !fastModeProviderSupported,
         )
-      },
-      onPermissionModeChange = { permissionMode ->
-        viewModel.setChatSessionPermissionMode(sessionKey, permissionMode)
       },
       onOpenModelPicker = { showModelPicker = true },
       onPickImages = {
@@ -1035,6 +1009,26 @@ fun ChatScreen(
     ChatModelPickerSheet(
       sections = modelSections,
       favorites = modelFavorites.toSet(),
+      selectedModelLabel = selectedModelLabel,
+      modelSelectionLocked = modelSelectionLocked,
+      contextUsage = contextUsage,
+      permissionMode = activeSession?.permissionMode,
+      permissionModePending = permissionModePending,
+      permissionPickerEnabled =
+        permissionSettingsAvailable &&
+          !activeSession?.sessionId.isNullOrBlank() &&
+          gatewayConnectionDisplay.isConnected &&
+          canWriteSessionSettings &&
+          !permissionModePending &&
+          !sessionSettingsPending,
+      permissionUnavailableReason =
+        when {
+          !permissionSettingsAvailable -> nativeString("Update the Gateway to change session permissions.")
+          activeSession?.sessionId.isNullOrBlank() -> nativeString("Refresh this chat before changing permissions.")
+          else -> null
+        },
+      canSelectFullPermission = canAdminSessionSettings,
+      onPermissionModeChange = { mode -> viewModel.setChatSessionPermissionMode(sessionKey, mode) },
       onDismiss = { showModelPicker = false },
       onSelect = { modelRef ->
         viewModel.setChatSessionModel(sessionKey = sessionKey, modelRef = modelRef)
@@ -1070,15 +1064,6 @@ fun ChatScreen(
       onDismiss = { showBackgroundTasks = false },
     )
   }
-}
-
-internal fun chatComposerModelLabel(modelRef: String?): String? {
-  val normalized = modelRef?.trim()?.takeIf(String::isNotEmpty) ?: return null
-  val separator = normalized.indexOf('/')
-  if (separator <= 0 || separator == normalized.lastIndex) return normalized
-  val provider = normalized.substring(0, separator)
-  val model = normalized.substring(separator + 1)
-  return "$model · $provider"
 }
 
 internal fun canStartNewChat(
@@ -1148,7 +1133,7 @@ private fun ChatHeader(
       if (showSidebarButton) {
         HeaderIcon(
           icon = Icons.Default.Menu,
-          contentDescription = nativeString("Show sidebar"),
+          contentDescription = nativeString("Show Sidebar"),
           onClick = onOpenSidebar,
         )
       }
@@ -2301,7 +2286,7 @@ private fun ProgressCardPill(
           val textColor =
             when (step.status) {
               ChatPlanStepStatus.Completed -> ClawTheme.colors.textMuted
-              ChatPlanStepStatus.InProgress -> ClawTheme.colors.primary
+              ChatPlanStepStatus.InProgress -> ClawTheme.colors.text
               ChatPlanStepStatus.Pending -> ClawTheme.colors.textSubtle
             }
           val textStyle =
@@ -2353,11 +2338,6 @@ private fun ChatComposer(
   fastMode: Boolean,
   fastModeEnabled: Boolean,
   contextUsage: ChatContextUsage,
-  permissionMode: ChatPermissionMode?,
-  permissionModePending: Boolean,
-  permissionPickerEnabled: Boolean,
-  modelPickerExpanded: Boolean,
-  canSelectFullPermission: Boolean,
   selectedModelLabel: String,
   modelPickerEnabled: Boolean,
   healthOk: Boolean,
@@ -2372,7 +2352,6 @@ private fun ChatComposer(
   commands: List<ChatCommandEntry>,
   onThinkingLevelChange: (String) -> Unit,
   onFastModeChange: (Boolean) -> Unit,
-  onPermissionModeChange: (ChatPermissionMode?) -> Unit,
   onOpenModelPicker: () -> Unit,
   onPickImages: () -> Unit,
   onPickAudioOrDocument: () -> Unit,
@@ -2400,11 +2379,6 @@ private fun ChatComposer(
     remember(value, commands) {
       matchingSlashCommands(input = value, commands = commands)
     }
-  var thinkingSelectorExpanded by rememberSaveable { mutableStateOf(false) }
-  LaunchedEffect(thinkingSupported, healthOk) {
-    if (!thinkingSupported && !healthOk) thinkingSelectorExpanded = false
-  }
-
   val dictationActive =
     dictationState is ChatDictationState.Starting || dictationState is ChatDictationState.Listening
   val hasContent = value.trim().isNotEmpty() || attachments.isNotEmpty()
@@ -2421,7 +2395,7 @@ private fun ChatComposer(
       modelUnavailable = modelUnavailableMessage != null,
     )
 
-  Column(modifier = Modifier.fillMaxWidth().imePadding(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+  Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp).imePadding(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
     if (shareImportNotice != null) {
       Row(
         modifier = Modifier.fillMaxWidth(),
@@ -2460,16 +2434,12 @@ private fun ChatComposer(
       AttachmentStrip(attachments = attachments, onRemoveAttachment = onRemoveAttachment)
     }
 
-    if (thinkingSelectorExpanded) {
-      ChatThinkingLevelSelector(
-        options = thinkingOptions,
-        selectedId = thinkingLevel,
-        thinkingSupported = thinkingSupported,
-        thinkingLevelEnabled = thinkingLevelEnabled,
-        fastMode = fastMode,
-        fastModeEnabled = fastModeEnabled,
-        onSelect = onThinkingLevelChange,
-        onFastModeChange = onFastModeChange,
+    progressCard?.let { card ->
+      ProgressCardPill(
+        card = card,
+        hasActiveRun = pendingRunCount > 0,
+        // Keep the editor and run controls visible when progress expands above the keyboard.
+        modifier = Modifier.weight(1f, fill = false),
       )
     }
 
@@ -2482,73 +2452,50 @@ private fun ChatComposer(
       )
     }
 
-    Surface(
-      modifier = Modifier.fillMaxWidth(),
-      shape = RoundedCornerShape(24.dp),
-      color = ClawTheme.colors.surface,
-      contentColor = ClawTheme.colors.text,
-      border = BorderStroke(1.dp, ClawTheme.colors.border),
-    ) {
-      Column(modifier = Modifier.fillMaxWidth()) {
-        progressCard?.let { card ->
-          ProgressCardPill(
-            card = card,
-            hasActiveRun = pendingRunCount > 0,
-            // The editor and Stop own their height before progress receives the remaining space.
-            modifier = Modifier.weight(1f, fill = false),
-          )
-          HorizontalDivider(thickness = 1.dp, color = ClawTheme.colors.border)
-        }
-        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-          if (voiceNoteState is VoiceNoteRecorderState.Recording) {
-            VoiceNoteRecordingControls(
-              elapsedMs = voiceNoteElapsedMs,
-              level = voiceNoteLevel,
-              onCancel = onCancelVoiceNote,
-              onDone = onFinishVoiceNote,
-              modifier = Modifier.weight(1f),
-            )
-          } else if (voiceNoteState is VoiceNoteRecorderState.Preparing) {
-            VoiceNotePreparing(modifier = Modifier.weight(1f))
-          } else {
-            ChatInputPill(
-              value = value,
-              onValueChange = onValueChange,
-              onPickImages = onPickImages,
-              onPickAudioOrDocument = onPickAudioOrDocument,
-              onPickVideo = onPickVideo,
-              onStartVoiceNote = onStartVoiceNote,
-              recordVoiceNoteEnabled = recordVoiceNoteEnabled,
-              dictationActive = dictationActive,
-              dictationEnabled = dictationEnabled,
-              onToggleDictation = onToggleDictation,
-              talkActive = talkActive,
-              onToggleTalk = onToggleTalk,
-              runActive = pendingRunCount > 0,
-              onAbort = onAbort,
-              hasContent = hasContent,
-              sendEnabled = sendEnabled,
-              onSend = onSend,
-              selectedModelLabel = selectedModelLabel,
-              modelPickerEnabled = modelPickerEnabled,
-              onOpenModelPicker = onOpenModelPicker,
-              thinkingLevel = thinkingLevel,
-              thinkingOptions = thinkingOptions,
-              thinkingSupported = thinkingSupported,
-              fastMode = fastMode,
-              permissionMode = permissionMode,
-              permissionModePending = permissionModePending,
-              permissionPickerEnabled = permissionPickerEnabled,
-              canSelectFullPermission = canSelectFullPermission,
-              onPermissionModeChange = onPermissionModeChange,
-              onToggleThinkingSelector = { thinkingSelectorExpanded = !thinkingSelectorExpanded },
-              thinkingSelectorExpanded = thinkingSelectorExpanded,
-              modelPickerExpanded = modelPickerExpanded,
-              contextUsage = contextUsage,
-              modifier = Modifier.weight(1f),
-            )
-          }
-        }
+    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+      if (voiceNoteState is VoiceNoteRecorderState.Recording) {
+        VoiceNoteRecordingControls(
+          elapsedMs = voiceNoteElapsedMs,
+          level = voiceNoteLevel,
+          onCancel = onCancelVoiceNote,
+          onDone = onFinishVoiceNote,
+          modifier = Modifier.weight(1f),
+        )
+      } else if (voiceNoteState is VoiceNoteRecorderState.Preparing) {
+        VoiceNotePreparing(modifier = Modifier.weight(1f))
+      } else {
+        ChatInputPill(
+          value = value,
+          onValueChange = onValueChange,
+          onPickImages = onPickImages,
+          onPickAudioOrDocument = onPickAudioOrDocument,
+          onPickVideo = onPickVideo,
+          onStartVoiceNote = onStartVoiceNote,
+          recordVoiceNoteEnabled = recordVoiceNoteEnabled,
+          dictationActive = dictationActive,
+          dictationEnabled = dictationEnabled,
+          onToggleDictation = onToggleDictation,
+          talkActive = talkActive,
+          onToggleTalk = onToggleTalk,
+          runActive = pendingRunCount > 0,
+          onAbort = onAbort,
+          hasContent = hasContent,
+          sendEnabled = sendEnabled,
+          onSend = onSend,
+          selectedModelLabel = selectedModelLabel,
+          modelPickerEnabled = modelPickerEnabled,
+          onOpenModelPicker = onOpenModelPicker,
+          thinkingLevel = thinkingLevel,
+          thinkingOptions = thinkingOptions,
+          thinkingSupported = thinkingSupported,
+          thinkingLevelEnabled = thinkingLevelEnabled,
+          fastMode = fastMode,
+          fastModeEnabled = fastModeEnabled,
+          onFastModeChange = onFastModeChange,
+          onThinkingLevelChange = onThinkingLevelChange,
+          contextUsage = contextUsage,
+          modifier = Modifier.weight(1f),
+        )
       }
     }
 
@@ -2566,7 +2513,7 @@ private fun ChatComposer(
 }
 
 @Composable
-private fun ChatThinkingLevelSelector(
+private fun ChatThinkingLevelPicker(
   options: List<ChatThinkingLevelOption>,
   selectedId: String,
   thinkingSupported: Boolean,
@@ -2576,135 +2523,88 @@ private fun ChatThinkingLevelSelector(
   onSelect: (String) -> Unit,
   onFastModeChange: (Boolean) -> Unit,
 ) {
-  val normalizedSelected = selectedId.trim().lowercase(Locale.US)
-  val languageTag = currentAppLanguage().languageTag
-  val selectedOption =
-    options.firstOrNull { it.id.trim().lowercase(Locale.US) == normalizedSelected }
-      ?: ChatThinkingLevelOption(id = selectedId, label = selectedId)
-  val selectedLabel = chatThinkingOptionLabel(selectedOption, languageTag)
-  Surface(
-    modifier = Modifier.fillMaxWidth(),
-    shape = RoundedCornerShape(24.dp),
-    color = ClawTheme.colors.surfaceRaised,
-    contentColor = ClawTheme.colors.text,
-    border = BorderStroke(1.dp, ClawTheme.colors.border),
-  ) {
-    Column {
-      if (thinkingSupported) {
-        Column(
-          modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
-          verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-          ) {
-            Text(
-              text = nativeString("Effort"),
-              style = ClawTheme.type.caption.copy(fontWeight = FontWeight.SemiBold),
-              modifier = Modifier.weight(1f),
-            )
-            ChatThinkingEffortPicker(
-              options = options,
-              selectedId = selectedId,
-              selectedLabel = selectedLabel,
-              enabled = thinkingLevelEnabled,
-              onSelect = onSelect,
-            )
-          }
-        }
-        HorizontalDivider(color = ClawTheme.colors.border)
-      }
-      Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-      ) {
-        Icon(Icons.Default.Bolt, contentDescription = null, tint = ClawTheme.colors.textMuted, modifier = Modifier.size(20.dp))
-        Column(modifier = Modifier.weight(1f)) {
-          Text(nativeString("Fast mode"), style = ClawTheme.type.body.copy(fontWeight = FontWeight.SemiBold))
-          Text(
-            nativeString("Faster responses, higher usage of limits."),
-            style = ClawTheme.type.caption,
-            color = ClawTheme.colors.textMuted,
-          )
-        }
-        Switch(
-          checked = fastMode,
-          onCheckedChange = onFastModeChange,
-          enabled = fastModeEnabled,
-          colors =
-            SwitchDefaults.colors(
-              checkedThumbColor = ClawTheme.colors.surfaceRaised,
-              checkedTrackColor = ClawTheme.colors.text,
-              checkedBorderColor = Color.Transparent,
-              uncheckedThumbColor = Color.Black,
-              uncheckedTrackColor = ClawTheme.colors.primary.copy(alpha = 0.12f),
-              uncheckedBorderColor = Color.Transparent,
-              disabledUncheckedThumbColor = Color.Black,
-              disabledUncheckedTrackColor = ClawTheme.colors.primary.copy(alpha = 0.12f),
-              disabledUncheckedBorderColor = Color.Transparent,
-            ),
-        )
-      }
-    }
-  }
-}
-
-@Composable
-private fun ChatThinkingEffortPicker(
-  options: List<ChatThinkingLevelOption>,
-  selectedId: String,
-  selectedLabel: String,
-  enabled: Boolean,
-  onSelect: (String) -> Unit,
-) {
-  var expanded by remember { mutableStateOf(false) }
+  var expanded by rememberSaveable { mutableStateOf(false) }
+  val enabled = (thinkingSupported && thinkingLevelEnabled) || fastModeEnabled
   LaunchedEffect(enabled) {
     if (!enabled) expanded = false
   }
+  val normalizedSelected = selectedId.trim().lowercase(Locale.US)
+  val languageTag = currentAppLanguage().languageTag
+  val selectedIndex = options.indexOfFirst { it.id.trim().lowercase(Locale.US) == normalizedSelected }
+  val selectedLabel =
+    chatThinkingOptionLabel(options.getOrNull(selectedIndex) ?: ChatThinkingLevelOption(selectedId, selectedId), languageTag)
+  val description = nativeString("Thinking")
+  val fraction =
+    when {
+      selectedIndex < 0 -> null
+      normalizedSelected == "off" -> 0f
+      options.size == 1 -> 1f
+      else -> selectedIndex.toFloat() / options.lastIndex
+    }
+  val color = if (enabled) ClawTheme.colors.textMuted else ClawTheme.colors.textSubtle
   Box {
     Surface(
       onClick = { expanded = true },
-      enabled = enabled && options.isNotEmpty(),
+      enabled = enabled,
       modifier =
-        Modifier
-          .widthIn(max = 200.dp)
-          .heightIn(min = ClawTheme.spacing.touchTarget)
-          .semantics {
-            contentDescription = nativeString("Effort")
-            stateDescription = selectedLabel
-          },
-      shape = RoundedCornerShape(ClawTheme.radii.panel),
+        Modifier.size(ClawTheme.spacing.touchTarget).semantics {
+          contentDescription = description
+          stateDescription = chatThinkingChipStateDescription(fastMode, selectedId, options, languageTag)
+        },
+      shape = CircleShape,
       color = Color.Transparent,
     ) {
-      Row(
-        modifier = Modifier.padding(horizontal = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-      ) {
-        Text(selectedLabel, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-        Icon(Icons.Default.ArrowDropDown, contentDescription = null)
+      Box(contentAlignment = Alignment.Center) {
+        if (fastMode) {
+          Icon(Icons.Default.Bolt, contentDescription = null, modifier = Modifier.align(Alignment.TopEnd).padding(6.dp).size(10.dp), tint = color)
+        }
+        Canvas(modifier = Modifier.size(18.dp)) {
+          val strokeWidth = 1.5.dp.toPx()
+          // The dial omits its bottom arc; center the visible ink with the other controls.
+          translate(top = size.height / 8f) {
+            drawArc(color = color, startAngle = 150f, sweepAngle = 240f, useCenter = false, style = Stroke(width = strokeWidth, cap = StrokeCap.Round))
+            // An effective level can be absent from the advertised choices; do not depict it as Off.
+            fraction?.let { value ->
+              rotate(150f + value * 240f) {
+                drawLine(color = color, start = center, end = Offset(size.width * 0.82f, center.y), strokeWidth = strokeWidth, cap = StrokeCap.Round)
+              }
+            }
+          }
+        }
       }
     }
-    DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-      // Effective metadata may retain a value absent from lightweight picker options.
-      // Display it above, but only Gateway-advertised choices may issue a mutation.
-      options.forEach { option ->
+    DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }, containerColor = ClawTheme.colors.surfaceRaised) {
+      Text(text = selectedLabel, modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp), style = ClawTheme.type.caption, color = color)
+      HorizontalDivider(color = ClawTheme.colors.border)
+      options.filter { thinkingSupported }.forEachIndexed { index, option ->
         DropdownMenuItem(
-          text = { Text(chatThinkingOptionLabel(option)) },
-          trailingIcon = {
-            if (option.id.equals(selectedId, ignoreCase = true)) {
-              Icon(Icons.Default.Check, contentDescription = nativeString("Selected"))
-            }
-          },
+          text = { Text(chatThinkingOptionLabel(option, languageTag)) },
+          enabled = thinkingLevelEnabled,
+          modifier = Modifier.semantics { selected = index == selectedIndex },
+          trailingIcon = { if (index == selectedIndex) Icon(Icons.Default.Check, contentDescription = null) },
           onClick = {
             expanded = false
             onSelect(option.id)
           },
         )
       }
+      HorizontalDivider(color = ClawTheme.colors.border)
+      DropdownMenuItem(
+        text = {
+          Column {
+            Text(nativeString("Fast mode"))
+            Text(nativeString("Faster responses, higher usage of limits."), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+          }
+        },
+        leadingIcon = { Icon(Icons.Default.Bolt, contentDescription = null) },
+        trailingIcon = { if (fastMode) Icon(Icons.Default.Check, contentDescription = null) },
+        enabled = fastModeEnabled,
+        modifier = Modifier.semantics { selected = fastMode },
+        onClick = {
+          expanded = false
+          onFastModeChange(!fastMode)
+        },
+      )
     }
   }
 }
@@ -2792,11 +2692,24 @@ internal fun branchMetadataText(branch: SessionBranch): String {
 private fun ChatModelPickerSheet(
   sections: ChatModelPickerSections,
   favorites: Set<String>,
+  selectedModelLabel: String,
+  modelSelectionLocked: Boolean,
+  contextUsage: ChatContextUsage,
+  permissionMode: ChatPermissionMode?,
+  permissionModePending: Boolean,
+  permissionPickerEnabled: Boolean,
+  permissionUnavailableReason: String?,
+  canSelectFullPermission: Boolean,
+  onPermissionModeChange: (ChatPermissionMode?) -> Unit,
   onDismiss: () -> Unit,
   onSelect: (String?) -> Unit,
   onOpenProviders: () -> Unit,
   onToggleFavorite: (String) -> Unit,
 ) {
+  var permissionMenuExpanded by remember { mutableStateOf(false) }
+  LaunchedEffect(permissionPickerEnabled) {
+    if (!permissionPickerEnabled) permissionMenuExpanded = false
+  }
   ModalBottomSheet(
     onDismissRequest = onDismiss,
     // IME dismissal can remove a partial-height anchor while the selector opens.
@@ -2808,6 +2721,57 @@ private fun ChatModelPickerSheet(
       modifier = Modifier.fillMaxWidth().heightIn(max = 560.dp),
       contentPadding = PaddingValues(bottom = 24.dp),
     ) {
+      item {
+        Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+          Text(text = selectedModelLabel, style = ClawTheme.type.label, color = ClawTheme.colors.text)
+          if (modelSelectionLocked) {
+            Text(text = nativeString("Model selection is locked for this session."), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+          }
+          chatContextSummary(contextUsage)?.let { summary ->
+            Text(text = nativeString("Context: \$detail", summary.detail), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+          }
+          Row(modifier = Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            ChatContextStat(label = nativeString("Input"), value = formatContextUsageTokens(contextUsage.inputTokens), modifier = Modifier.weight(1f))
+            ChatContextStat(label = nativeString("Output"), value = formatContextUsageTokens(contextUsage.outputTokens), modifier = Modifier.weight(1f))
+            ChatContextStat(label = nativeString("Est. cost"), value = formatContextEstimatedCost(contextUsage.estimatedCostUsd), modifier = Modifier.weight(1f))
+          }
+        }
+      }
+      item {
+        Box {
+          Surface(
+            onClick = { permissionMenuExpanded = true },
+            enabled = permissionPickerEnabled,
+            modifier = Modifier.fillMaxWidth().heightIn(min = ClawTheme.spacing.touchTarget),
+            color = Color.Transparent,
+          ) {
+            Row(modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+              ChatPermissionIcon(mode = permissionMode, contentDescription = null, modifier = Modifier.size(20.dp))
+              Text(nativeString("Permissions"), style = ClawTheme.type.body, modifier = Modifier.weight(1f))
+              Text(
+                text = if (permissionModePending) nativeString("Applying permissions…") else chatPermissionModeLabel(permissionMode),
+                style = ClawTheme.type.caption,
+                color = ClawTheme.colors.textMuted,
+              )
+              Icon(Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.size(18.dp))
+            }
+          }
+          ChatPermissionMenu(
+            expanded = permissionMenuExpanded,
+            selectedMode = permissionMode,
+            canSelectFull = canSelectFullPermission,
+            onDismissRequest = { permissionMenuExpanded = false },
+            onSelect = onPermissionModeChange,
+          )
+        }
+        permissionUnavailableReason?.let { reason ->
+          Text(reason, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp))
+        }
+      }
+      if (modelSelectionLocked) return@LazyColumn
+      item {
+        HorizontalDivider(color = ClawTheme.colors.border)
+      }
       item {
         Surface(
           onClick = { onSelect(null) },
@@ -2826,9 +2790,9 @@ private fun ChatModelPickerSheet(
         HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
       }
       listOf(
-        "Pinned" to sections.pinned,
-        "Recent" to sections.recent,
-        "Models" to sections.remaining,
+        nativeString("Pinned") to sections.pinned,
+        nativeString("Recent") to sections.recent,
+        nativeString("Models") to sections.remaining,
       ).forEach { (title, models) ->
         if (models.isNotEmpty()) {
           item(key = "section-$title") {
@@ -3026,22 +2990,22 @@ internal fun chatPermissionOptions(): List<ChatPermissionOption> =
     ChatPermissionOption(
       ChatPermissionMode.ReadOnly,
       nativeString("Read only"),
-      nativeString("Read within the session root; writes and commands are blocked."),
+      nativeString("Read-only access; native tool approval rules still apply."),
     ),
     ChatPermissionOption(
       ChatPermissionMode.Guarded,
       nativeString("Guarded"),
-      nativeString("A human reviews requests beyond the session root."),
+      nativeString("Human review for requests beyond the session's access."),
     ),
     ChatPermissionOption(
       ChatPermissionMode.Workspace,
       nativeString("Workspace"),
-      nativeString("An AI reviewer checks requests beyond the session root."),
+      nativeString("AI review, with human fallback, for additional access."),
     ),
     ChatPermissionOption(
       ChatPermissionMode.Full,
       nativeString("Full access"),
-      nativeString("No reviewer; files and commands are unrestricted."),
+      nativeString("Run without approval prompts, subject to host and tool policy."),
     ),
   )
 
@@ -3077,77 +3041,27 @@ private fun ChatInputPill(
   thinkingLevel: String,
   thinkingOptions: List<ChatThinkingLevelOption>,
   thinkingSupported: Boolean,
+  thinkingLevelEnabled: Boolean,
   fastMode: Boolean,
-  permissionMode: ChatPermissionMode?,
-  permissionModePending: Boolean,
-  permissionPickerEnabled: Boolean,
-  canSelectFullPermission: Boolean,
-  onPermissionModeChange: (ChatPermissionMode?) -> Unit,
-  onToggleThinkingSelector: () -> Unit,
-  thinkingSelectorExpanded: Boolean,
-  modelPickerExpanded: Boolean,
+  fastModeEnabled: Boolean,
+  onFastModeChange: (Boolean) -> Unit,
+  onThinkingLevelChange: (String) -> Unit,
   contextUsage: ChatContextUsage,
   modifier: Modifier = Modifier,
 ) {
   val hardwareEnterHandler = remember { PhysicalChatSendKeyHandler() }
   var attachmentMenuExpanded by rememberSaveable { mutableStateOf(false) }
-  var permissionMenuExpanded by rememberSaveable { mutableStateOf(false) }
-  var contextMenuExpanded by rememberSaveable { mutableStateOf(false) }
-  var auxiliaryControlsVisible by rememberSaveable { mutableStateOf(false) }
-  var auxiliaryControlsHaveFocus by remember { mutableStateOf(false) }
-  var interactionGeneration by remember { mutableIntStateOf(0) }
-  val touchExplorationEnabled =
-    LocalContext.current
-      .getSystemService(
-        android.view.accessibility.AccessibilityManager::class.java,
-      )?.isTouchExplorationEnabled == true
-  val menuExpanded =
-    attachmentMenuExpanded ||
-      permissionMenuExpanded ||
-      contextMenuExpanded ||
-      thinkingSelectorExpanded ||
-      modelPickerExpanded
-  val auxiliaryControlsPinned =
-    permissionModePending ||
-      auxiliaryControlsHaveFocus ||
-      chatComposerAuxiliaryControlsPinned(
-        menuExpanded = menuExpanded,
-        dictationActive = dictationActive,
-        talkActive = talkActive,
-        touchExplorationEnabled = touchExplorationEnabled,
-      )
-  val revealAuxiliaryControls = {
-    auxiliaryControlsVisible = true
-    interactionGeneration += 1
-  }
-  LaunchedEffect(permissionPickerEnabled) {
-    if (!permissionPickerEnabled) permissionMenuExpanded = false
-  }
-  LaunchedEffect(touchExplorationEnabled) {
-    if (touchExplorationEnabled) revealAuxiliaryControls()
-  }
-  LaunchedEffect(auxiliaryControlsVisible, auxiliaryControlsPinned, interactionGeneration) {
-    if (auxiliaryControlsVisible && !auxiliaryControlsPinned) {
-      delay(CHAT_COMPOSER_AUXILIARY_IDLE_MS)
-      auxiliaryControlsVisible = false
-    }
-  }
+  val draftStyle = ClawTheme.type.body.copy(fontSize = 16.sp, lineHeight = 22.sp)
 
-  Column(
-    modifier =
-      modifier
-        .heightIn(min = ClawTheme.spacing.touchTarget)
-        .pointerInput(Unit) {
-          awaitEachGesture {
-            awaitFirstDown(pass = PointerEventPass.Initial)
-            revealAuxiliaryControls()
-          }
-        },
+  Surface(
+    modifier = modifier,
+    shape = RoundedCornerShape(20.dp),
+    color = ClawTheme.colors.surfaceRaised,
+    contentColor = ClawTheme.colors.text,
+    border = BorderStroke(1.dp, ClawTheme.colors.borderStrong),
+    shadowElevation = 1.dp,
   ) {
-    Row(
-      modifier = Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, top = 11.dp, bottom = 6.dp),
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
+    Column {
       ChatTextFieldValueAdapter(
         value = value,
         onValueChange = onValueChange,
@@ -3155,20 +3069,19 @@ private fun ChatInputPill(
       ) { textFieldValue, updateTextFieldValue ->
         BasicTextField(
           value = textFieldValue,
-          onValueChange = {
-            revealAuxiliaryControls()
-            updateTextFieldValue(it)
-          },
-          textStyle = ClawTheme.type.body.copy(color = ClawTheme.colors.text),
+          onValueChange = updateTextFieldValue,
+          textStyle = draftStyle.copy(color = ClawTheme.colors.text),
           cursorBrush = SolidColor(ClawTheme.colors.primary),
           minLines = 1,
           maxLines = 4,
           modifier =
             Modifier
               .fillMaxWidth()
-              .onFocusChanged { focusState ->
-                if (focusState.isFocused) revealAuxiliaryControls()
-              }.onPreInterceptKeyBeforeSoftKeyboard { event ->
+              // Reserve the action row before measuring the draft in the IME viewport.
+              .weight(1f, fill = false)
+              .heightIn(min = ClawTheme.spacing.touchTarget)
+              .padding(start = 14.dp, end = 14.dp, top = 8.dp, bottom = 4.dp)
+              .onPreInterceptKeyBeforeSoftKeyboard { event ->
                 hardwareEnterHandler.handle(
                   event = event,
                   sendEnabled = sendEnabled,
@@ -3180,170 +3093,77 @@ private fun ChatInputPill(
           decorationBox = { innerTextField ->
             Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
               if (value.isEmpty()) {
-                Text(text = nativeString("Message OpenClaw"), style = ClawTheme.type.body, color = ClawTheme.colors.textSubtle)
+                // BasicTextField's line limit does not constrain its decoration.
+                Text(text = nativeString("Message OpenClaw"), style = draftStyle, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
               }
               innerTextField()
             }
           },
         )
       }
-    }
-    if (permissionModePending) {
-      Text(
-        text = nativeString("Applying permissions…"),
-        style = ClawTheme.type.caption,
-        color = ClawTheme.colors.textMuted,
-        modifier = Modifier.padding(horizontal = 14.dp),
-      )
-    }
-    // Give auxiliary controls their own width so the model keeps its touch target.
-    androidx.compose.animation.AnimatedVisibility(
-      visible = auxiliaryControlsVisible || auxiliaryControlsPinned,
-      enter = fadeIn() + expandVertically(expandFrom = Alignment.Bottom),
-      exit = fadeOut() + shrinkVertically(shrinkTowards = Alignment.Bottom),
-    ) {
-      FlowRow(
-        modifier =
-          Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 8.dp)
-            .onFocusChanged { auxiliaryControlsHaveFocus = it.hasFocus }
-            .focusGroup(),
-        horizontalArrangement = Arrangement.End,
-        verticalArrangement = Arrangement.spacedBy(2.dp),
-        itemVerticalAlignment = Alignment.CenterVertically,
+      Row(
+        modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
       ) {
         Box {
-          Surface(
-            onClick = {
-              revealAuxiliaryControls()
-              permissionMenuExpanded = true
-            },
-            enabled = permissionPickerEnabled,
-            modifier = Modifier.size(ClawTheme.spacing.touchTarget),
-            shape = CircleShape,
-            color = Color.Transparent,
-            contentColor =
-              if (permissionMode == ChatPermissionMode.Full) {
-                ClawTheme.colors.warning
-              } else {
-                ClawTheme.colors.textMuted
-              },
-          ) {
+          Surface(onClick = { attachmentMenuExpanded = true }, modifier = Modifier.size(ClawTheme.spacing.touchTarget), shape = CircleShape, color = Color.Transparent, contentColor = ClawTheme.colors.textMuted) {
             Box(contentAlignment = Alignment.Center) {
-              if (permissionModePending) {
-                Icon(Icons.Default.HourglassEmpty, contentDescription = nativeString("Applying permissions…"), modifier = Modifier.size(16.dp))
-              } else {
-                ChatPermissionIcon(
-                  mode = permissionMode,
-                  contentDescription = nativeString("Permissions: \${mode}", chatPermissionModeLabel(permissionMode)),
-                  modifier = Modifier.size(16.dp),
-                )
-              }
+              Icon(imageVector = Icons.Default.Add, contentDescription = nativeString("Add attachment"), modifier = Modifier.size(20.dp))
             }
           }
-          ChatPermissionMenu(
-            expanded = permissionMenuExpanded,
-            selectedMode = permissionMode,
-            canSelectFull = canSelectFullPermission,
-            onDismissRequest = {
-              permissionMenuExpanded = false
-              revealAuxiliaryControls()
-            },
-            onSelect = onPermissionModeChange,
-          )
-        }
-        ChatComposerContextRing(
-          contextUsage = contextUsage,
-          expanded = contextMenuExpanded,
-          onExpandedChange = { expanded ->
-            contextMenuExpanded = expanded
-            revealAuxiliaryControls()
-          },
-        )
-        ChatComposerFooterChip(
-          label = selectedModelLabel,
-          enabled = modelPickerEnabled,
-          onClick = {
-            revealAuxiliaryControls()
-            onOpenModelPicker()
-          },
-          modifier =
-            Modifier
-              .widthIn(min = ClawTheme.spacing.touchTarget, max = 116.dp)
-              .testTag("chat-composer-model"),
-        )
-        ChatComposerThinkingChip(
-          fastMode = fastMode,
-          thinkingLevel = thinkingLevel,
-          thinkingOptions = thinkingOptions,
-          enabled = thinkingSupported || modelPickerEnabled,
-          onClick = {
-            revealAuxiliaryControls()
-            onToggleThinkingSelector()
-          },
-          modifier = Modifier.testTag("chat-composer-thinking"),
-        )
-        ChatComposerMicButton(
-          dictationActive = dictationActive,
-          dictationEnabled = dictationEnabled,
-          voiceNoteEnabled = recordVoiceNoteEnabled,
-          onToggleDictation = {
-            revealAuxiliaryControls()
-            onToggleDictation()
-          },
-          onStartVoiceNote = {
-            revealAuxiliaryControls()
-            onStartVoiceNote()
-          },
-          modifier = Modifier.testTag("chat-composer-mic"),
-        )
-      }
-    }
-    Row(
-      modifier = Modifier.fillMaxWidth().padding(start = 2.dp, end = 8.dp, top = 2.dp, bottom = 6.dp),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(2.dp),
-    ) {
-      Box {
-        Surface(
-          onClick = {
-            revealAuxiliaryControls()
-            attachmentMenuExpanded = true
-          },
-          modifier = Modifier.size(ClawTheme.spacing.touchTarget),
-          shape = CircleShape,
-          color = Color.Transparent,
-          contentColor = ClawTheme.colors.text,
-        ) {
-          Box(contentAlignment = Alignment.Center) {
-            Icon(Icons.Default.Add, contentDescription = nativeString("Add attachment"), modifier = Modifier.size(22.dp))
+          DropdownMenu(expanded = attachmentMenuExpanded, onDismissRequest = { attachmentMenuExpanded = false }) {
+            DropdownMenuItem(text = { Text(nativeString("Photos")) }, leadingIcon = { Icon(Icons.Default.Photo, contentDescription = null) }, onClick = {
+              attachmentMenuExpanded = false
+              onPickImages()
+            })
+            DropdownMenuItem(text = { Text(nativeString("Videos")) }, leadingIcon = { Icon(Icons.Default.Videocam, contentDescription = null) }, onClick = {
+              attachmentMenuExpanded = false
+              onPickVideo()
+            })
+            DropdownMenuItem(text = { Text(nativeString("Files")) }, leadingIcon = { Icon(Icons.Default.AttachFile, contentDescription = null) }, onClick = {
+              attachmentMenuExpanded = false
+              onPickAudioOrDocument()
+            })
           }
         }
-        DropdownMenu(expanded = attachmentMenuExpanded, onDismissRequest = { attachmentMenuExpanded = false }) {
-          DropdownMenuItem(text = { Text(nativeString("Photos")) }, leadingIcon = { Icon(Icons.Default.Photo, contentDescription = null) }, onClick = {
-            attachmentMenuExpanded = false
-            onPickImages()
-          })
-          DropdownMenuItem(text = { Text(nativeString("Videos")) }, leadingIcon = { Icon(Icons.Default.Videocam, contentDescription = null) }, onClick = {
-            attachmentMenuExpanded = false
-            onPickVideo()
-          })
-          DropdownMenuItem(text = { Text(nativeString("Files")) }, leadingIcon = { Icon(Icons.Default.AttachFile, contentDescription = null) }, onClick = {
-            attachmentMenuExpanded = false
-            onPickAudioOrDocument()
-          })
+        Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+          ChatComposerModelPicker(
+            label = selectedModelLabel,
+            contextUsage = contextUsage,
+            enabled = modelPickerEnabled,
+            onClick = onOpenModelPicker,
+            modifier = Modifier.weight(1f, fill = false),
+          )
+          if (thinkingSupported || fastModeEnabled || fastMode) {
+            ChatThinkingLevelPicker(
+              options = thinkingOptions,
+              selectedId = thinkingLevel,
+              thinkingSupported = thinkingSupported,
+              thinkingLevelEnabled = thinkingLevelEnabled,
+              fastMode = fastMode,
+              fastModeEnabled = fastModeEnabled,
+              onSelect = onThinkingLevelChange,
+              onFastModeChange = onFastModeChange,
+            )
+          }
         }
-      }
-      Spacer(Modifier.weight(1f))
-      when (resolveChatComposerTrailingAction(talkActive = talkActive, runActive = runActive, hasContent = hasContent)) {
-        ChatComposerTrailingAction.Send -> SendButton(enabled = sendEnabled, onClick = onSend)
-        ChatComposerTrailingAction.StartTalk -> LiveTalkButton(active = false, onClick = onToggleTalk)
-        ChatComposerTrailingAction.StopTalk -> {
-          if (runActive) StopButton(onClick = onAbort)
+        if (talkActive) {
           LiveTalkButton(active = true, onClick = onToggleTalk)
+        } else {
+          ChatComposerMicButton(
+            dictationActive = dictationActive,
+            dictationEnabled = dictationEnabled,
+            voiceNoteEnabled = recordVoiceNoteEnabled,
+            onToggleDictation = onToggleDictation,
+            onStartVoiceNote = onStartVoiceNote,
+          )
         }
-        ChatComposerTrailingAction.Stop -> StopButton(onClick = onAbort)
+        when (resolveChatComposerPrimaryAction(talkActive = talkActive, runActive = runActive, hasContent = hasContent)) {
+          ChatComposerPrimaryAction.Send -> SendButton(enabled = sendEnabled, onClick = onSend)
+          ChatComposerPrimaryAction.StartTalk -> LiveTalkButton(active = false, onClick = onToggleTalk)
+          ChatComposerPrimaryAction.Stop -> StopButton(onClick = onAbort)
+          ChatComposerPrimaryAction.None -> Unit
+        }
       }
     }
   }
@@ -3374,11 +3194,11 @@ private fun ChatPermissionMenu(
   onDismissRequest: () -> Unit,
   onSelect: (ChatPermissionMode?) -> Unit,
 ) {
-  val options = remember { chatPermissionOptions() }
+  val options = chatPermissionOptions()
   DropdownMenu(
     expanded = expanded,
     onDismissRequest = onDismissRequest,
-    modifier = Modifier.widthIn(min = 336.dp, max = 380.dp),
+    modifier = Modifier.widthIn(min = 280.dp, max = 380.dp),
     shape = RoundedCornerShape(24.dp),
   ) {
     Text(
@@ -3398,11 +3218,11 @@ private fun ChatPermissionMenu(
           text = {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
               Text(
-                text = nativeString(option.label),
+                text = option.label,
                 style = ClawTheme.type.body.copy(fontWeight = FontWeight.Medium),
               )
               Text(
-                text = nativeString(option.description),
+                text = option.description,
                 style = ClawTheme.type.caption.copy(fontWeight = FontWeight.Normal),
                 color = ClawTheme.colors.textMuted,
               )
@@ -3424,7 +3244,7 @@ private fun ChatPermissionMenu(
               selected -> Icon(Icons.Default.Check, contentDescription = nativeString("Selected"))
             }
           },
-          modifier = Modifier.heightIn(min = 68.dp),
+          modifier = Modifier.heightIn(min = 68.dp).semantics { this.selected = selected },
           contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
           enabled = selectable,
           onClick = {
@@ -3480,124 +3300,6 @@ internal fun formatContextEstimatedCost(value: Double?): String {
 }
 
 @Composable
-private fun ChatComposerContextRing(
-  contextUsage: ChatContextUsage,
-  expanded: Boolean,
-  onExpandedChange: (Boolean) -> Unit,
-) {
-  val summary = chatContextSummary(contextUsage) ?: return
-  val approximation = if (summary.approximate) "~" else ""
-  val description = nativeString("Context \$approximation\${summary.percent}% used", approximation, summary.percent)
-  val progressColor =
-    if (!summary.approximate && summary.fraction >= 0.85f) {
-      ClawTheme.colors.warning
-    } else {
-      ClawTheme.colors.textMuted
-    }
-  val trackColor = ClawTheme.colors.surfacePressed
-  Box {
-    Surface(
-      onClick = { onExpandedChange(true) },
-      modifier =
-        Modifier
-          .size(ClawTheme.spacing.touchTarget)
-          .semantics {
-            contentDescription = description
-            stateDescription = if (expanded) nativeString("Expanded") else nativeString("Collapsed")
-          },
-      shape = CircleShape,
-      color = Color.Transparent,
-      contentColor = progressColor,
-    ) {
-      Box(contentAlignment = Alignment.Center) {
-        Canvas(modifier = Modifier.size(16.dp)) {
-          val stroke = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round)
-          drawCircle(color = trackColor, style = stroke)
-          drawArc(
-            color = progressColor,
-            startAngle = -90f,
-            sweepAngle = summary.fraction * 360f,
-            useCenter = false,
-            style = stroke,
-          )
-        }
-      }
-    }
-    DropdownMenu(
-      expanded = expanded,
-      onDismissRequest = { onExpandedChange(false) },
-      modifier = Modifier.width(300.dp),
-      shape = RoundedCornerShape(24.dp),
-    ) {
-      Column(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-      ) {
-        Row(
-          modifier = Modifier.fillMaxWidth(),
-          verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-          Text(
-            text = localizedUppercase(nativeString("Context window"), currentAppLanguage().languageTag),
-            modifier = Modifier.weight(1f),
-            style = ClawTheme.type.caption.copy(fontSize = 10.5.sp),
-            color = ClawTheme.colors.textMuted,
-          )
-          Text(
-            text = summary.detail,
-            style = ClawTheme.type.caption.copy(fontWeight = FontWeight.SemiBold),
-            color = ClawTheme.colors.text,
-          )
-        }
-        Box(
-          modifier =
-            Modifier
-              .fillMaxWidth()
-              .height(4.dp)
-              .clip(RoundedCornerShape(ClawTheme.radii.pill))
-              .background(trackColor),
-        ) {
-          Box(
-            modifier =
-              Modifier
-                .fillMaxWidth(summary.fraction)
-                .height(4.dp)
-                .background(progressColor),
-          )
-        }
-        HorizontalDivider(color = ClawTheme.colors.border)
-        Text(
-          text = localizedUppercase(nativeString("Usage"), currentAppLanguage().languageTag),
-          style = ClawTheme.type.caption.copy(fontSize = 10.5.sp),
-          color = ClawTheme.colors.textMuted,
-        )
-        Row(
-          modifier = Modifier.fillMaxWidth(),
-          horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-          ChatContextStat(
-            label = nativeString("Input"),
-            value = formatContextUsageTokens(contextUsage.inputTokens),
-            modifier = Modifier.weight(1f),
-          )
-          ChatContextStat(
-            label = nativeString("Output"),
-            value = formatContextUsageTokens(contextUsage.outputTokens),
-            modifier = Modifier.weight(1f),
-          )
-          ChatContextStat(
-            label = nativeString("Est. cost"),
-            value = formatContextEstimatedCost(contextUsage.estimatedCostUsd),
-            modifier = Modifier.weight(1f),
-          )
-        }
-      }
-    }
-  }
-}
-
-@Composable
 private fun ChatContextStat(
   label: String,
   value: String,
@@ -3610,64 +3312,6 @@ private fun ChatContextStat(
       style = ClawTheme.type.caption.copy(fontWeight = FontWeight.SemiBold),
       color = ClawTheme.colors.text,
     )
-  }
-}
-
-@Composable
-private fun ChatComposerFooterChip(
-  label: String,
-  enabled: Boolean,
-  onClick: () -> Unit,
-  modifier: Modifier = Modifier,
-) {
-  Surface(
-    onClick = onClick,
-    enabled = enabled,
-    modifier = modifier.heightIn(min = ClawTheme.spacing.touchTarget),
-    shape = RoundedCornerShape(24.dp),
-    color = Color.Transparent,
-    contentColor = if (enabled) ClawTheme.colors.textMuted else ClawTheme.colors.textSubtle,
-  ) {
-    Row(
-      modifier = Modifier.padding(horizontal = 6.dp),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(2.dp),
-    ) {
-      Text(
-        text = label,
-        modifier = Modifier.weight(1f, fill = false),
-        style = ClawTheme.type.caption.copy(fontSize = 11.sp, lineHeight = 14.sp, fontWeight = FontWeight.Normal),
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-      )
-      Icon(
-        imageVector = Icons.Default.ArrowDropDown,
-        contentDescription = null,
-        modifier = Modifier.size(12.dp),
-        tint = ClawTheme.colors.textSubtle,
-      )
-    }
-  }
-}
-
-internal fun chatThinkingGaugeFraction(
-  thinkingLevel: String,
-  options: List<ChatThinkingLevelOption>,
-): Float? {
-  val normalizedLevel = thinkingLevel.trim().lowercase(Locale.US)
-  val normalizedOptions = options.map { it.id.trim().lowercase(Locale.US) }
-  val selectedIndex = normalizedOptions.indexOf(normalizedLevel)
-  if (selectedIndex >= 0 && normalizedOptions.size > 1) {
-    return selectedIndex.toFloat() / normalizedOptions.lastIndex.toFloat()
-  }
-  return when (normalizedLevel) {
-    "off" -> 0f
-    "minimal" -> 0.2f
-    "low" -> 0.4f
-    "medium" -> 0.6f
-    "high" -> 0.8f
-    "xhigh", "max", "ultra" -> 1f
-    else -> null
   }
 }
 
@@ -3697,133 +3341,36 @@ internal fun chatThinkingChipStateDescription(
 }
 
 @Composable
-private fun ChatComposerThinkingChip(
-  fastMode: Boolean,
-  thinkingLevel: String,
-  thinkingOptions: List<ChatThinkingLevelOption>,
+private fun ChatComposerModelPicker(
+  label: String,
+  contextUsage: ChatContextUsage,
   enabled: Boolean,
   onClick: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
-  val gaugeColor = if (enabled) ClawTheme.colors.textMuted else ClawTheme.colors.textSubtle
+  val description = nativeString("Model")
+  val contextDescription = chatContextSummary(contextUsage)?.let { nativeString("Context: \$detail", it.detail) }
   Surface(
     onClick = onClick,
     enabled = enabled,
     modifier =
-      modifier
-        .heightIn(min = ClawTheme.spacing.touchTarget)
-        .semantics {
-          contentDescription = nativeString("Effort")
-          stateDescription = chatThinkingChipStateDescription(fastMode, thinkingLevel, thinkingOptions)
-        },
-    shape = RoundedCornerShape(24.dp),
+      modifier.heightIn(min = ClawTheme.spacing.touchTarget).semantics {
+        contentDescription = description
+        contextDescription?.let { stateDescription = it }
+        role = Role.Button
+      },
+    shape = RoundedCornerShape(ClawTheme.radii.pill),
     color = Color.Transparent,
-    contentColor = gaugeColor,
+    contentColor = if (enabled) ClawTheme.colors.textMuted else ClawTheme.colors.textSubtle,
   ) {
-    Row(
-      modifier = Modifier.padding(horizontal = 4.dp),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(2.dp),
-    ) {
-      Box(modifier = Modifier.size(width = 24.dp, height = 18.dp)) {
-        Canvas(modifier = Modifier.fillMaxSize()) {
-          val strokeWidth = 1.7.dp.toPx()
-          val pivot = Offset(size.width / 2f, 16.5.dp.toPx())
-          val radius = 11.5.dp.toPx()
-          val startAngle = 200f
-          val sweepAngle = 140f
-
-          fun gaugePoint(
-            angleDegrees: Float,
-            distance: Float,
-          ): Offset {
-            val radians = Math.toRadians(angleDegrees.toDouble())
-            return Offset(
-              x = pivot.x + cos(radians).toFloat() * distance,
-              y = pivot.y + sin(radians).toFloat() * distance,
-            )
-          }
-
-          drawArc(
-            color = gaugeColor,
-            startAngle = startAngle,
-            sweepAngle = sweepAngle,
-            useCenter = false,
-            topLeft = Offset(pivot.x - radius, pivot.y - radius),
-            size = Size(radius * 2f, radius * 2f),
-            style = Stroke(width = strokeWidth, cap = StrokeCap.Round),
-          )
-          listOf(218f, 252f, 288f, 322f).forEach { tickAngle ->
-            drawLine(
-              color = gaugeColor,
-              start = gaugePoint(tickAngle, radius - 0.7.dp.toPx()),
-              end = gaugePoint(tickAngle, radius - 3.dp.toPx()),
-              strokeWidth = 1.dp.toPx(),
-              cap = StrokeCap.Round,
-            )
-          }
-          chatThinkingGaugeFraction(thinkingLevel, thinkingOptions)?.let { fraction ->
-            val needleAngle = startAngle + sweepAngle * fraction
-            drawLine(
-              color = gaugeColor,
-              start = pivot,
-              end = gaugePoint(needleAngle, radius - 3.4.dp.toPx()),
-              strokeWidth = 1.5.dp.toPx(),
-              cap = StrokeCap.Round,
-            )
-          }
-          drawCircle(color = gaugeColor, radius = 1.7.dp.toPx(), center = pivot)
-        }
-        if (fastMode) {
-          Icon(
-            imageVector = Icons.Default.Bolt,
-            contentDescription = null,
-            modifier = Modifier.align(Alignment.BottomEnd).size(9.dp),
-            tint = ClawTheme.colors.danger,
-          )
-        }
-      }
-      Icon(
-        imageVector = Icons.Default.KeyboardArrowDown,
-        contentDescription = null,
-        modifier = Modifier.size(14.dp),
-        tint = ClawTheme.colors.textSubtle,
+    Box(modifier = Modifier.padding(horizontal = 4.dp), contentAlignment = Alignment.CenterStart) {
+      Text(
+        text = label,
+        style = ClawTheme.type.caption,
+        // Android supports middle ellipsis only on one line; keep both ends of the model name visible.
+        maxLines = 1,
+        overflow = TextOverflow.MiddleEllipsis,
       )
-    }
-  }
-}
-
-@Composable
-private fun ChatComposerPrimaryAction(
-  onClick: () -> Unit,
-  description: String,
-  containerColor: Color,
-  contentColor: Color,
-  enabled: Boolean = true,
-  border: BorderStroke? = null,
-  content: @Composable () -> Unit,
-) {
-  Surface(
-    onClick = onClick,
-    enabled = enabled,
-    modifier =
-      Modifier
-        .size(ClawTheme.spacing.touchTarget)
-        .semantics { contentDescription = description },
-    shape = CircleShape,
-    color = Color.Transparent,
-    contentColor = contentColor,
-  ) {
-    Box(contentAlignment = Alignment.Center) {
-      Surface(
-        modifier = Modifier.size(40.dp).testTag("chat-composer-primary-action-visual"),
-        shape = CircleShape,
-        color = containerColor,
-        contentColor = contentColor,
-        border = border,
-      ) {
-        Box(contentAlignment = Alignment.Center) { content() }
-      }
     }
   }
 }
@@ -3834,58 +3381,68 @@ private fun LiveTalkButton(
   onClick: () -> Unit,
 ) {
   val buttonDescription = if (active) nativeString("End Talk") else nativeString("Start Talk")
-  ChatComposerPrimaryAction(
+  Surface(
     onClick = onClick,
-    description = buttonDescription,
-    containerColor = ClawTheme.colors.danger,
-    contentColor = Color.White,
+    modifier =
+      Modifier
+        .size(ClawTheme.spacing.touchTarget)
+        .semantics { contentDescription = buttonDescription },
+    shape = CircleShape,
+    color = Color.Transparent,
+    contentColor = if (active) ClawTheme.colors.accent else ClawTheme.colors.primaryText,
   ) {
-    if (active) {
-      LiveTalkWaveform(modifier = Modifier.size(20.dp))
-    } else {
-      Icon(
-        imageVector = Icons.Default.GraphicEq,
-        contentDescription = null,
-        modifier = Modifier.size(18.dp),
-      )
+    Box(modifier = Modifier.padding(8.dp).background(if (active) Color.Transparent else ClawTheme.colors.primary, CircleShape), contentAlignment = Alignment.Center) {
+      LiveTalkWaveform(active = active, modifier = Modifier.size(20.dp))
     }
   }
 }
 
 @Composable
 private fun StopButton(onClick: () -> Unit) {
-  ChatComposerPrimaryAction(
+  Surface(
     onClick = onClick,
-    description = nativeString("Stop"),
-    containerColor = ClawTheme.colors.danger,
-    contentColor = Color.White,
+    modifier = Modifier.size(ClawTheme.spacing.touchTarget),
+    shape = CircleShape,
+    color = Color.Transparent,
+    contentColor = ClawTheme.colors.danger,
   ) {
-    Icon(imageVector = Icons.Default.Stop, contentDescription = null, modifier = Modifier.size(18.dp))
+    Box(modifier = Modifier.padding(8.dp).background(ClawTheme.colors.dangerSoft, CircleShape), contentAlignment = Alignment.Center) {
+      Icon(imageVector = Icons.Default.Stop, contentDescription = nativeString("Stop"), modifier = Modifier.size(20.dp))
+    }
   }
 }
 
 @Composable
-private fun LiveTalkWaveform(modifier: Modifier = Modifier) {
-  val transition = rememberInfiniteTransition()
-  val phase by
-    transition.animateFloat(
-      initialValue = 0f,
-      targetValue = (Math.PI * 2).toFloat(),
-      animationSpec = infiniteRepeatable(animation = tween(durationMillis = 720, easing = LinearEasing), repeatMode = RepeatMode.Restart),
-    )
+private fun LiveTalkWaveform(
+  active: Boolean,
+  modifier: Modifier = Modifier,
+) {
+  val color = LocalContentColor.current
+  val phase =
+    if (active) {
+      val value by rememberInfiniteTransition().animateFloat(
+        initialValue = 0f,
+        targetValue = (Math.PI * 2).toFloat(),
+        animationSpec = infiniteRepeatable(animation = tween(durationMillis = 720, easing = LinearEasing), repeatMode = RepeatMode.Restart),
+      )
+      value
+    } else {
+      0f
+    }
 
   Canvas(modifier = modifier) {
-    val barWidth = size.width / 7f
-    val gap = barWidth
-    val startX = (size.width - (barWidth * 3f + gap * 2f)) / 2f
-    repeat(3) { index ->
-      val normalizedHeight = 0.38f + 0.5f * ((sin(phase + index * 1.35f) + 1f) / 2f)
-      val barHeight = size.height * normalizedHeight
-      drawRoundRect(
-        color = Color.White,
-        topLeft = Offset(startX + index * (barWidth + gap), (size.height - barHeight) / 2f),
-        size = Size(barWidth, barHeight),
-        cornerRadius = CornerRadius(barWidth / 2f),
+    val strokeWidth = 1.5.dp.toPx()
+    repeat(5) { index ->
+      val envelope = 1f - abs(index - 2) * 0.28f
+      val pulse = if (active) 0.7f + 0.3f * ((sin(phase + index * 0.9f) + 1f) / 2f) else 1f
+      val halfHeight = (size.height - strokeWidth * 2f) * envelope * pulse / 2f
+      val x = size.width * (index + 0.5f) / 5f
+      drawLine(
+        color = color,
+        start = Offset(x, center.y - halfHeight),
+        end = Offset(x, center.y + halfHeight),
+        strokeWidth = strokeWidth,
+        cap = StrokeCap.Round,
       )
     }
   }
@@ -4002,18 +3559,17 @@ private fun SendButton(
   enabled: Boolean,
   onClick: () -> Unit,
 ) {
-  val contentColor = if (enabled) ClawTheme.colors.primaryText else ClawTheme.colors.textSubtle
-  val containerColor = if (enabled) ClawTheme.colors.primary else ClawTheme.colors.surfacePressed
-  val borderColor = if (enabled) ClawTheme.colors.primary else ClawTheme.colors.border
-  ChatComposerPrimaryAction(
+  Surface(
     onClick = onClick,
     enabled = enabled,
-    description = nativeString("Send"),
-    containerColor = containerColor,
-    contentColor = contentColor,
-    border = BorderStroke(1.dp, borderColor),
+    modifier = Modifier.size(ClawTheme.spacing.touchTarget),
+    shape = CircleShape,
+    color = Color.Transparent,
+    contentColor = if (enabled) ClawTheme.colors.primaryText else ClawTheme.colors.textSubtle,
   ) {
-    Icon(imageVector = Icons.Default.ArrowUpward, contentDescription = null, modifier = Modifier.size(18.dp))
+    Box(modifier = Modifier.padding(8.dp).background(if (enabled) ClawTheme.colors.primary else ClawTheme.colors.surfacePressed, CircleShape), contentAlignment = Alignment.Center) {
+      Icon(imageVector = Icons.Default.ArrowUpward, contentDescription = nativeString("Send"), modifier = Modifier.size(20.dp))
+    }
   }
 }
 

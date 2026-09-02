@@ -485,6 +485,36 @@ class AppearancePreferenceRuntimeTest {
     }
 
   @Test
+  fun readOnlyLocalEditKeepsAnotherProfilesQueuedThemeAfterRecreation() =
+    runBlocking {
+      withAppearanceGateway {
+        connect(profileId = "profile-a")
+        disconnect()
+        viewModel().setAppearanceThemeFamily(AppearanceThemeFamily.Dash)
+        val profileA = profileScope("profile-a")
+        val pending = mapOf("ui.theme" to "dash")
+        assertEquals(pending, prefs.pendingAppearancePreferenceEntries(profileA))
+
+        connect(profileId = "profile-b", scopes = listOf("operator.read"))
+        viewModel().setAppearanceThemeFamily(AppearanceThemeFamily.Rose)
+        recreateOffline()
+
+        assertTrue(writes.isEmpty())
+        assertEquals(pending, prefs.pendingAppearancePreferenceEntries(profileA))
+        assertEquals(AppearanceThemeFamily.Rose, prefs.appearanceThemeFamily.value)
+        assertTrue(prefs.isAppearancePreferenceLocalOnly("ui.theme"))
+
+        connect(profileId = "profile-a")
+        refresh()
+
+        assertEquals(listOf("profile-a" to "dash"), writes.map { it.profileId to it.entry("ui.theme") })
+        assertTrue(prefs.pendingAppearancePreferenceEntries(profileA).isEmpty())
+        assertEquals(AppearanceThemeFamily.Rose, prefs.appearanceThemeFamily.value)
+        assertTrue(prefs.isAppearancePreferenceLocalOnly("ui.theme"))
+      }
+    }
+
+  @Test
   fun recreatedRuntimeKeepsOfflineReadOnlyEditsDeviceLocal() =
     runBlocking {
       withAppearanceGateway {
@@ -788,6 +818,12 @@ private class AppearanceGatewayFixture(
       runtime.serverName.first { it == "appearance-$number" }
       if (waitForBranding) brandingFinished.first { it >= number }
     }
+  }
+
+  suspend fun disconnect() {
+    runtime.disconnect()
+    session.disconnectAndJoin()
+    connected = false
   }
 
   suspend fun recreateOffline() {

@@ -1,10 +1,13 @@
 package ai.openclaw.app.chat
 
-import kotlinx.coroutines.CancellationException
+import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.yield
 import kotlinx.serialization.json.JsonNull
@@ -19,18 +22,21 @@ import org.junit.Test
 @OptIn(ExperimentalCoroutinesApi::class)
 class ChatControllerPermissionSelectionTest {
   private val json = chatControllerTestJson
+  private val permissionCapabilities = setOf("session-settings-contract", "session-settings-cas-v1")
 
   @Test
   fun selectionUsesSessionPatchAndTracksExplicitDefaultEvents() =
     runTest {
       val patches = mutableListOf<String>()
-      var sessionRow = """{"key":"main","permissionMode":"guarded","permissionModePending":false}"""
+      var sessionRow = """{"key":"main","sessionId":"permission-session","permissionMode":"guarded","permissionModePending":false}"""
       val controller =
         createScriptedChatController {
+          gatewayAdvertisesMethod = { it == "sessions.patch" }
+          gatewayAdvertisesCapability = permissionCapabilities::contains
           respond("sessions.list") { """{"sessions":[$sessionRow]}""" }
           respond("sessions.patch") { paramsJson ->
             patches += paramsJson.orEmpty()
-            sessionRow = """{"key":"main","permissionMode":"full","permissionModePending":false}"""
+            sessionRow = """{"key":"main","sessionId":"permission-session","permissionMode":"full","permissionModePending":false}"""
             "{}"
           }
         }
@@ -53,6 +59,8 @@ class ChatControllerPermissionSelectionTest {
       )
       val params = json.parseToJsonElement(patches.single()) as JsonObject
       assertEquals("full", (params["permissionMode"] as JsonPrimitive).content)
+      assertEquals(JsonPrimitive("permission-session"), params["expectedSessionId"])
+      assertEquals(JsonPrimitive("guarded"), params["expectedPermissionMode"])
       assertEquals(
         ChatPermissionMode.Full,
         controller.sessions.value
@@ -78,6 +86,159 @@ class ChatControllerPermissionSelectionTest {
     }
 
   @Test
+  fun permissionSelectionRequiresTheSettingsContractWithoutBlockingOlderSettings() =
+    runTest {
+      for (capabilities in listOf(emptySet(), setOf("session-settings-contract"), setOf("session-settings-cas-v1"))) {
+        val (controller, requests) =
+          chatControllerTestSetup {
+            gatewayAdvertisesMethod = { it == "sessions.patch" }
+            gatewayAdvertisesCapability = capabilities::contains
+            respond("sessions.list", """{"sessions":[{"key":"main","sessionId":"permission-session","permissionMode":"guarded"}]}""")
+          }
+        controller.refreshSessions()
+        advanceUntilIdle()
+
+        assertFalse(controller.setSessionPermissionModeAwait("main", ChatPermissionMode.Workspace))
+        assertFalse(controller.errorText.value.isNullOrBlank())
+        assertTrue(controller.pendingSessionSettingsKeys.value.isEmpty())
+        assertFalse(requests.any { it.first == "sessions.patch" })
+
+        assertTrue(controller.setSessionModelAwait("main", "synthetic/plain"))
+        controller.setThinkingLevel("high")
+        controller.setSessionFastMode("main", enabled = true)
+        advanceUntilIdle()
+
+        val patches =
+          requests.filter { it.first == "sessions.patch" }.map {
+            json.parseToJsonElement(it.second.orEmpty()) as JsonObject
+          }
+        assertEquals(listOf("model", "thinkingLevel", "fastMode"), patches.map { (it.keys - setOf("key", "agentId")).single() })
+        assertEquals("synthetic/plain", controller.selectedModelRef.value)
+        assertEquals("high", controller.thinkingLevel.value)
+        assertEquals(
+          ChatFastMode.On,
+          controller.sessions.value
+            .single()
+            .fastMode,
+        )
+      }
+    }
+
+  @Test
+  fun permissionSelectionRequiresAnAdvertisedPatchMethodAndDurableIdentity() =
+    runTest {
+      for ((patchAdvertised, sessionId) in listOf(false to "permission-session", null to "permission-session", true to "", true to " ")) {
+        val (controller, requests) =
+          chatControllerTestSetup {
+            gatewayAdvertisesMethod = { if (it == "sessions.patch") patchAdvertised else null }
+            gatewayAdvertisesCapability = permissionCapabilities::contains
+            respond("sessions.list", """{"sessions":[{"key":"main","sessionId":"$sessionId","permissionMode":"guarded"}]}""")
+          }
+        controller.refreshSessions()
+        advanceUntilIdle()
+
+        assertFalse(controller.setSessionPermissionModeAwait("main", ChatPermissionMode.Workspace))
+        assertFalse(controller.errorText.value.isNullOrBlank())
+        assertFalse(requests.any { it.first == "sessions.patch" })
+        assertTrue(controller.pendingSessionSettingsKeys.value.isEmpty())
+        assertEquals(
+          ChatPermissionMode.Guarded,
+          controller.sessions.value
+            .single()
+            .permissionMode,
+        )
+      }
+    }
+
+  @Test
+  fun permissionSelectionSendsAnExplicitNullExpectationForInheritedPermissions() =
+    runTest {
+      val (controller, requests) =
+        chatControllerTestSetup {
+          gatewayAdvertisesMethod = { it == "sessions.patch" }
+          gatewayAdvertisesCapability = permissionCapabilities::contains
+          respond("sessions.list", """{"sessions":[{"key":"main","sessionId":"permission-session","permissionMode":null}]}""")
+        }
+      controller.refreshSessions()
+      advanceUntilIdle()
+
+      assertTrue(controller.setSessionPermissionModeAwait("main", ChatPermissionMode.Workspace))
+
+      val params = json.parseToJsonElement(requests.single { it.first == "sessions.patch" }.second.orEmpty()) as JsonObject
+      assertEquals(JsonPrimitive("permission-session"), params["expectedSessionId"])
+      assertEquals(JsonNull, params["expectedPermissionMode"])
+      assertEquals(
+        ChatPermissionMode.Workspace,
+        controller.sessions.value
+          .single()
+          .permissionMode,
+      )
+    }
+
+  @Test
+  fun queuedPermissionSelectionDoesNotCrossASessionReset() =
+    runTest {
+      val patchStarted = CompletableDeferred<Unit>()
+      val releasePatch = CompletableDeferred<Unit>()
+      var sessionId = "permission-session"
+      val (controller, requests) =
+        chatControllerTestSetup {
+          gatewayAdvertisesMethod = { it == "sessions.patch" }
+          gatewayAdvertisesCapability = permissionCapabilities::contains
+          respond("sessions.list") {
+            """{"sessions":[{"key":"main","sessionId":"$sessionId","permissionMode":"guarded"}]}"""
+          }
+          respond("chat.history") {
+            """{"sessionId":"$sessionId","messages":[],"sessionInfo":{"key":"main","sessionId":"$sessionId","permissionMode":"guarded"}}"""
+          }
+          respond("sessions.patch") { paramsJson ->
+            val params = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
+            if ("model" in params) {
+              patchStarted.complete(Unit)
+              releasePatch.await()
+            }
+            "{}"
+          }
+        }
+      controller.refreshSessions()
+      advanceUntilIdle()
+      val predecessor = async { controller.setSessionModelAwait("main", "synthetic/plain") }
+      patchStarted.await()
+      val permission = async { controller.setSessionPermissionModeAwait("main", ChatPermissionMode.Workspace) }
+      runCurrent()
+
+      try {
+        sessionId = "replacement-session"
+        controller.handleGatewayEvent(
+          "sessions.changed",
+          """{"sessionKey":"main","agentId":"main","reason":"reset","session":{"key":"main","sessionId":"$sessionId","permissionMode":"guarded"}}""",
+        )
+        releasePatch.complete(Unit)
+        assertTrue(predecessor.await())
+        assertFalse(permission.await())
+        advanceUntilIdle()
+
+        assertEquals(1, requests.count { it.first == "sessions.patch" })
+        assertEquals(
+          ChatPermissionMode.Guarded,
+          controller.sessions.value
+            .single()
+            .permissionMode,
+        )
+        assertEquals(
+          sessionId,
+          controller.sessions.value
+            .single()
+            .sessionId,
+        )
+        assertTrue(controller.pendingSessionSettingsKeys.value.isEmpty())
+      } finally {
+        releasePatch.complete(Unit)
+        advanceUntilIdle()
+      }
+    }
+
+  @Test
   fun successfulPermissionResponsePreservesNewerCanonicalModeAndPendingState() =
     runTest {
       val patchStarted = CompletableDeferred<Unit>()
@@ -85,6 +246,8 @@ class ChatControllerPermissionSelectionTest {
       var sessionRow = """{"key":"main","agentId":"main","sessionId":"permission-session","permissionMode":"guarded","permissionModePending":false}"""
       val controller =
         createScriptedChatController {
+          gatewayAdvertisesMethod = { it == "sessions.patch" }
+          gatewayAdvertisesCapability = permissionCapabilities::contains
           respond("sessions.list") { """{"sessions":[$sessionRow]}""" }
           respond("chat.history") { """{"sessionId":"permission-session","messages":[],"sessionInfo":$sessionRow}""" }
           respond("sessions.patch") {
@@ -323,7 +486,12 @@ class ChatControllerPermissionSelectionTest {
         var agentId = "main"
         var listRequests = 0
         val controller =
-          createChatController(cacheScope = { gatewayScope }, currentDefaultAgentId = { agentId }) { method, _ ->
+          createChatController(
+            cacheScope = { gatewayScope },
+            currentDefaultAgentId = { agentId },
+            gatewayAdvertisesMethod = { it == "sessions.patch" },
+            gatewayAdvertisesCapability = permissionCapabilities::contains,
+          ) { method, _ ->
             when (method) {
               "sessions.patch" -> {
                 patchStarted.complete(Unit)
@@ -333,6 +501,11 @@ class ChatControllerPermissionSelectionTest {
             }
             "{}"
           }
+        controller.handleGatewayEvent(
+          "sessions.changed",
+          """{"sessionKey":"main","agentId":"main","session":{"key":"main","sessionId":"permission-session","permissionMode":"guarded"}}""",
+        )
+        val originalSessions = controller.sessions.value
         val patch = async { controller.setSessionPermissionModeAwait("main", ChatPermissionMode.Workspace) }
         patchStarted.await()
         if (replaceGateway) {
@@ -346,23 +519,89 @@ class ChatControllerPermissionSelectionTest {
         assertTrue(patch.await())
         advanceUntilIdle()
         assertEquals(0, listRequests)
-        assertTrue(controller.sessions.value.isEmpty())
+        assertEquals(if (replaceGateway) emptyList() else originalSessions, controller.sessions.value)
       }
     }
 
   @Test
-  fun permissionWritePropagatesCancellation() =
+  fun lostPermissionResponseReconcilesWithoutAnEventBeforeSending() =
     runTest {
-      val controller =
-        createScriptedChatController {
-          respond("sessions.patch") { throw CancellationException("Write cancelled") }
-        }
-
-      val result = runCatching { controller.setSessionPermissionModeAwait("main", ChatPermissionMode.Workspace) }
-
-      assertTrue(result.exceptionOrNull() is CancellationException)
-      assertTrue(controller.pendingSessionSettingsKeys.value.isEmpty())
+      verifyUnacknowledgedPermissionWrite(cancelWrite = false)
     }
+
+  @Test
+  fun cancelledDispatchedPermissionWriteReconcilesWithoutAnEventBeforeSending() =
+    runTest {
+      verifyUnacknowledgedPermissionWrite(cancelWrite = true)
+    }
+
+  private suspend fun TestScope.verifyUnacknowledgedPermissionWrite(cancelWrite: Boolean) {
+    val patchStarted = CompletableDeferred<Unit>()
+    val releasePatch = CompletableDeferred<Unit>()
+    val releaseHistory = CompletableDeferred<Unit>()
+    var mode = "guarded"
+    val (controller, requests) =
+      chatControllerTestSetup {
+        gatewayAdvertisesMethod = { it == "sessions.patch" }
+        gatewayAdvertisesCapability = permissionCapabilities::contains
+        respond("sessions.list") {
+          """{"sessions":[{"key":"main","sessionId":"permission-session","permissionMode":"$mode"}]}"""
+        }
+        respond("sessions.patch") {
+          mode = "workspace"
+          patchStarted.complete(Unit)
+          releasePatch.await()
+          throw GatewayRequestOutcomeUnknown("Patch response lost")
+        }
+        respond("chat.history") {
+          releaseHistory.await()
+          """{"sessionId":"permission-session","messages":[],"sessionInfo":{"key":"main","sessionId":"permission-session","permissionMode":"$mode"}}"""
+        }
+        respond("chat.send", """{"runId":"run-ok","status":"ok"}""")
+      }
+    controller.handleGatewayEvent("health", null)
+    controller.refreshSessions()
+    advanceUntilIdle()
+    val patch = async { controller.setSessionPermissionModeAwait("main", ChatPermissionMode.Workspace) }
+
+    try {
+      runCurrent()
+      assertTrue(patchStarted.isCompleted)
+      if (cancelWrite) {
+        patch.cancelAndJoin()
+      } else {
+        releasePatch.complete(Unit)
+        assertFalse(patch.await())
+      }
+      val send = async { controller.sendMessageAwaitAcceptance("keep this draft", "off", emptyList()) }
+      runCurrent()
+
+      assertEquals(setOf("main"), controller.pendingSessionSettingsKeys.value)
+      assertFalse(requests.any { it.first == "chat.send" })
+      val refresh = json.parseToJsonElement(requests.single { it.first == "chat.history" }.second.orEmpty()) as JsonObject
+      assertEquals(JsonPrimitive("main"), refresh["sessionKey"])
+      assertEquals(JsonPrimitive("main"), refresh["agentId"])
+      assertEquals(JsonPrimitive(1), refresh["limit"])
+
+      releaseHistory.complete(Unit)
+      advanceUntilIdle()
+      assertFalse(send.await())
+      assertEquals(
+        ChatPermissionMode.Workspace,
+        controller.sessions.value
+          .single()
+          .permissionMode,
+      )
+      assertTrue(controller.pendingSessionSettingsKeys.value.isEmpty())
+      assertTrue(controller.sendMessageAwaitAcceptance("keep this draft", "off", emptyList()))
+      assertEquals(1, requests.count { it.first == "chat.send" })
+    } finally {
+      releasePatch.complete(Unit)
+      releaseHistory.complete(Unit)
+      patch.cancelAndJoin()
+      advanceUntilIdle()
+    }
+  }
 
   @Test
   fun fastModeSelectionParsesBooleanSessionAndResolvedState() =
@@ -412,12 +651,11 @@ class ChatControllerPermissionSelectionTest {
     runTest {
       val patchStarted = CompletableDeferred<Unit>()
       val releasePatch = CompletableDeferred<Unit>()
+      val sessionRow = """{"key":"main","sessionId":"fast-session","fastMode":false,"effectiveFastMode":false}"""
       val controller =
         createScriptedChatController {
-          respond(
-            "sessions.list",
-            """{"sessions":[{"key":"main","fastMode":"off","effectiveFastMode":"off"}]}""",
-          )
+          respond("sessions.list", """{"sessions":[$sessionRow]}""")
+          respond("chat.history", """{"sessionId":"fast-session","messages":[],"sessionInfo":$sessionRow}""")
           respond("sessions.patch") {
             patchStarted.complete(Unit)
             releasePatch.await()
@@ -463,7 +701,7 @@ class ChatControllerPermissionSelectionTest {
             storedFastMode = true
             patchStarted.complete(Unit)
             releasePatch.await()
-            throw IllegalStateException("Patch response lost")
+            throw GatewayRequestOutcomeUnknown("Patch response lost")
           }
         }
       controller.refreshSessions()
@@ -500,15 +738,19 @@ class ChatControllerPermissionSelectionTest {
       val releaseRefresh = CompletableDeferred<Unit>()
       var sessionRow = """{"key":"$sessionKey","sessionId":"conversation-id","permissionMode":"guarded","permissionModePending":false}"""
       var lookupUnavailable = false
+      var omitSessionFromList = false
       var settingsReads = 0
       val deletions = mutableListOf<ChatSessionDeletion>()
       val connectionScope = ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1)
       val gateway =
         ScriptedGateway(json).apply {
           respond("sessions.list") {
-            if (lookupUnavailable) """{"sessions":[]}""" else """{"sessions":[$sessionRow]}"""
+            if (lookupUnavailable || omitSessionFromList) """{"sessions":[]}""" else """{"sessions":[$sessionRow]}"""
           }
-          respond("chat.history") {
+          respond("chat.history") { paramsJson ->
+            val params = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
+            assertEquals(JsonPrimitive(sessionKey), params["sessionKey"])
+            assertEquals(JsonPrimitive("main"), params["agentId"])
             settingsReads += 1
             refreshStarted.complete(Unit)
             releaseRefresh.await()
@@ -529,6 +771,8 @@ class ChatControllerPermissionSelectionTest {
       val controller =
         createChatController(
           cacheScope = { connectionScope },
+          gatewayAdvertisesMethod = { it == "sessions.patch" },
+          gatewayAdvertisesCapability = permissionCapabilities::contains,
           onSessionDeleted = deletions::add,
           requestGateway = gateway::request,
         )
@@ -583,6 +827,31 @@ class ChatControllerPermissionSelectionTest {
       assertNull(controller.errorText.value)
       assertTrue(deletions.isEmpty())
       assertEquals(2, settingsReads)
+
+      sessionRow = """{"key":"$sessionKey","sessionId":"conversation-id","permissionMode":"workspace","permissionModePending":false,"fastMode":true,"effectiveFastMode":true}"""
+      controller.load(sessionKey)
+      advanceUntilIdle()
+      assertEquals(
+        ChatFastMode.On,
+        controller.sessions.value
+          .single()
+          .fastMode,
+      )
+      val previousSettingsReads = settingsReads
+
+      omitSessionFromList = true
+      sessionRow = """{"key":"$sessionKey","sessionId":"conversation-id","permissionMode":"workspace","permissionModePending":false,"effectiveFastMode":false}"""
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """{"sessionKey":"$sessionKey","agentId":"main","reason":"patch","ts":2}""",
+      )
+      advanceUntilIdle()
+
+      val inherited = controller.sessions.value.single()
+      assertNull(inherited.fastMode)
+      assertEquals(ChatFastMode.Off, inherited.effectiveFastMode)
+      assertEquals(previousSettingsReads + 1, settingsReads)
+      assertTrue(controller.pendingSessionSettingsKeys.value.isEmpty())
     }
 
   @Test
@@ -793,17 +1062,23 @@ class ChatControllerPermissionSelectionTest {
       val patches = mutableListOf<String>()
       val controller =
         createScriptedChatController {
+          gatewayAdvertisesMethod = { it == "sessions.patch" }
+          gatewayAdvertisesCapability = permissionCapabilities::contains
           respond("sessions.patch") { paramsJson ->
             patches += paramsJson.orEmpty()
             "{}"
           }
-          respond("sessions.list", """{"sessions":[{"key":"main","permissionModePending":false}]}""")
+          respond("sessions.list", """{"sessions":[{"key":"main","sessionId":"permission-session","permissionMode":"guarded","permissionModePending":false}]}""")
         }
+      controller.refreshSessions()
+      advanceUntilIdle()
 
       assertTrue(controller.setSessionPermissionModeAwait("main", null))
 
       val params = json.parseToJsonElement(patches.single()) as JsonObject
       assertTrue(params["permissionMode"] is JsonNull)
+      assertEquals(JsonPrimitive("permission-session"), params["expectedSessionId"])
+      assertEquals(JsonPrimitive("guarded"), params["expectedPermissionMode"])
       assertNull(
         controller.sessions.value
           .single()
@@ -818,7 +1093,10 @@ class ChatControllerPermissionSelectionTest {
       val releasePatch = CompletableDeferred<Unit>()
       val requests = mutableListOf<String>()
       val controller =
-        createChatController { method, _ ->
+        createChatController(
+          gatewayAdvertisesMethod = { it == "sessions.patch" },
+          gatewayAdvertisesCapability = permissionCapabilities::contains,
+        ) { method, _ ->
           requests += method
           when (method) {
             "sessions.patch" -> {
@@ -831,6 +1109,10 @@ class ChatControllerPermissionSelectionTest {
           }
         }
       controller.handleGatewayEvent("health", null)
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """{"sessionKey":"main","agentId":"main","session":{"key":"main","sessionId":"permission-session","permissionMode":"guarded"}}""",
+      )
 
       controller.setSessionPermissionMode("main", ChatPermissionMode.Workspace)
       patchStarted.await()

@@ -9,13 +9,15 @@ import android.os.Bundle
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
+import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.outlined.MicNone
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -432,13 +434,21 @@ internal fun ChatComposerMicButton(
         ),
     shape = CircleShape,
     color = Color.Transparent,
-    contentColor = if (interactionEnabled) ClawTheme.colors.textMuted else ClawTheme.colors.textSubtle,
+    contentColor =
+      when {
+        dictationActive -> ClawTheme.colors.primaryText
+        dictationEnabled || voiceNoteEnabled -> ClawTheme.colors.textMuted
+        else -> ClawTheme.colors.textSubtle
+      },
   ) {
-    Box(contentAlignment = Alignment.Center) {
+    Box(
+      modifier = Modifier.padding(8.dp).background(if (dictationActive) ClawTheme.colors.primary else Color.Transparent, CircleShape),
+      contentAlignment = Alignment.Center,
+    ) {
       Icon(
-        imageVector = if (dictationActive) Icons.Default.Stop else Icons.Default.Mic,
+        imageVector = if (dictationActive) Icons.Default.Stop else Icons.Outlined.MicNone,
         contentDescription = null,
-        modifier = Modifier.size(17.dp),
+        modifier = Modifier.size(20.dp),
       )
     }
   }

@@ -473,53 +473,69 @@ class SecurePrefsTest {
   }
 
   @Test
-  fun deviceLocalAppearanceEditCancelsPendingAndSurvivesRestart() {
-    val context = RuntimeEnvironment.getApplication()
-    context
-      .getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
-      .edit()
-      .clear()
-      .commit()
-    val securePrefs =
-      context.getSharedPreferences("secure-prefs-test-${UUID.randomUUID()}", Context.MODE_PRIVATE)
-    val scope = AppearancePreferenceScope("gateway-a", "profile-a")
-    val prefs = SecurePrefs(context, securePrefs)
+  fun deviceLocalAppearanceEditsSurvivePendingOwnerAcknowledgementAndRestart() {
+    for ((queuedAccent, localAccent) in listOf(null to 0xFF5A9BEFL, 0xFF14B8A6L to null)) {
+      val context = RuntimeEnvironment.getApplication()
+      context
+        .getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
+        .edit()
+        .clear()
+        .commit()
+      val securePrefs =
+        context.getSharedPreferences("secure-prefs-test-${UUID.randomUUID()}", Context.MODE_PRIVATE)
+      val scope = AppearancePreferenceScope("gateway-a", "profile-a")
+      val prefs = SecurePrefs(context, securePrefs)
 
-    prefs.setAppearanceThemeFamily(
-      AppearanceThemeFamily.Tide,
-      pendingSync = true,
-      pendingScope = scope,
-    )
-    val revisionBeforeLocalEdit = prefs.appearancePreferenceRevision("ui.theme")
-    prefs.setAppearanceThemeFamily(
-      AppearanceThemeFamily.Dash,
-      retainLocal = true,
-    )
+      prefs.setAppearanceThemeFamily(
+        AppearanceThemeFamily.Dash,
+        pendingSync = true,
+        pendingScope = scope,
+      )
+      prefs.setAppearanceThemeMode(AppearanceThemeMode.Dark, pendingSync = true, pendingScope = scope)
+      prefs.setAppearanceAccentArgb(queuedAccent, pendingSync = true, pendingScope = scope)
+      val pending = mapOf("ui.theme" to "dash", "ui.themeMode" to "dark", "ui.accent" to if (queuedAccent == null) null else "#14b8a6")
+      val revisionBeforeLocalEdit = prefs.appearancePreferenceRevision("ui.theme")
+      prefs.setAppearanceThemeFamily(
+        AppearanceThemeFamily.Rose,
+        retainLocal = true,
+      )
+      prefs.setAppearanceThemeMode(AppearanceThemeMode.Light, retainLocal = true)
+      prefs.setAppearanceAccentArgb(localAccent, retainLocal = true)
 
-    assertFalse(
-      prefs.applyAppearanceThemeFamilyFromGateway(
-        family = AppearanceThemeFamily.Claw,
-        expectedRevision = revisionBeforeLocalEdit,
-      ),
-    )
-    assertEquals(AppearanceThemeFamily.Dash, prefs.appearanceThemeFamily.value)
-    assertTrue(prefs.pendingAppearancePreferenceEntries(scope).isEmpty())
-    assertTrue(prefs.isAppearancePreferenceLocalOnly("ui.theme"))
-    val restored = SecurePrefs(context, securePrefs)
-    assertEquals(AppearanceThemeFamily.Dash, restored.appearanceThemeFamily.value)
-    assertTrue(restored.isAppearancePreferenceLocalOnly("ui.theme"))
+      assertFalse(
+        prefs.applyAppearanceThemeFamilyFromGateway(
+          family = AppearanceThemeFamily.Claw,
+          expectedRevision = revisionBeforeLocalEdit,
+        ),
+      )
+      val restored = SecurePrefs(context, securePrefs)
+      assertEquals(pending, restored.pendingAppearancePreferenceEntries(scope))
+      for ((key, value) in pending) {
+        assertTrue(restored.isAppearancePreferenceLocalOnly(key))
+        assertTrue(restored.completePendingAppearancePreferenceWrite(key, value, scope))
+        assertFalse(restored.completePendingAppearancePreferenceWrite(key, value, scope))
+      }
+      val reloaded = SecurePrefs(context, securePrefs)
+      assertEquals(AppearanceThemeFamily.Rose, reloaded.appearanceThemeFamily.value)
+      assertEquals(AppearanceThemeMode.Light, reloaded.appearanceThemeMode.value)
+      assertEquals(localAccent, reloaded.appearanceAccentArgb.value)
+      assertTrue(reloaded.pendingAppearancePreferenceEntries(scope).isEmpty())
+      pending.keys.forEach { key -> assertTrue(reloaded.isAppearancePreferenceLocalOnly(key)) }
 
-    restored.setAppearanceThemeFamily(
-      AppearanceThemeFamily.Claw,
-      pendingSync = true,
-      pendingScope = scope,
-    )
+      reloaded.setAppearanceThemeFamily(
+        AppearanceThemeFamily.Claw,
+        pendingSync = true,
+        pendingScope = scope,
+      )
 
-    assertFalse(restored.isAppearancePreferenceLocalOnly("ui.theme"))
-    assertEquals(
-      AppearanceThemeFamily.Claw.rawValue,
-      restored.pendingAppearancePreferenceEntries(scope)["ui.theme"],
-    )
+      assertFalse(reloaded.isAppearancePreferenceLocalOnly("ui.theme"))
+      assertEquals(
+        AppearanceThemeFamily.Claw.rawValue,
+        reloaded.pendingAppearancePreferenceEntries(scope)["ui.theme"],
+      )
+      assertTrue(reloaded.isAppearancePreferenceLocalOnly("ui.themeMode"))
+      assertTrue(reloaded.isAppearancePreferenceLocalOnly("ui.accent"))
+    }
   }
 
   @Test

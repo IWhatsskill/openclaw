@@ -780,26 +780,8 @@ class SecurePrefs(
     pendingScope: AppearancePreferenceScope? = null,
     retainLocal: Boolean = false,
   ) {
-    require(!pendingSync || !retainLocal)
-    val key = "ui.themeMode"
-    val nextPending =
-      when {
-        pendingSync -> enqueuePendingAppearancePreference(key, mode.rawValue, pendingScope)
-        retainLocal -> pendingAppearancePreferences.filterNot { it.key == key }
-        else -> pendingAppearancePreferences
-      }
-    val nextLocalOnly = updatedLocalOnlyAppearancePreferenceKeys(key, pendingSync, retainLocal)
-    plainPrefs.edit {
+    editAppearancePreference("ui.themeMode", mode.rawValue, pendingSync, pendingScope, retainLocal) {
       putString(appearanceThemeModeKey, mode.rawValue)
-      if (pendingSync || retainLocal) {
-        persistPendingAppearancePreferences(this, nextPending)
-        persistLocalOnlyAppearancePreferenceKeys(this, nextLocalOnly)
-      }
-    }
-    if (pendingSync || retainLocal) {
-      pendingAppearancePreferences = nextPending
-      localOnlyAppearancePreferenceKeys = nextLocalOnly
-      incrementAppearancePreferenceRevision(key)
     }
     _appearanceThemeMode.value = mode
   }
@@ -811,26 +793,8 @@ class SecurePrefs(
     pendingScope: AppearancePreferenceScope? = null,
     retainLocal: Boolean = false,
   ) {
-    require(!pendingSync || !retainLocal)
-    val key = "ui.theme"
-    val nextPending =
-      when {
-        pendingSync -> enqueuePendingAppearancePreference(key, family.rawValue, pendingScope)
-        retainLocal -> pendingAppearancePreferences.filterNot { it.key == key }
-        else -> pendingAppearancePreferences
-      }
-    val nextLocalOnly = updatedLocalOnlyAppearancePreferenceKeys(key, pendingSync, retainLocal)
-    plainPrefs.edit {
+    editAppearancePreference("ui.theme", family.rawValue, pendingSync, pendingScope, retainLocal) {
       putString(appearanceThemeFamilyKey, family.rawValue)
-      if (pendingSync || retainLocal) {
-        persistPendingAppearancePreferences(this, nextPending)
-        persistLocalOnlyAppearancePreferenceKeys(this, nextLocalOnly)
-      }
-    }
-    if (pendingSync || retainLocal) {
-      pendingAppearancePreferences = nextPending
-      localOnlyAppearancePreferenceKeys = nextLocalOnly
-      incrementAppearancePreferenceRevision(key)
     }
     _appearanceThemeFamily.value = family
   }
@@ -842,22 +806,31 @@ class SecurePrefs(
     pendingScope: AppearancePreferenceScope? = null,
     retainLocal: Boolean = false,
   ) {
-    require(!pendingSync || !retainLocal)
-    val key = "ui.accent"
-    val value = appearanceAccentPreferenceValue(argb)
-    val nextPending =
-      when {
-        pendingSync -> enqueuePendingAppearancePreference(key, value, pendingScope)
-        retainLocal -> pendingAppearancePreferences.filterNot { it.key == key }
-        else -> pendingAppearancePreferences
-      }
-    val nextLocalOnly = updatedLocalOnlyAppearancePreferenceKeys(key, pendingSync, retainLocal)
-    plainPrefs.edit {
+    editAppearancePreference("ui.accent", appearanceAccentPreferenceValue(argb), pendingSync, pendingScope, retainLocal) {
       if (argb == null) {
         remove(appearanceAccentArgbKey)
       } else {
         putLong(appearanceAccentArgbKey, argb)
       }
+    }
+    _appearanceAccentArgb.value = argb
+  }
+
+  private fun editAppearancePreference(
+    key: String,
+    value: String?,
+    pendingSync: Boolean,
+    pendingScope: AppearancePreferenceScope?,
+    retainLocal: Boolean,
+    writeValue: SharedPreferences.Editor.() -> Unit,
+  ) {
+    require(!pendingSync || !retainLocal)
+    // Device-local edits have no profile owner and cannot retire any profile's queued writes.
+    val nextPending =
+      if (pendingSync) enqueuePendingAppearancePreference(key, value, pendingScope) else pendingAppearancePreferences
+    val nextLocalOnly = updatedLocalOnlyAppearancePreferenceKeys(key, pendingSync, retainLocal)
+    plainPrefs.edit {
+      writeValue()
       if (pendingSync || retainLocal) {
         persistPendingAppearancePreferences(this, nextPending)
         persistLocalOnlyAppearancePreferenceKeys(this, nextLocalOnly)
@@ -868,7 +841,6 @@ class SecurePrefs(
       localOnlyAppearancePreferenceKeys = nextLocalOnly
       incrementAppearancePreferenceRevision(key)
     }
-    _appearanceAccentArgb.value = argb
   }
 
   @Synchronized
@@ -950,26 +922,28 @@ class SecurePrefs(
       pendingAppearancePreferences.filterNot { preference ->
         preference.key == key && preference.matches(scope)
       }
+    // A profile acknowledgement retires its queue entry, not a newer device-local choice.
+    val applyLocally = key !in localOnlyAppearancePreferenceKeys
     when (key) {
       "ui.theme" -> {
         val family =
           AppearanceThemeFamily.entries.firstOrNull { it.rawValue == expectedValue }
             ?: return false
         plainPrefs.edit {
-          putString(appearanceThemeFamilyKey, family.rawValue)
+          if (applyLocally) putString(appearanceThemeFamilyKey, family.rawValue)
           persistPendingAppearancePreferences(this, next)
         }
-        _appearanceThemeFamily.value = family
+        if (applyLocally) _appearanceThemeFamily.value = family
       }
       "ui.themeMode" -> {
         val mode =
           AppearanceThemeMode.entries.firstOrNull { it.rawValue == expectedValue }
             ?: return false
         plainPrefs.edit {
-          putString(appearanceThemeModeKey, mode.rawValue)
+          if (applyLocally) putString(appearanceThemeModeKey, mode.rawValue)
           persistPendingAppearancePreferences(this, next)
         }
-        _appearanceThemeMode.value = mode
+        if (applyLocally) _appearanceThemeMode.value = mode
       }
       "ui.accent" -> {
         val argb =
@@ -978,14 +952,16 @@ class SecurePrefs(
             else -> parseHexColorArgb(expectedValue) ?: return false
           }
         plainPrefs.edit {
-          if (argb == null) {
-            remove(appearanceAccentArgbKey)
-          } else {
-            putLong(appearanceAccentArgbKey, argb)
+          if (applyLocally) {
+            if (argb == null) {
+              remove(appearanceAccentArgbKey)
+            } else {
+              putLong(appearanceAccentArgbKey, argb)
+            }
           }
           persistPendingAppearancePreferences(this, next)
         }
-        _appearanceAccentArgb.value = argb
+        if (applyLocally) _appearanceAccentArgb.value = argb
       }
       else -> return false
     }

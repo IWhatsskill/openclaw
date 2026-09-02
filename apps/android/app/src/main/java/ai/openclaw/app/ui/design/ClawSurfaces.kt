@@ -25,15 +25,14 @@ import androidx.compose.ui.unit.dp
 internal fun ClawPanel(
   modifier: Modifier = Modifier,
   contentPadding: PaddingValues = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
-  elevated: Boolean = false,
   content: @Composable () -> Unit,
 ) {
   Surface(
     modifier = modifier.fillMaxWidth(),
     shape = RoundedCornerShape(ClawTheme.radii.panel),
-    color = if (elevated) ClawTheme.colors.surfaceRaised else ClawTheme.colors.surface,
+    color = ClawTheme.colors.surface,
     contentColor = ClawTheme.colors.text,
-    border = BorderStroke(1.dp, if (elevated) ClawTheme.colors.borderStrong else ClawTheme.colors.border),
+    border = BorderStroke(1.dp, ClawTheme.colors.border),
   ) {
     Column(modifier = Modifier.padding(contentPadding)) {
       content()

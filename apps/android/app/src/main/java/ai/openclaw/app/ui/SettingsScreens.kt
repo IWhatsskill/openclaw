@@ -2861,13 +2861,13 @@ private fun CronJobFieldsPanel(rows: List<SettingsMetric>) {
             Text(
               text = row.value,
               style = ClawTheme.type.caption,
-              color = if (row.copyable) ClawTheme.colors.primary else ClawTheme.colors.text,
+              color = ClawTheme.colors.text,
               modifier = Modifier.weight(1f),
               maxLines = 3,
               overflow = TextOverflow.Ellipsis,
             )
             if (row.copyable) {
-              Icon(imageVector = Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(14.dp), tint = ClawTheme.colors.primary)
+              Icon(imageVector = Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(14.dp), tint = ClawTheme.colors.text)
             }
           }
           if (row.copyable) {

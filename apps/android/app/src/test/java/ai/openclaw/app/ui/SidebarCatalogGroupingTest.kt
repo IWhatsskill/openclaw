@@ -71,6 +71,7 @@ class SidebarCatalogGroupingTest {
                       entry("older", cwd = "C:\\work\\openclaw", recency = 10.0),
                       entry("newer", cwd = "C:\\work\\openclaw", recency = 20.0),
                       entry("other", cwd = null, recency = 30.0),
+                      entry("named-other", cwd = "/work/Other work", recency = 35.0),
                       entry("archived", cwd = "/work/hidden", recency = 40.0, archived = true),
                     ),
                 ),
@@ -84,7 +85,7 @@ class SidebarCatalogGroupingTest {
     assertEquals("Desktop", host.label)
     assertTrue(host.connected)
     assertTrue(host.canLoadMore)
-    assertEquals(listOf("openclaw", "Other work"), host.workspaces.map(SidebarCatalogWorkspace::label))
+    assertEquals(listOf("openclaw", "Other work", "Other work"), host.workspaces.map(SidebarCatalogWorkspace::label))
     assertEquals(
       listOf("newer", "older"),
       host.workspaces
@@ -477,7 +478,12 @@ class SidebarCatalogGroupingTest {
     val runtime = NodeRuntime(app, prefs, NodeRuntimeMode.ScreenshotFixture)
     val viewModel = MainViewModel(app, prefs, SavedStateHandle())
     val viewModels = ViewModelStore().apply { put("sidebar", viewModel) }
-    val adopted = entry("adopted", cwd = "/work/project", recency = 2.0).copy(name = "Native title")
+    val adopted =
+      entry("adopted", cwd = "/work/project", recency = 2.0).copy(
+        name = "Native title",
+        gitBranch = "topic/native",
+        status = "notLoaded",
+      )
     val liveSessions =
       mutableStateOf(
         listOf(
@@ -523,6 +529,8 @@ class SidebarCatalogGroupingTest {
       }
       composeRule.onNodeWithText("Codex").performScrollTo().performClick()
       composeRule.onNodeWithText("Native title").performScrollTo().assertIsDisplayed()
+      composeRule.onNodeWithText("notLoaded", substring = true).assertDoesNotExist()
+      composeRule.onNodeWithText("topic/native").assertIsDisplayed()
 
       composeRule.runOnIdle {
         liveSessions.value = liveSessions.value.map { it.copy(label = "Renamed in OpenClaw") }

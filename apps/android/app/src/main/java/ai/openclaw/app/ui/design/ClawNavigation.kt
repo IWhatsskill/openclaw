@@ -134,7 +134,7 @@ private fun ClawBottomNavItem(
     modifier = modifier.heightIn(min = ClawTheme.spacing.row),
     shape = RoundedCornerShape(ClawTheme.radii.control),
     color = if (selected) ClawTheme.colors.accentSoft else Color.Transparent,
-    contentColor = if (selected) ClawTheme.colors.accent else ClawTheme.colors.textMuted,
+    contentColor = if (selected) ClawTheme.colors.text else ClawTheme.colors.textMuted,
   ) {
     Column(
       modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp),

@@ -197,6 +197,98 @@ class ChatControllerCommandControlsTest {
     }
 
   @Test
+  fun lockedParentRejectsGenericForkAndLinkedNewChats() =
+    runTest {
+      for (action in listOf("fork", "new-chat", "worktree")) {
+        val (controller, requests) =
+          chatControllerTestSetup {
+            respond("sessions.create", """{"key":"agent:main:dashboard:child"}""")
+            respond(
+              "chat.history",
+              """{"sessionId":"locked-parent","messages":[],"sessionInfo":{"key":"main","agentId":"main","sessionId":"locked-parent","modelSelectionLocked":true,"agentRuntime":{"id":"codex","source":"session"}}}""",
+            )
+            respond("sessions.list", """{"sessions":[]}""")
+          }
+        controller.load("main")
+        runCurrent()
+
+        val accepted =
+          if (action == "fork") {
+            controller.forkSession("main", ownerAgentId = "main") != null
+          } else {
+            controller.startNewChatAwait(worktree = action == "worktree")
+          }
+
+        assertFalse("$action must not create a child of a locked parent", accepted)
+        assertTrue(requests.none { it.first == "sessions.create" })
+        assertTrue("The rejected action needs a visible explanation", !controller.errorText.value.isNullOrBlank())
+        assertEquals("main", controller.sessionKey.value)
+      }
+    }
+
+  @Test
+  fun parentActionsRecheckLockBeforeTransportEnqueue() =
+    runTest {
+      for (fork in listOf(false, true)) {
+        val transportStarted = CompletableDeferred<Unit>()
+        val releaseTransport = CompletableDeferred<Unit>()
+        val creates = mutableListOf<String?>()
+
+        suspend fun request(
+          method: String,
+          paramsJson: String?,
+          withEnqueue: (() -> Unit) -> Unit = { it() },
+        ): String {
+          if (method == "sessions.create") {
+            transportStarted.complete(Unit)
+            releaseTransport.await()
+          }
+          withEnqueue { if (method == "sessions.create") creates += paramsJson }
+          return when (method) {
+            "sessions.create" -> """{"key":"agent:main:dashboard:child"}"""
+            "chat.history" ->
+              """{"sessionId":"lineage-parent","messages":[],"sessionInfo":{"key":"main","agentId":"main","sessionId":"lineage-parent","modelSelectionLocked":false}}"""
+            "sessions.list" -> """{"sessions":[]}"""
+            else -> "{}"
+          }
+        }
+
+        val controller =
+          createChatController(
+            captureRequestLease = {
+              GatewaySession.RequestLease(endpointStableId = "") { method, paramsJson, _, withEnqueue ->
+                request(method, paramsJson, withEnqueue)
+              }
+            },
+          ) { method, paramsJson -> request(method, paramsJson) }
+        controller.load("main")
+        runCurrent()
+        val pending =
+          async {
+            if (fork) {
+              controller.forkSession("main", ownerAgentId = "main") != null
+            } else {
+              controller.startNewChatAwait(worktree = true)
+            }
+          }
+
+        try {
+          transportStarted.await()
+          controller.handleGatewayEvent(
+            "sessions.changed",
+            """{"sessionKey":"main","agentId":"main","phase":"message","session":{"key":"main","modelSelectionLocked":true,"agentRuntime":{"id":"codex","source":"session"}}}""",
+          )
+        } finally {
+          releaseTransport.complete(Unit)
+        }
+
+        assertFalse("A newly locked parent must reject fork=$fork before enqueue", pending.await())
+        assertTrue("No child-create request may reach the transport", creates.isEmpty())
+        assertEquals("main", controller.sessionKey.value)
+      }
+    }
+
+  @Test
   fun startNewChatRetriesWithoutParentLifecycleAgainstOlderGateway() =
     runTest {
       var createCalls = 0
@@ -237,12 +329,15 @@ class ChatControllerCommandControlsTest {
     }
 
   @Test
-  fun catalogNewSessionCreatesRootSessionForSelectedAgent() =
+  fun catalogNewSessionCreatesRootSessionFromLockedParentForSelectedAgent() =
     runTest {
       val (controller, requests) =
         chatControllerTestSetup {
           respond("sessions.create", """{"ok":true,"key":"agent:main:dashboard:catalog"}""")
-          respond("chat.history", """{"sessionId":"catalog-session","messages":[]}""")
+          respond(
+            "chat.history",
+            """{"sessionId":"catalog-session","messages":[],"sessionInfo":{"key":"main","agentId":"main","sessionId":"catalog-session","modelSelectionLocked":true,"agentRuntime":{"id":"codex","source":"session"}}}""",
+          )
           respond("health", "{}")
           respond("sessions.list", """{"sessions":[]}""")
         }

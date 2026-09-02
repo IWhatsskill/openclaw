@@ -8,25 +8,12 @@ import org.junit.Test
 
 class ChatPermissionPickerTest {
   @Test
-  fun optionsMatchTheOfficialWebUiOrderAndCopy() {
+  fun optionsRetainIncreasingAccessOrder() {
     val options = chatPermissionOptions()
 
     assertEquals(
       listOf(null, ChatPermissionMode.ReadOnly, ChatPermissionMode.Guarded, ChatPermissionMode.Workspace, ChatPermissionMode.Full),
       options.map { it.mode },
-    )
-    assertEquals(
-      listOf("Default", "Read only", "Guarded", "Workspace", "Full access"),
-      options.map { it.label },
-    )
-    assertEquals("Follow the agent's configured policy.", options[0].description)
-    assertEquals(
-      "Read within the session root; writes and commands are blocked.",
-      options[1].description,
-    )
-    assertEquals(
-      "No reviewer; files and commands are unrestricted.",
-      options[4].description,
     )
   }
 

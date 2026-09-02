@@ -21,34 +21,6 @@ import org.junit.Test
 
 class ChatScreenTest {
   @Test
-  fun thinkingGaugeFollowsAdvertisedEffortOrder() {
-    val options =
-      listOf("off", "low", "medium", "high", "max").map {
-        ChatThinkingLevelOption(id = it, label = it)
-      }
-
-    assertEquals(0f, chatThinkingGaugeFraction("off", options))
-    assertEquals(0.25f, chatThinkingGaugeFraction("low", options))
-    assertEquals(0.5f, chatThinkingGaugeFraction("medium", options))
-    assertEquals(0.75f, chatThinkingGaugeFraction("high", options))
-    assertEquals(1f, chatThinkingGaugeFraction("max", options))
-  }
-
-  @Test
-  fun thinkingGaugeKeepsKnownMaximumEffortsAtTheRightEdge() {
-    assertEquals(1f, chatThinkingGaugeFraction("xhigh", emptyList()))
-    assertEquals(1f, chatThinkingGaugeFraction("ultra", emptyList()))
-  }
-
-  @Test
-  fun customEffortNeedsAdvertisedOrderingForAGaugePosition() {
-    val options = listOf("off", "custom", "max").map { ChatThinkingLevelOption(id = it, label = it) }
-
-    assertNull(chatThinkingGaugeFraction("custom", emptyList()))
-    assertEquals(0.5f, chatThinkingGaugeFraction("custom", options))
-  }
-
-  @Test
   fun thinkingGaugeSemanticsExposeEffortAndFastModeState() {
     val options = listOf("off", "medium").map { ChatThinkingLevelOption(id = it, label = it) }
 
@@ -79,16 +51,6 @@ class ChatScreenTest {
     assertTrue(progressCardIsComplete(note, hasActiveRun = false))
     assertTrue(progressCardIsComplete(completed, hasActiveRun = true))
     assertFalse(progressCardIsComplete(paused, hasActiveRun = false))
-  }
-
-  @Test
-  fun composerAuxiliaryControlsStayVisibleForActiveInteraction() {
-    assertTrue(chatComposerAuxiliaryControlsPinned(true, false, false, false))
-    assertTrue(chatComposerAuxiliaryControlsPinned(false, true, false, false))
-    assertTrue(chatComposerAuxiliaryControlsPinned(false, false, true, false))
-    assertTrue(chatComposerAuxiliaryControlsPinned(false, false, false, true))
-    assertFalse(chatComposerAuxiliaryControlsPinned(false, false, false, false))
-    assertEquals(3_000L, CHAT_COMPOSER_AUXILIARY_IDLE_MS)
   }
 
   @Test
@@ -177,22 +139,26 @@ class ChatScreenTest {
   }
 
   @Test
-  fun composerTrailingActionPreservesTalkAndRunStopPrecedence() {
+  fun composerPrimaryActionKeepsRunStopSeparateFromLiveTalk() {
     assertEquals(
-      ChatComposerTrailingAction.StopTalk,
-      resolveChatComposerTrailingAction(talkActive = true, runActive = true, hasContent = true),
+      ChatComposerPrimaryAction.Stop,
+      resolveChatComposerPrimaryAction(talkActive = true, runActive = true, hasContent = true),
     )
     assertEquals(
-      ChatComposerTrailingAction.Stop,
-      resolveChatComposerTrailingAction(talkActive = false, runActive = true, hasContent = true),
+      ChatComposerPrimaryAction.None,
+      resolveChatComposerPrimaryAction(talkActive = true, runActive = false, hasContent = true),
     )
     assertEquals(
-      ChatComposerTrailingAction.Send,
-      resolveChatComposerTrailingAction(talkActive = false, runActive = false, hasContent = true),
+      ChatComposerPrimaryAction.Stop,
+      resolveChatComposerPrimaryAction(talkActive = false, runActive = true, hasContent = true),
     )
     assertEquals(
-      ChatComposerTrailingAction.StartTalk,
-      resolveChatComposerTrailingAction(talkActive = false, runActive = false, hasContent = false),
+      ChatComposerPrimaryAction.Send,
+      resolveChatComposerPrimaryAction(talkActive = false, runActive = false, hasContent = true),
+    )
+    assertEquals(
+      ChatComposerPrimaryAction.StartTalk,
+      resolveChatComposerPrimaryAction(talkActive = false, runActive = false, hasContent = false),
     )
   }
 

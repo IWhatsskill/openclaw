@@ -82,8 +82,9 @@ Scale (`ClawTheme.type`):
 - `captionSmall`: `11sp / 14sp`, medium, `0.4sp` tracking — eyebrows and status text
 - `mono`: `13sp / 18sp` — commands, setup codes, endpoint-like values
 
-Use the token, never `style.copy(fontSize = ...)`. A screen that needs a size the scale
-does not have is a signal to change the scale, not to patch the call site.
+Use the shared scale for screen typography. The compact chat composer is a deliberate
+exception: its input uses `16sp / 22sp` for readable editing without expanding the
+toolbar. Add other recurring sizes to the scale instead of overriding each screen.
 Hard rule: avoid ultra-thin weights on light backgrounds.
 
 ## 5. Layout And Spacing

@@ -5,9 +5,10 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 ### App features
 
 - Pair with a Gateway using a QR code, setup code, or manual connection. Gateway credentials are stored encrypted.
-- Stream chat replies, choose models and reasoning effort, manage session permissions, and expand task progress. Dictation, voice messages, and Talk are part of Chat, not a separate Voice tab.
-- Select agents, pin sessions, and browse available native session catalogs from the sidebar. Connecting creates or adopts a dedicated Android session without resetting its history.
-- Choose a theme family, color mode, accent, and app language in **Settings → Appearance**. Theme and accent edits sync with a connected writable profile. Read-only or unknown-profile edits, including new edits after restarting offline, stay on the device; choose them again after connecting to sync. Already profile-bound edits wait for that profile to reconnect.
+- Stream chat replies, choose models and reasoning effort, manage session permissions, and expand task progress. The compact composer keeps one control row; tap the model name for permissions and usage details, or the effort dial for Fast mode. Dictation, voice messages, and Talk are part of Chat, not a separate Voice tab.
+- Select agents, pin sessions, and browse available native session catalogs from the sidebar. Connecting creates or adopts a dedicated Android session without resetting its history. Native sessions keep their runtime-owned model: Android shows that ownership instead of offering a model change. Generic child-session forks and new worktrees are unavailable for those sessions; supported message-level forks remain available.
+- Choose a theme family, color mode, accent, and app language in **Settings → Appearance**. Theme and accent edits sync with a connected writable profile. Read-only or unknown-profile edits, including new edits after restarting offline, stay on the device; choose them again after connecting to sync. Already profile-bound edits wait for that profile to reconnect, without discarding or replacing newer device-local choices.
+- Configure foreground on-device Voice Wake and Gateway-synced wake words in **Settings → Voice**.
 - Enable camera, location, and other phone capabilities through onboarding or Settings. Biometric locking, Gateway/chat notifications, and authenticated background presence are supported.
 - Manage installed skills and Gateway-verified ClawHub releases, review Skill Workshop proposals, and inspect or edit automations with the required Gateway access.
 - Use the Wear OS companion for sessions, replies, aborts, and realtime Talk through the paired phone without storing Gateway credentials on the watch.
@@ -224,7 +225,7 @@ Terminal B (USB tunnel):
 adb reverse tcp:18789 tcp:18789
 ```
 
-Then in app **Connect → Manual**:
+Then in app **Settings → Gateway → Manual Gateway**:
 
 - Host: `127.0.0.1`
 - Port: `18789`
@@ -249,7 +250,7 @@ pnpm openclaw gateway --port 18789 --verbose
 2. In the Android app:
 
 - Follow the first-run connection screen, or open **Settings → Gateway** to change a saved connection.
-- Use a setup code or enter the Gateway manually.
+- Scan a QR code, paste a setup code, or enter the Gateway manually.
 
 3. Approve pairing (on the gateway machine):
 
